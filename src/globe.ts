@@ -97,6 +97,8 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const position = gl.getAttribLocation(program,'position'); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
   const resolution=gl.getUniformLocation(program,'resolution'),rotation=gl.getUniformLocation(program,'rotation'),zoomLoc=gl.getUniformLocation(program,'zoom'),sunLoc=gl.getUniformLocation(program,'sunDirection');
   let yaw=-.35,pitch=-.45,zoom=.78,dragging=false,last=[0,0],animation=0;
+  const zoomControl=(event:Event)=>{const action=(event as CustomEvent<string>).detail;if(action==='reset'){zoom=.78}else{zoom=Math.max(.5,Math.min(8,zoom*(action==='in'?1.35:1/1.35)))}};
+  canvas.addEventListener('gaia-zoom',zoomControl);
   const pointerDown=(e:PointerEvent)=>{dragging=true;last=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)};
   const pointerMove=(e:PointerEvent)=>{if(!dragging)return;yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));last=[e.clientX,e.clientY]};
   const pointerUp=()=>{dragging=false}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};

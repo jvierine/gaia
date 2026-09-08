@@ -91,7 +91,7 @@ function Globe({timeMinutes,onCredits}:{timeMinutes:number;onCredits:()=>void}) 
     <button type="button" onClick={onCredits} aria-label="Data provider credits" title="Data provider credits" style={{position:'absolute',left:18,top:18,zIndex:2,border:0,background:'#031018cc',color:'#d6eee8',borderRadius:'50%',width:32,height:32,fontSize:24,cursor:'pointer'}}>ⓘ</button>
     <canvas ref={canvasRef} className="globe-canvas" aria-label="Interactive WebGL Earth with auroral image coverage" />
     <div className="coverage-readout"><span>67.2N 21.0E</span><strong>100 km emission shell</strong></div>
-    <div className="globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in">+</button><button type="button" aria-label="Zoom out">−</button><button type="button" aria-label="Reset globe">◎</button></div>
+    <div className="globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in" onClick={()=>canvasRef.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail:'in'}))}>+</button><button type="button" aria-label="Zoom out" onClick={()=>canvasRef.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail:'out'}))}>−</button><button type="button" aria-label="Reset globe" onClick={()=>canvasRef.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail:'reset'}))}>◎</button></div>
   </div>;
 }
 

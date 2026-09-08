@@ -5,6 +5,7 @@ mod geometry;
 mod igrf_grid;
 mod model;
 mod quality;
+mod projection;
 use axum::{
     Json, Router,
     body::Body,
@@ -259,6 +260,9 @@ async fn camera_settings(
     Ok(Json(json!({"state":"saved"})))
 }
 
+async fn projected_image(Path(id):Path<String>,State(s):State<AppState>)->ApiResult<Json<Value>> {
+    tokio::task::spawn_blocking(move||projection::build(&s,&id).map(Json).map_err(internal)).await.map_err(internal)?
+}
 async fn latest_image(
     Path(id): Path<String>,
     State(s): State<AppState>,
@@ -445,6 +449,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/status", get(status))
         .route("/api/sources", get(sources))
         .route("/api/sources/{id}/latest", get(latest_image))
+        .route("/api/sources/{id}/projection", get(projected_image))
         .route("/api/igrf-maglat", get(igrf_maglat))
         .route("/api/suggestions", post(suggest))
         .route("/api/sources/{id}/location", post(set_location))

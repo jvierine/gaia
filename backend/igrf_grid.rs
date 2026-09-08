@@ -3,8 +3,8 @@ use ferromagnetic::igrf::IGRF;
 use serde::Serialize;
 use std::path::Path;
 
-pub const WIDTH: usize = 360;
-pub const HEIGHT: usize = 181;
+pub const WIDTH: usize = 720;
+pub const HEIGHT: usize = 361;
 
 #[derive(Serialize)]
 pub struct GridMetadata {
@@ -17,32 +17,28 @@ pub struct GridMetadata {
 }
 
 /// IGRF-14 magnetic dip latitude at the WGS84 surface. This uses all degree/order
-/// 1..13 coefficients, not a centered-dipole approximation. Values are encoded
-/// linearly from -90..+90 degrees into bytes 0..255 for a WebGL1 texture.
+/// 1..13 coefficients, not a centered-dipole approximation. Half-degree samples
+/// are little-endian float32 degrees, preserving precision for vector contours.
 pub fn load_or_generate(cache_root: &Path, year: i32) -> Result<Vec<u8>> {
     let dir = cache_root.join("igrf");
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("igrf14-dip-lat-{year}-{WIDTH}x{HEIGHT}.bin"));
+    let path = dir.join(format!("igrf14-dip-lat-f32-{year}-{WIDTH}x{HEIGHT}.bin"));
     if let Ok(bytes) = std::fs::read(&path) {
-        if bytes.len() == WIDTH * HEIGHT {
+        if bytes.len() == WIDTH * HEIGHT * 4 {
             return Ok(bytes);
         }
     }
     let igrf = IGRF::default();
-    let mut bytes = Vec::with_capacity(WIDTH * HEIGHT);
+    let mut bytes = Vec::with_capacity(WIDTH * HEIGHT * 4);
     for y in 0..HEIGHT {
-        let lat = 90.0 - y as f64;
+        let lat = 90.0 - y as f64 * 0.5;
         for x in 0..WIDTH {
-            let lon = -180.0 + x as f64;
+            let lon = -180.0 + x as f64 * 0.5;
             let field = igrf.calc(lat, lon, 0.0, year as f64).result;
             let dip_lat = (0.5 * field.inclination.to_radians().tan())
                 .atan()
                 .to_degrees();
-            bytes.push(
-                ((dip_lat + 90.0) * (255.0 / 180.0))
-                    .round()
-                    .clamp(0.0, 255.0) as u8,
-            );
+            bytes.extend_from_slice(&(dip_lat as f32).to_le_bytes());
         }
     }
     let tmp = dir.join(format!(".igrf14-{year}.tmp"));
@@ -58,8 +54,11 @@ mod tests {
     fn full_grid_has_expected_shape_and_range() {
         let d = tempfile::tempdir().unwrap();
         let g = load_or_generate(d.path(), 2026).unwrap();
-        assert_eq!(g.len(), WIDTH * HEIGHT);
-        assert!(g.iter().copied().min().unwrap() < 40);
-        assert!(g.iter().copied().max().unwrap() > 215);
+        assert_eq!(g.len(), WIDTH * HEIGHT * 4);
+        let values:Vec<f32>=g.chunks_exact(4).map(|b|f32::from_le_bytes(b.try_into().unwrap())).collect();
+        assert!(values.iter().all(|v|v.is_finite()&&v.abs()<=90.));
+        assert!(values.iter().any(|v|*v < -60.));
+        assert!(values.iter().any(|v|*v > 60.));
+        assert_eq!(load_or_generate(d.path(),2026).unwrap(),g);
     }
 }

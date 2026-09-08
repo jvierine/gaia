@@ -89,6 +89,10 @@ function igrfContourVertices(values:Float32Array){
 
 export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>number,onLoading:(loading:boolean)=>void=()=>{}) {
   const gl = canvas.getContext('webgl', { antialias: true }); if (!gl) return () => {};
+  const perf=new URLSearchParams(location.search).has('perf')?document.createElement('output'):null;
+  if(perf){perf.style.cssText='position:absolute;right:16px;top:70px;color:#9cddc4;font:12px monospace;pointer-events:none';canvas.parentElement?.appendChild(perf)}
+  let perfStart=performance.now(),perfFrames=0,perfErrors=0;
+  const measure=()=>{if(!perf)return;perfFrames++;const now=performance.now();if(now-perfStart>=1000){if(gl.getError()!==gl.NO_ERROR)perfErrors++;perf.textContent=`${Math.round(perfFrames*1000/(now-perfStart))} display fps · ${perfErrors} WebGL errors`;perfStart=now;perfFrames=0}};
   const program=makeProgram(gl,VERTEX,FRAGMENT),lineProgram=makeProgram(gl,LINE_VERTEX,LINE_FRAGMENT);gl.useProgram(program);
   const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
   const position = gl.getAttribLocation(program,'position'); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
@@ -148,6 +152,16 @@ void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(reso
 precision highp float;varying vec2 texCoord;varying vec3 color;varying float visible;uniform sampler2D frame;uniform bool textured;void main(){if(visible<0.)discard;gl_FragColor=textured?texture2D(frame,texCoord):vec4(color,1.);}`);
   type Geometry={buffer:WebGLBuffer;count:number};
   const geometryCache=new Map<string,Geometry>(),textureCache=new Map<string,WebGLTexture>();
+  const textureSizes=new Map<WebGLTexture,[number,number]>();
+  // Temporal filtering is display-only. Keep the original frames and projected
+  // geometry unchanged; blend camera textures at the display refresh rate.
+  const smoothProgram=makeProgram(gl,VERTEX,`precision highp float;
+uniform sampler2D previous;uniform sampler2D target;uniform vec2 size;uniform float amount;
+void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv),texture2D(target,uv),amount);}`);
+  const smoothFramebuffer=gl.createFramebuffer();
+  type SmoothState={textures:[WebGLTexture,WebGLTexture];index:number;target:WebGLTexture;changed:number;initialized:boolean;size:[number,number]};
+  const smoothStates=new Map<number,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
+  const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
   let frames:{geometry:Geometry;texture:WebGLTexture;order:number}[]=[];
   const layers:{buffer:WebGLBuffer;count:number;points:boolean}[]=[];
   const addLayer=(values:number[]|Float32Array,points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
@@ -201,6 +215,7 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
               gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
               gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
               gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);textureCache.set(asset.texture_url,texture);}
+              textureSizes.set(texture,[im.naturalWidth,im.naturalHeight]);
             }finally{URL.revokeObjectURL(url)}
           }
           if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s)});
@@ -219,13 +234,14 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
       onLoading(!ready.has(minute));
       const next=await prepare(epoch);
       if(lastMinute===minute&&!abort.signal.aborted){
+        if(epoch<displayEpoch||Math.abs(epoch-displayEpoch)>600000){clearSmooth();displayEpoch=epoch}
         frames=next;
         for(const key of pending.keys())if(key<minute||key>minute+3){pending.delete(key);ready.delete(key)}
         // Decode the next three minutes ahead of playback, not on each tick.
         if(epoch<Date.now()-240000)for(let i=1;i<=3;i++)void prepare(epoch+i*60000);
         const protectedFrames=[...frames,...[...ready.values()].flat()];
         // Keep a bounded GPU cache; HTTP caching retains older frame assets.
-        for(const [key,t] of textureCache){if(textureCache.size<=96)break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureCache.delete(key)}}
+        for(const [key,t] of textureCache){if(textureCache.size<=96)break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
         for(const [key,g] of geometryCache){if(geometryCache.size<=32)break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
         onLoading(false);
       }
@@ -237,6 +253,29 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
   const drawLayers=(w:number,h:number)=>{
     const depthTest=gl.isEnabled(gl.DEPTH_TEST),blend=gl.isEnabled(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);
+    const now=performance.now(),dt=Math.min(100,now-lastSmoothTime);lastSmoothTime=now;
+    const amount=1-Math.exp(-dt/65),displayTextures=new Map<number,WebGLTexture>();
+    for(const [order,s] of smoothStates)if(!frames.some(f=>f.order===order)){for(const t of s.textures)gl.deleteTexture(t);smoothStates.delete(order)}
+    gl.useProgram(smoothProgram);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+    const a=gl.getAttribLocation(smoothProgram,'position');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
+    gl.uniform1i(gl.getUniformLocation(smoothProgram,'previous'),0);gl.uniform1i(gl.getUniformLocation(smoothProgram,'target'),1);
+    for(const frame of frames){
+      const size=textureSizes.get(frame.texture);if(!size){displayTextures.set(frame.order,frame.texture);continue}
+      let state=smoothStates.get(frame.order);
+      if(state&&(state.size[0]!==size[0]||state.size[1]!==size[1])){for(const t of state.textures)gl.deleteTexture(t);smoothStates.delete(frame.order);state=undefined}
+      if(!state){
+        const textures=[0,1].map(()=>{const t=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size[0],size[1],0,gl.RGBA,gl.UNSIGNED_BYTE,null);return t}) as [WebGLTexture,WebGLTexture];
+        state={textures,index:0,target:frame.texture,changed:now,initialized:false,size};smoothStates.set(frame.order,state);
+      }
+      if(state.target!==frame.texture){state.target=frame.texture;state.changed=now}
+      if(state.initialized&&now-state.changed>600){displayTextures.set(frame.order,frame.texture);continue}
+      const next=1-state.index;
+      gl.bindFramebuffer(gl.FRAMEBUFFER,smoothFramebuffer);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,state.textures[next],0);gl.viewport(0,0,...size);
+      gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,state.textures[state.index]);gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,frame.texture);
+      gl.uniform2f(gl.getUniformLocation(smoothProgram,'size'),...size);gl.uniform1f(gl.getUniformLocation(smoothProgram,'amount'),!state.initialized||now-state.changed>500?1:amount);gl.drawArrays(gl.TRIANGLES,0,3);
+      state.initialized=true;state.index=next;displayTextures.set(frame.order,state.textures[next]);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);
     gl.useProgram(imageProgram);
     gl.uniform2f(gl.getUniformLocation(imageProgram,'resolution'),w,h);
     gl.uniform2f(gl.getUniformLocation(imageProgram,'rotation'),yaw,pitch);
@@ -244,7 +283,7 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
     const worldAttr=gl.getAttribLocation(imageProgram,'world'),rgbAttr=gl.getAttribLocation(imageProgram,'rgb'),uvAttr=gl.getAttribLocation(imageProgram,'uv');
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),1);gl.uniform1i(gl.getUniformLocation(imageProgram,'frame'),0);gl.activeTexture(gl.TEXTURE0);
     gl.disableVertexAttribArray(rgbAttr);gl.enableVertexAttribArray(worldAttr);gl.enableVertexAttribArray(uvAttr);
-    for(const frame of frames){gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
+    for(const frame of frames){gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(frame.order)||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),0);gl.disableVertexAttribArray(uvAttr);
     for(const layer of [...layers.filter(l=>!l.points),...layers.filter(l=>l.points)]){
       gl.bindBuffer(gl.ARRAY_BUFFER,layer.buffer);
@@ -259,7 +298,8 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
   };
   void fetch(`/gaia/api/igrf-maglat?format=f32-v2&year=${new Date().getUTCFullYear()}`).then(r=>{if(!r.ok)throw new Error(`IGRF grid ${r.status}`);return r.arrayBuffer()}).then(buffer=>{const values=new Float32Array(buffer);if(values.length!==720*361)throw new Error(`unexpected IGRF grid length ${values.length}`);const vertices=igrfContourVertices(values);magneticVertices=vertices.length/2;gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW)}).catch(console.error);
   const solarDirection=(time:number)=>{const jd=time/86400000+2440587.5,t=(jd-2451545)/36525,l0=(280.46646+t*(36000.76983+t*.0003032))*Math.PI/180,m=(357.52911+t*(35999.05029-.0001537*t))*Math.PI/180,lambda=l0+(1.914602-.004817*t-.000014*t*t)*Math.sin(m)*Math.PI/180+.019993*Math.sin(2*m)*Math.PI/180+.000289*Math.sin(3*m)*Math.PI/180,epsilon=(23.439291-.0130042*t)*Math.PI/180,decl=Math.asin(Math.sin(epsilon)*Math.sin(lambda)),ra=Math.atan2(Math.cos(epsilon)*Math.sin(lambda),Math.cos(lambda)),gmst=(280.46061837+360.98564736629*(jd-2451545)+.000387933*t*t-t*t*t/38710000)*Math.PI/180,lon=ra-gmst;return[Math.cos(decl)*Math.sin(lon),Math.sin(decl),Math.cos(decl)*Math.cos(lon)]};
-  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform2f(rotation,yaw,pitch);gl.uniform1f(zoomLoc,zoom);const sun=solarDirection(getEpochMillis());gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
+  let lastEpochTime=performance.now();
+  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform2f(rotation,yaw,pitch);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;const sun=solarDirection(displayEpoch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
     if(!count)continue;gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,lineBuffer);
     gl.enableVertexAttribArray(magneticPosition);gl.vertexAttribPointer(magneticPosition,2,gl.FLOAT,false,0,0);
     gl.uniform2f(gl.getUniformLocation(lineProgram,'resolution'),w,h);
@@ -267,6 +307,6 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
     gl.uniform1f(gl.getUniformLocation(lineProgram,'zoom'),zoom);
     gl.uniform3f(gl.getUniformLocation(lineProgram,'lineColor'),...color);
     gl.drawArrays(gl.LINES,0,count);
-  }drawLayers(w,h);animation=requestAnimationFrame(draw)};draw();
-  return()=>{tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  }drawLayers(w,h);measure();animation=requestAnimationFrame(draw)};draw();
+  return()=>{perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

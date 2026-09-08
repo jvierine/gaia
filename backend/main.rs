@@ -265,7 +265,7 @@ async fn latest_image(
 ) -> ApiResult<Response<Body>> {
     let row = {
         let conn = db::open(&s.db_path).map_err(internal)?;
-        conn.query_row("SELECT i.archive_path,i.media_type,p.name,p.copyright FROM images i JOIN sources s ON s.id=i.source_id JOIN producers p ON p.id=s.producer_id WHERE i.source_id=?1 ORDER BY i.observation_utc DESC LIMIT 1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).map_err(|e|if matches!(e,rusqlite::Error::QueryReturnedNoRows){(StatusCode::NOT_FOUND,"no image has been acquired for this camera yet".into())}else{internal(e)})?
+        conn.query_row("SELECT i.archive_path,i.media_type,p.name,p.copyright,i.observation_utc,s.latitude_deg,s.longitude_deg,s.altitude_m,s.name FROM images i JOIN sources s ON s.id=i.source_id JOIN producers p ON p.id=s.producer_id WHERE i.source_id=?1 ORDER BY i.observation_utc DESC LIMIT 1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<f64>>(5)?,r.get::<_,Option<f64>>(6)?,r.get::<_,Option<f64>>(7)?,r.get::<_,String>(8)?))).map_err(|e|if matches!(e,rusqlite::Error::QueryReturnedNoRows){(StatusCode::NOT_FOUND,"no image has been acquired for this camera yet".into())}else{internal(e)})?
     };
     let bytes = tokio::fs::read(&row.0).await.map_err(internal)?;
     Ok(Response::builder()
@@ -273,6 +273,20 @@ async fn latest_image(
         .header(header::CACHE_CONTROL, "no-cache")
         .header("X-GAIA-Producer", row.2)
         .header("X-GAIA-Copyright", row.3)
+        .header("X-GAIA-Observation-UTC", row.4)
+        .header(
+            "X-GAIA-Latitude-Deg",
+            row.5.map(|v| v.to_string()).unwrap_or_default(),
+        )
+        .header(
+            "X-GAIA-Longitude-Deg",
+            row.6.map(|v| v.to_string()).unwrap_or_default(),
+        )
+        .header(
+            "X-GAIA-Altitude-M",
+            row.7.map(|v| v.to_string()).unwrap_or_default(),
+        )
+        .header("X-GAIA-Source-Name", row.8)
         .body(Body::from(bytes))
         .unwrap())
 }

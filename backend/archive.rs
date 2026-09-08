@@ -47,9 +47,17 @@ pub fn store_image(
     let tmp = dir.join(format!(".original.{ext}.tmp"));
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, &path)?;
-    let dimensions = image::load_from_memory(bytes)
-        .ok()
-        .map(|im| (im.width() as i64, im.height() as i64));
+    let decoded=image::load_from_memory(bytes).ok();
+    let dimensions=decoded.as_ref().map(|im|(im.width() as i64,im.height() as i64));
+    // Reuse the decode already needed for dimensions. New archive frames are
+    // playback-ready before they become visible in the image catalogue.
+    if let Some(im)=decoded{
+        let key=format!("{:x}",Sha256::digest(format!("texture-v1-256:{}",path.to_string_lossy())));
+        let cache=root.join("projection-cache");std::fs::create_dir_all(&cache)?;
+        let tmp=cache.join(format!("{}.tmp",Uuid::new_v4()));
+        im.thumbnail(256,256).to_rgb8().save_with_format(&tmp,image::ImageFormat::Png)?;
+        std::fs::rename(tmp,cache.join(format!("{key}.png")))?;
+    }
     conn.execute("INSERT INTO images(id,source_id,observation_utc,downloaded_utc,timestamp_basis,archive_path,original_url,sha256,media_type,width,height)
       VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,source_id,observation.to_rfc3339(),downloaded.to_rfc3339(),timestamp_basis,
       path.to_string_lossy(),original_url,sha,media_type,dimensions.map(|d|d.0),dimensions.map(|d|d.1)])

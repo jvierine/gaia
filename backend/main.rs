@@ -297,8 +297,9 @@ async fn camera_settings(
 struct ProjectionQuery { at:Option<String>,format:Option<String> }
 async fn projected_image(Path(id):Path<String>,State(s):State<AppState>,axum::extract::Query(query):axum::extract::Query<ProjectionQuery>,headers:axum::http::HeaderMap)->ApiResult<axum::response::Response> {
     let at=query.at.map(|t|DateTime::parse_from_rfc3339(&t).map(|v|v.with_timezone(&Utc)).map_err(|_|(StatusCode::BAD_REQUEST,"invalid frame time".into()))).transpose()?;
-    if query.format.as_deref()==Some("assets"){
-        let p=tokio::task::spawn_blocking(move||projection::assets(&s,&id,at)).await.map_err(internal)?.map_err(|e|if e.to_string().contains("Query returned no rows"){(StatusCode::NOT_FOUND,"no historical frame".into())}else{internal(e)})?;
+    if matches!(query.format.as_deref(),Some("assets"|"timeline")){
+        let timeline=query.format.as_deref()==Some("timeline");
+        let p=tokio::task::spawn_blocking(move||if timeline{projection::timeline(&s,&id)}else{projection::assets(&s,&id,at)}).await.map_err(internal)?.map_err(|e|if e.to_string().contains("Query returned no rows"){(StatusCode::NOT_FOUND,"no historical frame".into())}else{internal(e)})?;
         return Ok(([(header::CACHE_CONTROL,"no-store")],Json(p)).into_response());
     }
     let p=tokio::task::spawn_blocking(move||projection::build(&s,&id,at)).await.map_err(internal)?.map_err(|e|if e.to_string().contains("Query returned no rows"){(StatusCode::NOT_FOUND,"no frame within ten minutes before selected time".into())}else{internal(e)})?;
@@ -315,6 +316,10 @@ async fn projection_asset(Path(name):Path<String>,State(s):State<AppState>)->Api
     if key.len()!=64||!key.bytes().all(|b|b.is_ascii_hexdigit())||!matches!(ext,"bin"|"png"){return Err((StatusCode::BAD_REQUEST,"invalid asset".into()))}
     let bytes=tokio::fs::read(s.archive_root.join("projection-cache").join(&name)).await.map_err(|_|(StatusCode::NOT_FOUND,"asset not ready".into()))?;
     Ok(([(header::CONTENT_TYPE,if ext=="png"{"image/png"}else{"application/octet-stream"}),(header::CACHE_CONTROL,"public, max-age=31536000, immutable")],bytes).into_response())
+}
+async fn image_texture(Path(id):Path<String>,State(s):State<AppState>)->ApiResult<axum::response::Response>{
+    let bytes=tokio::task::spawn_blocking(move||projection::image_texture(&s,&id)).await.map_err(internal)?.map_err(internal)?;
+    Ok(([(header::CONTENT_TYPE,"image/png"),(header::CACHE_CONTROL,"public, max-age=31536000, immutable")],bytes).into_response())
 }
 async fn latest_image(
     Path(id): Path<String>,
@@ -511,6 +516,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/credits", get(credits))
         .route("/api/history", get(history))
         .route("/api/projection-assets/{name}", get(projection_asset))
+        .route("/api/images/{id}/texture", get(image_texture))
         .route("/api/calibrations", post(calibration))
         .route("/api/ingest", post(ingest))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))

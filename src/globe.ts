@@ -158,48 +158,79 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
     addLayer(sites,true);
     cameraSites=sources.filter(s=>s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{name:s.name,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
     let lastMinute=-1;
-    const updateFrames=async()=>{
-      const epoch=getEpochMillis(),minute=Math.floor(epoch/60000);if(minute===lastMinute)return;
-      lastMinute=minute;frameAbort.abort();frameAbort=new AbortController();const request=frameAbort;
-      onLoading(true);
+    type Asset={geometry_url:string;texture_url:string;vertex_count:number};
+    type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string}[]};
+    const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
+    const catalogue=(id:string)=>{
+      let c=catalogues.get(id);if(!c||c.expires<Date.now()){
+        c={expires:Date.now()+60000,value:fetch(`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');return await r.json() as Catalogue})};catalogues.set(id,c);
+      }return c.value;
+    };
+    const pending=new Map<number,Promise<typeof frames>>(),ready=new Map<number,typeof frames>(),requests=new Map<number,AbortController>();
+    abort.signal.addEventListener('abort',()=>{for(const c of requests.values())c.abort()},{once:true});
+    const loadFrames=async(epoch:number,request:AbortController)=>{
       const nextFrames:typeof frames=[];
       const queue=sources.filter(s=>s.enabled&&s.calibrated);
       const at=new Date(epoch).toISOString();
       await Promise.all([0,1,2,3].map(async()=>{while(queue.length&&!request.signal.aborted){
         const s=queue.shift()!;
         try{
-          const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
-          if(r.status===404)continue;if(!r.ok)throw new Error(await r.text());
-          const asset=await r.json() as {geometry_url:string;texture_url:string;vertex_count:number};
+          const cat=await catalogue(s.id);if(!cat)continue;
+          let frame:Catalogue['images'][number]|undefined;
+          for(let i=cat.images.length-1;i>=0;i--){if(Date.parse(cat.images[i].at)<=epoch){frame=cat.images[i];break}}
+          if(!frame||epoch-Date.parse(frame.at)>600000)continue;
+          let asset:Asset={...cat,texture_url:frame.texture_url};
+          if(frame.width!==cat.width||frame.height!==cat.height){
+            const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
+            if(r.status===404)continue;if(!r.ok)throw new Error(await r.text());asset=await r.json();
+          }
           let geometry=geometryCache.get(asset.geometry_url),texture=textureCache.get(asset.texture_url);
           const [bytes,blob]=await Promise.all([
             geometry?null:fetch(asset.geometry_url,{signal:request.signal}).then(r=>{if(!r.ok)throw new Error('Geometry unavailable');return r.arrayBuffer()}),
             texture?null:fetch(asset.texture_url,{signal:request.signal}).then(r=>{if(!r.ok)throw new Error('Texture unavailable');return r.blob()})
           ]);
           if(request.signal.aborted||abort.signal.aborted)return;
+          geometry=geometryCache.get(asset.geometry_url)||geometry;
           if(!geometry&&bytes){const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);geometry={buffer:b,count:bytes.byteLength/20};geometryCache.set(asset.geometry_url,geometry)}
           if(!texture&&blob){
             const url=URL.createObjectURL(blob),im=new Image();
             try{await new Promise<void>((resolve,reject)=>{im.onload=()=>resolve();im.onerror=()=>reject(new Error('Texture decode failed'));im.src=url});
               if(request.signal.aborted||abort.signal.aborted)return;
-              texture=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,texture);
+              texture=textureCache.get(asset.texture_url);
+              if(!texture){texture=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,texture);
               gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
               gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-              gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);textureCache.set(asset.texture_url,texture);
+              gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);textureCache.set(asset.texture_url,texture);}
             }finally{URL.revokeObjectURL(url)}
           }
           if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s)});
         }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
       }}));
-      if(!request.signal.aborted&&!abort.signal.aborted){
-        frames=nextFrames.sort((a,b)=>a.order-b.order);
+      return nextFrames.sort((a,b)=>a.order-b.order);
+    };
+    const prepare=(epoch:number)=>{
+      const minute=Math.floor(epoch/60000);let p=pending.get(minute);
+      if(!p){const request=new AbortController();requests.set(minute,request);p=loadFrames(epoch,request).then(result=>{if(!request.signal.aborted&&pending.has(minute))ready.set(minute,result);return result});pending.set(minute,p)}return p;
+    };
+    const updateFrames=async()=>{
+      const epoch=getEpochMillis(),minute=Math.floor(epoch/60000);if(minute===lastMinute)return;
+      lastMinute=minute;
+      for(const key of pending.keys())if(key<minute||key>minute+3){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key)}
+      onLoading(!ready.has(minute));
+      const next=await prepare(epoch);
+      if(lastMinute===minute&&!abort.signal.aborted){
+        frames=next;
+        for(const key of pending.keys())if(key<minute||key>minute+3){pending.delete(key);ready.delete(key)}
+        // Decode the next three minutes ahead of playback, not on each tick.
+        if(epoch<Date.now()-240000)for(let i=1;i<=3;i++)void prepare(epoch+i*60000);
+        const protectedFrames=[...frames,...[...ready.values()].flat()];
         // Keep a bounded GPU cache; HTTP caching retains older frame assets.
-        for(const [key,t] of textureCache){if(textureCache.size<=96)break;if(!frames.some(f=>f.texture===t)){gl.deleteTexture(t);textureCache.delete(key)}}
-        for(const [key,g] of geometryCache){if(geometryCache.size<=32)break;if(!frames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
+        for(const [key,t] of textureCache){if(textureCache.size<=96)break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureCache.delete(key)}}
+        for(const [key,g] of geometryCache){if(geometryCache.size<=32)break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
         onLoading(false);
       }
     };
-    void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),200);
+    void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),50);
   }).catch(console.error);
   // Final overlay pass: measured image colors are unlit and opaque, above both
   // the Earth's night shading and IGRF lines. The shader still hides the far side.

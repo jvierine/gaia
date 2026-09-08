@@ -25,7 +25,7 @@ pub fn read(bytes:&[u8],downloaded:DateTime<Utc>)->Option<(DateTime<Utc>,&'stati
     let scale=1600.0/canvas.width() as f64;
     let canvas=image::imageops::resize(&canvas,1600,(canvas.height() as f64*scale).round() as u32,image::imageops::FilterType::Triangle);
     let mut png=Cursor::new(Vec::new());image::DynamicImage::ImageLuma8(canvas).write_to(&mut png,image::ImageFormat::Png).ok()?;
-    let mut child=Command::new("timeout").args(["8","tesseract","stdin","stdout","--psm","11"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child=Command::new("timeout").env("OMP_THREAD_LIMIT","1").args(["8","tesseract","stdin","stdout","--psm","11"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     child.stdin.take()?.write_all(png.get_ref()).ok()?;
     let output=child.wait_with_output().ok()?;if !output.status.success(){return None}
     parse(&String::from_utf8_lossy(&output.stdout),downloaded)

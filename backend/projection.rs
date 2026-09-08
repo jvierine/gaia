@@ -80,15 +80,12 @@ pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Res
         "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json) FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.source_id=s.id LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY c.created_utc DESC,i.observation_utc DESC LIMIT 1",
         rusqlite::params![id,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
     let cal_stamp=std::fs::metadata(cal)?.modified()?;
-    let geometry_key=format!("{:x}",Sha256::digest(format!("geometry-v1-256-100km:{key}:{cal_stamp:?}")));
+    let geometry_key=format!("{:x}",Sha256::digest(format!("geometry-v2-adaptive4-256-100km:{key}:{cal_stamp:?}")));
     let texture_key=format!("{:x}",Sha256::digest(format!("texture-v1-256:{path}")));
     let dir=s.archive_root.join("projection-cache");std::fs::create_dir_all(&dir)?;
     let geometry=dir.join(format!("{geometry_key}.bin"));let texture=dir.join(format!("{texture_key}.png"));
     if !geometry.exists(){
-        let p=build(s,id,at)?;let mut bytes=Vec::with_capacity(p.vertices.len()/6*20);
-        for (v,uv) in p.vertices.chunks_exact(6).zip(p.uv.chunks_exact(2)){
-            for value in [v[0],v[1],v[2],uv[0],uv[1]]{bytes.extend_from_slice(&value.to_le_bytes());}
-        }
+        let p=build(s,id,at)?;let bytes=compact_geometry(&p);
         let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));std::fs::write(&tmp,bytes)?;std::fs::rename(tmp,&geometry)?;
     }
     if !texture.exists(){
@@ -96,4 +93,64 @@ pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Res
         let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));im.save_with_format(&tmp,image::ImageFormat::Png)?;std::fs::rename(tmp,&texture)?;
     }
     Ok(json!({"source_id":id,"observation_utc":utc,"geometry_url":format!("/gaia/api/projection-assets/{geometry_key}.bin"),"texture_url":format!("/gaia/api/projection-assets/{texture_key}.png"),"vertex_count":std::fs::metadata(geometry)?.len()/20}))
+}
+
+/// One catalogue request replaces per-camera projection queries on every tick.
+pub fn timeline(s:&AppState,id:&str)->Result<Value>{
+    let mut manifest=assets(s,id,None)?;let conn=db::open(&s.db_path)?;
+    let (w,h):(i64,i64)=conn.query_row("SELECT width,height FROM images WHERE source_id=?1 ORDER BY observation_utc DESC LIMIT 1",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let mut q=conn.prepare("SELECT id,observation_utc,width,height FROM images WHERE source_id=?1 AND julianday(observation_utc)>=julianday('now','-1 day','-10 minutes') ORDER BY observation_utc")?;
+    let images=q.query_map([id],|r|Ok(json!({"at":r.get::<_,String>(1)?,"width":r.get::<_,i64>(2)?,"height":r.get::<_,i64>(3)?,"texture_url":format!("/gaia/api/images/{}/texture",r.get::<_,String>(0)?)})))?.collect::<Result<Vec<_>,_>>()?;
+    manifest["images"]=json!(images);manifest["width"]=json!(w);manifest["height"]=json!(h);Ok(manifest)
+}
+pub fn image_texture(s:&AppState,id:&str)->Result<Vec<u8>>{
+    use sha2::{Digest,Sha256};
+    let conn=db::open(&s.db_path)?;let path:String=conn.query_row("SELECT archive_path FROM images WHERE id=?1",[id],|r|r.get(0))?;
+    let key=format!("{:x}",Sha256::digest(format!("texture-v1-256:{path}")));
+    let dir=s.archive_root.join("projection-cache");std::fs::create_dir_all(&dir)?;let dest=dir.join(format!("{key}.png"));
+    if !dest.exists(){let im=image::open(path)?.thumbnail(256,256).to_rgb8();let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));im.save_with_format(&tmp,image::ImageFormat::Png)?;std::fs::rename(tmp,&dest)?;}
+    Ok(std::fs::read(dest)?)
+}
+
+/// Merge only complete 4x4 blocks. Partial/masked blocks retain every original
+/// pixel triangle, so no masked pixels are restored or additional pixels cut.
+fn compact_geometry(p:&Projection)->Vec<u8>{
+    let(w,h)=(p.width as usize,p.height as usize);let mut cells=vec![None;w*h];
+    for (i,uv) in p.uv.chunks_exact(12).enumerate(){let x=(uv[0]*w as f32).round() as usize;let y=(uv[1]*h as f32).round() as usize;cells[y*w+x]=Some(i)}
+    let mut out=Vec::new();
+    let mut emit=|cell:usize,corner:usize|{let v=&p.vertices[cell*36+corner*6..];let uv=&p.uv[cell*12+corner*2..];for n in [v[0],v[1],v[2],uv[0],uv[1]]{out.extend_from_slice(&n.to_le_bytes())}};
+    for y in (0..h).step_by(4){for x in (0..w).step_by(4){
+        let(xe,ye)=((x+4).min(w),(y+4).min(h));
+        let complete=(y..ye).all(|yy|(x..xe).all(|xx|cells[yy*w+xx].is_some()));
+        // Bound positional error to < 0.00015 Earth radii (~0.96 km).
+        // Retain full resolution wherever shell curvature exceeds this.
+        let accurate=complete&&(y..ye).all(|yy|(x..xe).all(|xx|{
+            let anchors=[(cells[y*w+x].unwrap(),0),(cells[y*w+xe-1].unwrap(),1),(cells[(ye-1)*w+xe-1].unwrap(),2),(cells[(ye-1)*w+x].unwrap(),5)];
+            let i=cells[yy*w+xx].unwrap();(0..6).all(|k|{
+                let uv=&p.uv[i*12+k*2..];let tx=(uv[0]*w as f32-x as f32)/(xe-x) as f32;let ty=(uv[1]*h as f32-y as f32)/(ye-y) as f32;
+                let weights=if ty<=tx{[1.-tx,tx-ty,ty,0.]}else{[1.-ty,0.,tx,ty-tx]};
+                let err:f32=(0..3).map(|axis|{let interp:f32=anchors.iter().zip(weights).map(|(&(i,k),weight)|p.vertices[i*36+k*6+axis]*weight).sum();(interp-p.vertices[i*36+k*6+axis]).powi(2)}).sum();err<=0.00015f32.powi(2)
+            })
+        }));
+        if accurate{
+            let a=cells[y*w+x].unwrap();let b=cells[y*w+xe-1].unwrap();let c=cells[(ye-1)*w+xe-1].unwrap();let d=cells[(ye-1)*w+x].unwrap();
+            for (cell,corner) in [(a,0),(b,1),(c,2),(a,0),(c,2),(d,5)]{emit(cell,corner)}
+        }else{for yy in y..ye{for xx in x..xe{if let Some(i)=cells[yy*w+xx]{for k in 0..6{emit(i,k)}}}}}
+    }}out
+}
+
+#[cfg(test)]
+mod mesh_tests{
+    use super::*;
+    #[test]
+    fn compaction_preserves_mask_holes(){
+        for hole in [false,true]{
+            let mut p=Projection{source_id:String::new(),observation_utc:String::new(),width:4,height:4,altitude_km:100,excluded_pixels:0,mask_polygon_count:0,vertices:vec![],uv:vec![]};
+            for y in 0..4{for x in 0..4{if hole&&x==1&&y==1{continue}for(dx,dy)in[(0,0),(1,0),(1,1),(0,0),(1,1),(0,1)]{let u=(x+dx)as f32/4.;let v=(y+dy)as f32/4.;p.vertices.extend([u,v,0.,1.,1.,1.]);p.uv.extend([u,v]);}}}
+            let bytes=compact_geometry(&p);assert_eq!(bytes.len(),if hole{15*6*20}else{6*20});
+            let v:Vec<f32>=bytes.chunks_exact(4).map(|b|f32::from_le_bytes(b.try_into().unwrap())).collect();
+            let area:f32=v.chunks_exact(15).map(|t|((t[5]-t[0])*(t[11]-t[1])-(t[10]-t[0])*(t[6]-t[1])).abs()/2.).sum();
+            assert_eq!(area,if hole{15./16.}else{1.});
+        }
+    }
 }

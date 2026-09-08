@@ -168,6 +168,15 @@ pub async fn crawl_once(
         if bytes.len() < 1024 {
             continue;
         }
+        // Unchanged snapshots already have an archived timestamp; do not OCR
+        // them again on every poll (especially daytime/overnight stale feeds).
+        {
+            use sha2::{Digest,Sha256};
+            let digest=format!("{:x}",Sha256::digest(&bytes));
+            let conn=db::open(db_path)?;
+            let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM images WHERE sha256=?1)",[digest],|r|r.get(0))?;
+            if exists{duplicates+=1;continue}
+        }
         let downloaded=Utc::now();
         let (mut observed, mut basis) = parse_timestamp(source, &url, downloaded)?;
         if basis=="download_time" {

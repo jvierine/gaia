@@ -2,6 +2,11 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value,json};
 use crate::{db,geometry,AppState};
+#[derive(serde::Serialize)]
+pub struct Projection {
+    pub source_id:String,pub observation_utc:String,pub width:u32,pub height:u32,
+    pub altitude_km:u32,pub excluded_pixels:u32,pub mask_polygon_count:usize,pub vertices:Vec<f32>,
+}
 
 fn numeric(path:&str, name:&str, attr:bool)->Result<Vec<f64>> {
     let out=std::process::Command::new("h5dump").args(["-y","-w","0","-m","%0.17g",if attr{"-a"}else{"-d"},name,path]).output()?;
@@ -28,7 +33,7 @@ fn ray(x:f64,y:f64,p:&[f64],mode:i32)->Option<[f64;3]>{
     (e,z)=(a.cos()*e+a.sin()*z,-a.sin()*e+a.cos()*z);
     if z<0.{None}else{Some([e,n,z])}
 }
-pub fn build(s:&AppState,id:&str)->Result<Value>{
+pub fn build(s:&AppState,id:&str)->Result<Projection>{
     let conn=db::open(&s.db_path)?;
     let (crop_json,mask_json):(Option<String>,Option<String>)=conn.query_row("SELECT c.crop_json,c.mask_json FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
     let crop=if let Some(text)=crop_json {
@@ -62,5 +67,5 @@ pub fn build(s:&AppState,id:&str)->Result<Value>{
         if corners.len()!=4{continue}let c=image.get_pixel(x,y).0;
         for i in [0,1,2,0,2,3]{vertices.extend(corners[i].map(|v|v as f32));vertices.extend(c.map(|v|v as f32/255.));}
     }}
-    Ok(json!({"source_id":id,"observation_utc":utc,"width":w,"height":h,"altitude_km":100,"excluded_pixels":excluded_pixels,"mask_polygon_count":polygons.len(),"vertices":vertices}))
+    Ok(Projection{source_id:id.into(),observation_utc:utc,width:w,height:h,altitude_km:100,excluded_pixels,mask_polygon_count:polygons.len(),vertices})
 }

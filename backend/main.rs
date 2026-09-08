@@ -285,8 +285,15 @@ async fn camera_settings(
     Ok(Json(json!({"state":"saved"})))
 }
 
-async fn projected_image(Path(id):Path<String>,State(s):State<AppState>)->ApiResult<Json<Value>> {
-    tokio::task::spawn_blocking(move||projection::build(&s,&id).map(Json).map_err(internal)).await.map_err(internal)?
+async fn projected_image(Path(id):Path<String>,State(s):State<AppState>,headers:axum::http::HeaderMap)->ApiResult<axum::response::Response> {
+    let p=tokio::task::spawn_blocking(move||projection::build(&s,&id)).await.map_err(internal)?.map_err(internal)?;
+    let mut response=if headers.get(header::ACCEPT).and_then(|v|v.to_str().ok())==Some("application/octet-stream"){
+        let mut bytes=Vec::with_capacity(p.vertices.len()*4);
+        for value in &p.vertices {bytes.extend_from_slice(&value.to_le_bytes());}
+        ([(header::CONTENT_TYPE,"application/octet-stream")],bytes).into_response()
+    }else{Json(p).into_response()};
+    response.headers_mut().insert(header::CACHE_CONTROL,axum::http::HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 async fn latest_image(
     Path(id): Path<String>,

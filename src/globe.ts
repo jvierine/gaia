@@ -99,7 +99,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   let yaw=-.35,pitch=-.45,zoom=.78,dragging=false,last=[0,0],animation=0;
   const pointerDown=(e:PointerEvent)=>{dragging=true;last=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)};
   const pointerMove=(e:PointerEvent)=>{if(!dragging)return;yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));last=[e.clientX,e.clientY]};
-  const pointerUp=()=>{dragging=false}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(1.25,zoom*Math.exp(-e.deltaY*.001)))};
+  const pointerUp=()=>{dragging=false}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('wheel',wheel,{passive:false});
   const boundaryTexture=gl.createTexture();gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,boundaryTexture);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,0]));gl.uniform1i(gl.getUniformLocation(program,'boundaries'),0);
   void fetch('/gaia/world.geojson').then(async r=>(await r.json()) as {features:{geometry:{type:string;coordinates:unknown}}[]}).then(world=>{const map=document.createElement('canvas');map.width=2048;map.height=1024;const c=map.getContext('2d')!;c.strokeStyle='#fff';c.lineWidth=1.15;c.globalAlpha=.8;const ring=(points:number[][])=>{c.beginPath();let started=false,last=0;for(const p of points){const x=(p[0]+180)/360*map.width,y=(90-p[1])/180*map.height;if(!started||Math.abs(x-last)>map.width/2)c.moveTo(x,y);else c.lineTo(x,y);started=true;last=x}c.stroke()};for(const f of world.features){const g=f.geometry;if(g.type==='Polygon')for(const r of g.coordinates as number[][][])ring(r);if(g.type==='MultiPolygon')for(const p of g.coordinates as number[][][][])for(const r of p)ring(r)}gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,boundaryTexture);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,0);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,map);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE)}).catch(console.warn);
@@ -109,15 +109,25 @@ attribute vec3 world;attribute vec3 rgb;varying vec3 color;varying float visible
 uniform vec2 resolution;uniform vec2 rotation;uniform float zoom;
 mat3 rotY(float a){float c=cos(a),s=sin(a);return mat3(c,0.,-s,0.,1.,0.,s,0.,c);}
 mat3 rotX(float a){float c=cos(a),s=sin(a);return mat3(1.,0.,0.,0.,c,s,0.,-s,c);}
-void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;gl_PointSize=7.;}`,`
+void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;gl_PointSize=3.;}`,`
 precision highp float;varying vec3 color;varying float visible;void main(){if(visible<0.)discard;gl_FragColor=vec4(color,1.);}`);
   const layers:{buffer:WebGLBuffer;count:number;points:boolean}[]=[];
-  const addLayer=(values:number[],points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
-  void fetch('/gaia/api/sources').then(r=>r.json()).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+  const addLayer=(values:number[]|Float32Array,points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
+  const abort=new AbortController();
+  void fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json()).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(s.latitude_deg===null||s.longitude_deg===null)continue;const lat=s.latitude_deg*Math.PI/180,lon=s.longitude_deg*Math.PI/180;sites.push(Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon),...(s.enabled?(s.calibrated?[.3,1,.7]:[1,.25,.3]):[.5,.5,.5]));}
-    for(const s of sources.filter(s=>s.enabled&&s.calibrated)){try{const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection`);if(!r.ok)throw new Error(await r.text());const result=await r.json();addLayer(result.vertices,false);console.info(`Projected ${s.name}: ${result.width} × ${result.height}; © ${s.producer}`)}catch(e){console.error(`Projection ${s.name}`,e)}}
     addLayer(sites,true);
+    const queue=sources.filter(s=>s.enabled&&s.calibrated);
+    await Promise.all([0,1].map(async()=>{while(queue.length&&!abort.signal.aborted){
+      const s=queue.shift()!;
+      try{
+        const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection`,{headers:{Accept:'application/octet-stream'},cache:'no-store',signal:abort.signal});
+        if(!r.ok)throw new Error(await r.text());
+        const bytes=await r.arrayBuffer();if(abort.signal.aborted)return;
+        addLayer(new Float32Array(bytes),false);
+      }catch(e){if(!abort.signal.aborted)console.error(`Projection ${s.name}`,e)}
+    }}));
   }).catch(console.error);
   // Final overlay pass: measured image colors are unlit and opaque, above both
   // the Earth's night shading and IGRF lines. The shader still hides the far side.
@@ -128,7 +138,7 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
     gl.uniform2f(gl.getUniformLocation(imageProgram,'resolution'),w,h);
     gl.uniform2f(gl.getUniformLocation(imageProgram,'rotation'),yaw,pitch);
     gl.uniform1f(gl.getUniformLocation(imageProgram,'zoom'),zoom);
-    for(const layer of layers){
+    for(const layer of [...layers.filter(l=>!l.points),...layers.filter(l=>l.points)]){
       gl.bindBuffer(gl.ARRAY_BUFFER,layer.buffer);
       for(const [name,offset] of [['world',0],['rgb',12]] as const){
         const a=gl.getAttribLocation(imageProgram,name);
@@ -142,5 +152,5 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
   void fetch('/gaia/api/igrf-maglat').then(r=>{if(!r.ok)throw new Error(`IGRF grid ${r.status}`);return r.arrayBuffer()}).then(buffer=>{const values=new Uint8Array(buffer);if(values.length!==360*181)throw new Error(`unexpected IGRF grid length ${values.length}`);const vertices=igrfContourVertices(values);magneticVertices=vertices.length/2;gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW)}).catch(console.error);
   const solarDirection=(time:number)=>{const jd=time/86400000+2440587.5,t=(jd-2451545)/36525,l0=(280.46646+t*(36000.76983+t*.0003032))*Math.PI/180,m=(357.52911+t*(35999.05029-.0001537*t))*Math.PI/180,lambda=l0+(1.914602-.004817*t-.000014*t*t)*Math.sin(m)*Math.PI/180+.019993*Math.sin(2*m)*Math.PI/180+.000289*Math.sin(3*m)*Math.PI/180,epsilon=(23.439291-.0130042*t)*Math.PI/180,decl=Math.asin(Math.sin(epsilon)*Math.sin(lambda)),ra=Math.atan2(Math.cos(epsilon)*Math.sin(lambda),Math.cos(lambda)),gmst=(280.46061837+360.98564736629*(jd-2451545)+.000387933*t*t-t*t*t/38710000)*Math.PI/180,lon=ra-gmst;return[Math.cos(decl)*Math.sin(lon),Math.sin(decl),Math.cos(decl)*Math.cos(lon)]};
   const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform2f(rotation,yaw,pitch);gl.uniform1f(zoomLoc,zoom);const sun=solarDirection(getEpochMillis());gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);if(magneticVertices){gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.enableVertexAttribArray(magneticPosition);gl.vertexAttribPointer(magneticPosition,2,gl.FLOAT,false,0,0);gl.uniform2f(gl.getUniformLocation(lineProgram,'resolution'),w,h);gl.uniform2f(gl.getUniformLocation(lineProgram,'rotation'),yaw,pitch);gl.uniform1f(gl.getUniformLocation(lineProgram,'zoom'),zoom);gl.drawArrays(gl.LINES,0,magneticVertices)}drawLayers(w,h);animation=requestAnimationFrame(draw)};draw();
-  return()=>{cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  return()=>{abort.abort();for(const layer of layers)gl.deleteBuffer(layer.buffer);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

@@ -108,6 +108,13 @@ async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
     }))
 }
 
+async fn credits(State(s): State<AppState>) -> ApiResult<Json<Vec<Value>>> {
+    let conn=db::open(&s.db_path).map_err(internal)?;
+    let mut query=conn.prepare("SELECT name,website,acknowledgement,copyright FROM producers ORDER BY name").map_err(internal)?;
+    let rows=query.query_map([],|r|Ok(json!({"name":r.get::<_,String>(0)?,"website":r.get::<_,Option<String>>(1)?,"acknowledgement":r.get::<_,String>(2)?,"copyright":r.get::<_,String>(3)?}))).map_err(internal)?;
+    Ok(Json(rows.collect::<Result<Vec<_>,_>>().map_err(internal)?))
+}
+
 async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
     let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled FROM sources s JOIN producers p ON p.id=s.producer_id ORDER BY s.name").map_err(internal)?;
@@ -472,6 +479,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/location", post(set_location))
         .route("/api/sources/{id}/enabled", post(set_enabled))
         .route("/api/sources/{id}/settings", get(get_camera_settings).post(camera_settings))
+        .route("/api/credits", get(credits))
         .route("/api/calibrations", post(calibration))
         .route("/api/ingest", post(ingest))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))

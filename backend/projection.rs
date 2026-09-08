@@ -6,6 +6,7 @@ use crate::{db,geometry,AppState};
 pub struct Projection {
     pub source_id:String,pub observation_utc:String,pub width:u32,pub height:u32,
     pub altitude_km:u32,pub excluded_pixels:u32,pub mask_polygon_count:usize,pub vertices:Vec<f32>,
+    #[serde(skip)] pub uv:Vec<f32>,
 }
 
 fn numeric(path:&str, name:&str, attr:bool)->Result<Vec<f64>> {
@@ -50,7 +51,7 @@ pub fn build(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Resu
     let p=numeric(&cal,"wisc_optpar_with_optmod",false)?;if p.len()<9{bail!("invalid lens parameters")}
     let cw=numeric(&cal,"image_width",true)?[0];let ch=numeric(&cal,"image_height",true)?[0];
     let image=image::open(&path)?.thumbnail(256,256).to_rgb8();let(w,h)=image.dimensions();
-    let origin=geometry::observer_ecef(lat,lon,alt/1000.);let mut vertices=Vec::<f32>::new();
+    let origin=geometry::observer_ecef(lat,lon,alt/1000.);let mut vertices=Vec::<f32>::new();let mut uv=Vec::new();
     let mut excluded_pixels=0;
     for y in 0..h {for x in 0..w {
         // Apply settings in full-image coordinates, never rebase or crop the lens.
@@ -66,7 +67,33 @@ pub fn build(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Resu
             corners.push([hit[1]/6371.,hit[2]/6371.,hit[0]/6371.]);
         }
         if corners.len()!=4{continue}let c=image.get_pixel(x,y).0;
-        for i in [0,1,2,0,2,3]{vertices.extend(corners[i].map(|v|v as f32));vertices.extend(c.map(|v|v as f32/255.));}
+        for i in [0,1,2,0,2,3]{vertices.extend(corners[i].map(|v|v as f32));vertices.extend(c.map(|v|v as f32/255.));let(dx,dy)=[(0,0),(1,0),(1,1),(0,1)][i];uv.extend([(x+dx) as f32/w as f32,(y+dy) as f32/h as f32]);}
     }}
-    Ok(Projection{source_id:id.into(),observation_utc:utc,width:w,height:h,altitude_km:100,excluded_pixels,mask_polygon_count:polygons.len(),vertices})
+    Ok(Projection{source_id:id.into(),observation_utc:utc,width:w,height:h,altitude_km:100,excluded_pixels,mask_polygon_count:polygons.len(),vertices,uv})
+}
+
+/// Content-addressed, reusable server projection plus a small frame texture.
+pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Result<Value>{
+    use sha2::{Digest,Sha256};
+    let conn=db::open(&s.db_path)?;let time=at.map(|v|v.to_rfc3339());
+    let (path,cal,utc,key):(String,String,String,String)=conn.query_row(
+        "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json) FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.source_id=s.id LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY c.created_utc DESC,i.observation_utc DESC LIMIT 1",
+        rusqlite::params![id,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    let cal_stamp=std::fs::metadata(cal)?.modified()?;
+    let geometry_key=format!("{:x}",Sha256::digest(format!("geometry-v1-256-100km:{key}:{cal_stamp:?}")));
+    let texture_key=format!("{:x}",Sha256::digest(format!("texture-v1-256:{path}")));
+    let dir=s.archive_root.join("projection-cache");std::fs::create_dir_all(&dir)?;
+    let geometry=dir.join(format!("{geometry_key}.bin"));let texture=dir.join(format!("{texture_key}.png"));
+    if !geometry.exists(){
+        let p=build(s,id,at)?;let mut bytes=Vec::with_capacity(p.vertices.len()/6*20);
+        for (v,uv) in p.vertices.chunks_exact(6).zip(p.uv.chunks_exact(2)){
+            for value in [v[0],v[1],v[2],uv[0],uv[1]]{bytes.extend_from_slice(&value.to_le_bytes());}
+        }
+        let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));std::fs::write(&tmp,bytes)?;std::fs::rename(tmp,&geometry)?;
+    }
+    if !texture.exists(){
+        let im=image::open(&path)?.thumbnail(256,256).to_rgb8();
+        let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));im.save_with_format(&tmp,image::ImageFormat::Png)?;std::fs::rename(tmp,&texture)?;
+    }
+    Ok(json!({"source_id":id,"observation_utc":utc,"geometry_url":format!("/gaia/api/projection-assets/{geometry_key}.bin"),"texture_url":format!("/gaia/api/projection-assets/{texture_key}.png"),"vertex_count":std::fs::metadata(geometry)?.len()/20}))
 }

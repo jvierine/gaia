@@ -140,12 +140,15 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   }).catch(console.warn);
   const magneticBuffer=gl.createBuffer(),magneticPosition=gl.getAttribLocation(lineProgram,'lonLat');let magneticVertices=0;
   const imageProgram=makeProgram(gl,`
-attribute vec3 world;attribute vec3 rgb;varying vec3 color;varying float visible;
+attribute vec3 world;attribute vec3 rgb;attribute vec2 uv;varying vec2 texCoord;varying vec3 color;varying float visible;
 uniform vec2 resolution;uniform vec2 rotation;uniform float zoom;
 mat3 rotY(float a){float c=cos(a),s=sin(a);return mat3(c,0.,-s,0.,1.,0.,s,0.,c);}
 mat3 rotX(float a){float c=cos(a),s=sin(a);return mat3(1.,0.,0.,0.,c,s,0.,-s,c);}
-void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;gl_PointSize=3.;}`,`
-precision highp float;varying vec3 color;varying float visible;void main(){if(visible<0.)discard;gl_FragColor=vec4(color,1.);}`);
+void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;texCoord=uv;gl_PointSize=3.;}`,`
+precision highp float;varying vec2 texCoord;varying vec3 color;varying float visible;uniform sampler2D frame;uniform bool textured;void main(){if(visible<0.)discard;gl_FragColor=textured?texture2D(frame,texCoord):vec4(color,1.);}`);
+  type Geometry={buffer:WebGLBuffer;count:number};
+  const geometryCache=new Map<string,Geometry>(),textureCache=new Map<string,WebGLTexture>();
+  let frames:{geometry:Geometry;texture:WebGLTexture;order:number}[]=[];
   const layers:{buffer:WebGLBuffer;count:number;points:boolean}[]=[];
   const addLayer=(values:number[]|Float32Array,points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
@@ -159,19 +162,42 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
       const epoch=getEpochMillis(),minute=Math.floor(epoch/60000);if(minute===lastMinute)return;
       lastMinute=minute;frameAbort.abort();frameAbort=new AbortController();const request=frameAbort;
       onLoading(true);
-      for(let i=layers.length-1;i>=0;i--)if(!layers[i].points){gl.deleteBuffer(layers[i].buffer);layers.splice(i,1)}
+      const nextFrames:typeof frames=[];
       const queue=sources.filter(s=>s.enabled&&s.calibrated);
       const at=new Date(epoch).toISOString();
-      await Promise.all([0,1].map(async()=>{while(queue.length&&!request.signal.aborted){
+      await Promise.all([0,1,2,3].map(async()=>{while(queue.length&&!request.signal.aborted){
         const s=queue.shift()!;
         try{
-          const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?at=${encodeURIComponent(at)}`,{headers:{Accept:'application/octet-stream'},cache:'no-store',signal:request.signal});
+          const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
           if(r.status===404)continue;if(!r.ok)throw new Error(await r.text());
-          const bytes=await r.arrayBuffer();if(request.signal.aborted||abort.signal.aborted)return;
-          addLayer(new Float32Array(bytes),false);
+          const asset=await r.json() as {geometry_url:string;texture_url:string;vertex_count:number};
+          let geometry=geometryCache.get(asset.geometry_url),texture=textureCache.get(asset.texture_url);
+          const [bytes,blob]=await Promise.all([
+            geometry?null:fetch(asset.geometry_url,{signal:request.signal}).then(r=>{if(!r.ok)throw new Error('Geometry unavailable');return r.arrayBuffer()}),
+            texture?null:fetch(asset.texture_url,{signal:request.signal}).then(r=>{if(!r.ok)throw new Error('Texture unavailable');return r.blob()})
+          ]);
+          if(request.signal.aborted||abort.signal.aborted)return;
+          if(!geometry&&bytes){const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);geometry={buffer:b,count:bytes.byteLength/20};geometryCache.set(asset.geometry_url,geometry)}
+          if(!texture&&blob){
+            const url=URL.createObjectURL(blob),im=new Image();
+            try{await new Promise<void>((resolve,reject)=>{im.onload=()=>resolve();im.onerror=()=>reject(new Error('Texture decode failed'));im.src=url});
+              if(request.signal.aborted||abort.signal.aborted)return;
+              texture=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,texture);
+              gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+              gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+              gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);textureCache.set(asset.texture_url,texture);
+            }finally{URL.revokeObjectURL(url)}
+          }
+          if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s)});
         }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
       }}));
-      if(!request.signal.aborted)onLoading(false);
+      if(!request.signal.aborted&&!abort.signal.aborted){
+        frames=nextFrames.sort((a,b)=>a.order-b.order);
+        // Keep a bounded GPU cache; HTTP caching retains older frame assets.
+        for(const [key,t] of textureCache){if(textureCache.size<=96)break;if(!frames.some(f=>f.texture===t)){gl.deleteTexture(t);textureCache.delete(key)}}
+        for(const [key,g] of geometryCache){if(geometryCache.size<=32)break;if(!frames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
+        onLoading(false);
+      }
     };
     void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),200);
   }).catch(console.error);
@@ -184,6 +210,11 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
     gl.uniform2f(gl.getUniformLocation(imageProgram,'resolution'),w,h);
     gl.uniform2f(gl.getUniformLocation(imageProgram,'rotation'),yaw,pitch);
     gl.uniform1f(gl.getUniformLocation(imageProgram,'zoom'),zoom);
+    const worldAttr=gl.getAttribLocation(imageProgram,'world'),rgbAttr=gl.getAttribLocation(imageProgram,'rgb'),uvAttr=gl.getAttribLocation(imageProgram,'uv');
+    gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),1);gl.uniform1i(gl.getUniformLocation(imageProgram,'frame'),0);gl.activeTexture(gl.TEXTURE0);
+    gl.disableVertexAttribArray(rgbAttr);gl.enableVertexAttribArray(worldAttr);gl.enableVertexAttribArray(uvAttr);
+    for(const frame of frames){gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
+    gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),0);gl.disableVertexAttribArray(uvAttr);
     for(const layer of [...layers.filter(l=>!l.points),...layers.filter(l=>l.points)]){
       gl.bindBuffer(gl.ARRAY_BUFFER,layer.buffer);
       for(const [name,offset] of [['world',0],['rgb',12]] as const){
@@ -206,5 +237,5 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
     gl.uniform3f(gl.getUniformLocation(lineProgram,'lineColor'),...color);
     gl.drawArrays(gl.LINES,0,count);
   }drawLayers(w,h);animation=requestAnimationFrame(draw)};draw();
-  return()=>{tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  return()=>{tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

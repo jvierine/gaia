@@ -5,7 +5,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_vkn.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Alkeevskiy camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -28,7 +28,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_alt.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Almetyevsk camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -51,7 +51,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_ayk2.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Aykhal camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -74,7 +74,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_azv.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Azevo camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -97,7 +97,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_bag.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Bagdarin camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -120,7 +120,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_brz.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Berezniki camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -143,7 +143,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_chb.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Chelyabinsk camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -166,7 +166,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_gul.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Gulkevichi camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -189,7 +189,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_irb.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Irbit camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -212,7 +212,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_klnsky.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Kaliningrad camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -235,7 +235,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_klg.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Kaluga camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -258,7 +258,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_kur.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Kamensk-Uralsky camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -281,7 +281,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_zhr.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Klin camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -304,7 +304,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_nov.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Krasnodar camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -327,7 +327,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_lbd.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Lebedevka camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -350,7 +350,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_msc.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Moscow camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -373,7 +373,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_mur.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Murmansk camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -396,7 +396,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_nrb.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Nürnberg camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -419,7 +419,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_ost.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Ostrolensky camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -442,7 +442,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_prm.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Perm camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -465,7 +465,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_ppv.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Popovo camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -488,7 +488,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_prv.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Provideniya camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -511,7 +511,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_ptr.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Pyatireche camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -534,7 +534,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_rus.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Russkoye camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -557,7 +557,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_rzn.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Ryazan camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -580,7 +580,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_sch.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Shchuchyn camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -603,7 +603,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_slvn.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Solovetsky camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -626,7 +626,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_spbd.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "St.Petersburg camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -649,7 +649,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/capture_str.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Strezhevoy camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -672,7 +672,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_rif.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "The Coastal Fort «Reef» camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -695,7 +695,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_tul.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Tula camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -718,7 +718,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_ugl.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Uglich camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -741,7 +741,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_utk.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Utkino camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -764,7 +764,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_vlg.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Vologda camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -787,7 +787,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_vlge.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Vologda-East camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -810,7 +810,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/capture_vlg.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Vologda-West camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -833,7 +833,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_vrk.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Vorkuta camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -856,7 +856,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_yar.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Yaroslavl camera operator",
       "institution": "STARVISOR Night Sky Patrol",
@@ -879,7 +879,7 @@
     "kind": "snapshot_url",
     "url": "https://pics.starvisor.net/galleries/orig/cap_urg.jpg",
     "timestamp_mode": "download_time",
-    "interval_seconds": 300,
+    "interval_seconds": 60,
     "producer": {
       "name": "Yurga camera operator",
       "institution": "STARVISOR Night Sky Patrol",

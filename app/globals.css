@@ -18,6 +18,7 @@
 @media(max-width:820px){.camera-list article,.source-list article{grid-template-columns:1fr}.calibration-state,.source-list article>div:last-child{text-align:left}.pipeline{grid-template-columns:1fr}.choice-grid{grid-template-columns:1fr}.form-row{grid-template-columns:1fr}.crop-grid{grid-template-columns:1fr 1fr}.mask-actions{flex-wrap:wrap}}
 
 /* Camera frames and the direct-manipulation mask/crop editor. */
+.brand .aurora-brand{width:44px;height:44px;flex:none}
 .mask-node-dot{position:absolute;width:12px;height:12px;box-sizing:border-box;border:2px solid #ff6276;border-radius:50%;background:white;transform:translate(-50%,-50%);pointer-events:none;z-index:1}.editing-nodes .mask-node-dot{pointer-events:auto;cursor:grab;touch-action:none}.editing-nodes .mask-node-dot:active{cursor:grabbing}
 .mask-selector{flex-wrap:wrap;margin:10px 0}
 .mask-image.editing-mask .mask-node{pointer-events:none}.mask-actions [role=status]{align-self:center;color:#9aafba;font-size:12px}.mask-image.editing-nodes{cursor:default}

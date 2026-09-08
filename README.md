@@ -45,7 +45,9 @@ Add an object to `sources/core.json` and submit a pull request. Every source mus
 }
 ```
 
-Use `timestamp_mode: "archive"` only when the observation time is trustworthy. Archive sources also provide `timestamp_regex` with a named `timestamp` capture and `timestamp_format`. Changing-image URLs without a reliable embedded timestamp use `download_time`; GAIA records that basis explicitly.
+Use `timestamp_mode: "archive"` only when the observation time is trustworthy. Archive sources also provide `timestamp_regex` with a named `timestamp` capture and `timestamp_format`. Snapshot images are checked using Tesseract OCR (install `tesseract-ocr` on the Rust server). Only an explicit `YYYY-MM-DD HH:MM[:SS] UTC` overlay is accepted, with calendar, ambiguity and plausibility checks. Local-time clocks and unreadable timestamps fall back to `download_time`; the recorded basis distinguishes `image_ocr_utc_minute`, `image_ocr_utc_second`, `source_filename`, and `download_time`. Download completion time is always retained separately. OCR is best effort, not a guarantee of correct timing.
+
+Enabled sources poll every 60 seconds on independent, staggered schedules, with four concurrent fetches maximum. The timeline requests archived images using `/api/sources/{id}/projection?at=<RFC3339 UTC>`. Each camera contributes its latest frame at or before that time, at most ten minutes old; missing history is left blank. Playback advances in five-minute steps and waits for frame downloads. The globe and solar terminator use the same selected UTC. Raw image coordinates and lens parameters are unchanged by crop/mask operations.
 
 Supported source kinds are `snapshot_url`, `html_index`, `json_feed`, and `push`. Optional `image_link_regex` limits links found on an HTML page. URL templates accept `{YYYY}`, `{MM}`, `{DD}`, and `{HH}` in UTC.
 

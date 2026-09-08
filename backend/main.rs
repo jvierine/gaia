@@ -7,6 +7,7 @@ mod model;
 mod quality;
 mod projection;
 mod pixel_mask;
+mod image_time;
 use axum::{
     Json, Router,
     body::Body,
@@ -285,8 +286,11 @@ async fn camera_settings(
     Ok(Json(json!({"state":"saved"})))
 }
 
-async fn projected_image(Path(id):Path<String>,State(s):State<AppState>,headers:axum::http::HeaderMap)->ApiResult<axum::response::Response> {
-    let p=tokio::task::spawn_blocking(move||projection::build(&s,&id)).await.map_err(internal)?.map_err(internal)?;
+#[derive(Deserialize)]
+struct ProjectionQuery { at:Option<String> }
+async fn projected_image(Path(id):Path<String>,State(s):State<AppState>,axum::extract::Query(query):axum::extract::Query<ProjectionQuery>,headers:axum::http::HeaderMap)->ApiResult<axum::response::Response> {
+    let at=query.at.map(|t|DateTime::parse_from_rfc3339(&t).map(|v|v.with_timezone(&Utc)).map_err(|_|(StatusCode::BAD_REQUEST,"invalid frame time".into()))).transpose()?;
+    let p=tokio::task::spawn_blocking(move||projection::build(&s,&id,at)).await.map_err(internal)?.map_err(|e|if e.to_string().contains("Query returned no rows"){(StatusCode::NOT_FOUND,"no frame within ten minutes before selected time".into())}else{internal(e)})?;
     let mut response=if headers.get(header::ACCEPT).and_then(|v|v.to_str().ok())==Some("application/octet-stream"){
         let mut bytes=Vec::with_capacity(p.vertices.len()*4);
         for value in &p.vertices {bytes.extend_from_slice(&value.to_le_bytes());}

@@ -1,43 +1,43 @@
 [
   {
     "id":"irf-kiruna-alis","name":"IRF Kiruna all-sky","kind":"html_index",
-    "url":"https://www.irf.se/alis/allsky/krn/{YYYY}/{MM}/{DD}/{HH}/","timestamp_mode":"archive","interval_seconds":300,
+    "url":"https://www.irf.se/alis/allsky/krn/{YYYY}/{MM}/{DD}/{HH}/","timestamp_mode":"archive","interval_seconds":60,
     "producer":{"name":"Kiruna Atmospheric and Geophysical Observatory","institution":"Swedish Institute of Space Physics (IRF)","website":"https://www.irf.se/en/forskning/kago/firmamentkamera/","acknowledgement":"Images courtesy of the Kiruna Atmospheric and Geophysical Observatory at the Swedish Institute of Space Physics (IRF).","copyright":"Copyright Swedish Institute of Space Physics (IRF)","license":null},
     "latitude_deg":67.84,"longitude_deg":20.41,"altitude_m":420,
     "image_link_regex":"^[0-9].*KRN\\.jpeg$","timestamp_regex":"(?<timestamp>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}\\.[0-9]{2}\\.[0-9]{2}\\.[0-9]{3})KRN\\.jpeg$","timestamp_format":"%Y-%m-%dT%H.%M.%S%.3f","enabled":true
   },
   {
-    "id":"uit-skibotn-bacc5","name":"BACC #5 Skibotn","kind":"snapshot_url","url":"https://fox.phys.uit.no/ASC/BACC5.jpg","timestamp_mode":"download_time","interval_seconds":300,
+    "id":"uit-skibotn-bacc5","name":"BACC #5 Skibotn","kind":"snapshot_url","url":"https://fox.phys.uit.no/ASC/BACC5.jpg","timestamp_mode":"download_time","interval_seconds":60,
     "producer":{"name":"Tromsø Geophysical Observatory and Kjell Henriksen Observatory","institution":"UiT The Arctic University of Norway and UNIS","website":"https://fox.phys.uit.no/ASC/BACC5.html","acknowledgement":"BACC #5 images courtesy of Tromsø Geophysical Observatory, UiT, in collaboration with Fred Sigernes and the Kjell Henriksen Observatory at UNIS.","copyright":"Copyright UiT The Arctic University of Norway and contributing BACC data producers","license":null},
     "latitude_deg":69.35,"longitude_deg":20.36,"altitude_m":20,"enabled":true
   },
   {
-    "id":"hornsund-allsky","name":"Hornsund all-sky","kind":"html_index","url":"https://hornsund.igf.edu.pl/index.php/en/cameras-2/?lang=en","timestamp_mode":"archive","interval_seconds":300,
+    "id":"hornsund-allsky","name":"Hornsund all-sky","kind":"html_index","url":"https://hornsund.igf.edu.pl/index.php/en/cameras-2/?lang=en","timestamp_mode":"archive","interval_seconds":60,
     "producer":{"name":"Polish Polar Station Hornsund","institution":"Institute of Geophysics, Polish Academy of Sciences","website":"https://hornsund.igf.edu.pl/index.php/en/cameras-2/?lang=en","acknowledgement":"Images courtesy of the Polish Polar Station Hornsund and the Institute of Geophysics, Polish Academy of Sciences.","copyright":"Copyright Institute of Geophysics, Polish Academy of Sciences","license":null},
     "latitude_deg":77.00,"longitude_deg":15.54,"altitude_m":10,"image_link_regex":".*/allsky-[0-9]{8}-[0-9]{6}\\.jpg$","timestamp_regex":"allsky-(?<timestamp>[0-9]{8}-[0-9]{6})\\.jpg$","timestamp_format":"%Y%m%d-%H%M%S","enabled":true
   },
   {
-    "id":"unis-kho-allsky","name":"UNIS KHO all-sky","kind":"snapshot_url","url":"https://unisacsi.com/allsky.jpg","timestamp_mode":"download_time","interval_seconds":300,
+    "id":"unis-kho-allsky","name":"UNIS KHO all-sky","kind":"snapshot_url","url":"https://unisacsi.com/allsky.jpg","timestamp_mode":"download_time","interval_seconds":60,
     "producer":{"name":"Kjell Henriksen Observatory","institution":"University Centre in Svalbard (UNIS)","website":"https://unisacsi.com/","acknowledgement":"Images courtesy of the Kjell Henriksen Observatory, University Centre in Svalbard (UNIS), and its all-sky camera team.","copyright":"Copyright University Centre in Svalbard and contributing camera operators","license":null},
     "latitude_deg":78.15,"longitude_deg":16.04,"altitude_m":520,"enabled":true
   },
   {
-    "id":"sgo-sodankyla","name":"Sodankylä all-sky","kind":"snapshot_url","url":"https://sgo.fi/Data/RealTime/Kuvat/SOD.jpg","timestamp_mode":"download_time","interval_seconds":300,
+    "id":"sgo-sodankyla","name":"Sodankylä all-sky","kind":"snapshot_url","url":"https://sgo.fi/Data/RealTime/Kuvat/SOD.jpg","timestamp_mode":"download_time","interval_seconds":60,
     "producer":{"name":"Sodankylä Geophysical Observatory","institution":"University of Oulu","website":"https://sgo.fi/","acknowledgement":"Images courtesy of Sodankylä Geophysical Observatory, University of Oulu.","copyright":"Copyright Sodankylä Geophysical Observatory, University of Oulu","license":null},
     "latitude_deg":67.37,"longitude_deg":26.63,"altitude_m":180,"enabled":true
   },
   {
-    "id":"tromsoe-ai-tromso","name":"Tromsø AI all-sky","kind":"snapshot_url","url":"https://tromsoe-ai.cei.uec.ac.jp/~nanjo/public/aurora_alert/latest.jpg","timestamp_mode":"download_time","interval_seconds":300,
+    "id":"tromsoe-ai-tromso","name":"Tromsø AI all-sky","kind":"snapshot_url","url":"https://tromsoe-ai.cei.uec.ac.jp/~nanjo/public/aurora_alert/latest.jpg","timestamp_mode":"download_time","interval_seconds":60,
     "producer":{"name":"Tromsø AI aurora project and contributing camera operators","institution":"The University of Electro-Communications","website":"https://tromsoe-ai.cei.uec.ac.jp/","acknowledgement":"Images courtesy of the Tromsø AI aurora project, The University of Electro-Communications, and the contributing observatory camera operators.","copyright":"Copyright the Tromsø AI project and originating camera data producers","license":null},
     "latitude_deg":69.65,"longitude_deg":18.96,"altitude_m":20,"enabled":true
   },
   {
-    "id":"tromsoe-ai-kiruna","name":"Tromsø AI Kiruna","kind":"snapshot_url","url":"https://tromsoe-ai.cei.uec.ac.jp/~nanjo/public/aurora_alert/latest_kiruna.jpg","timestamp_mode":"download_time","interval_seconds":300,
+    "id":"tromsoe-ai-kiruna","name":"Tromsø AI Kiruna","kind":"snapshot_url","url":"https://tromsoe-ai.cei.uec.ac.jp/~nanjo/public/aurora_alert/latest_kiruna.jpg","timestamp_mode":"download_time","interval_seconds":60,
     "producer":{"name":"Tromsø AI aurora project and IRF","institution":"The University of Electro-Communications / Swedish Institute of Space Physics","website":"https://tromsoe-ai.cei.uec.ac.jp/","acknowledgement":"Images courtesy of the Tromsø AI aurora project and the originating Kiruna data producer, Swedish Institute of Space Physics.","copyright":"Copyright the originating camera data producer","license":null},
     "latitude_deg":67.84,"longitude_deg":20.41,"altitude_m":420,"enabled":true
   },
   {
-    "id":"tromsoe-ai-skibotn","name":"Tromsø AI Skibotn","kind":"snapshot_url","url":"https://tromsoe-ai.cei.uec.ac.jp/~nanjo/public/aurora_alert/latest_skibotn.jpg","timestamp_mode":"download_time","interval_seconds":300,
+    "id":"tromsoe-ai-skibotn","name":"Tromsø AI Skibotn","kind":"snapshot_url","url":"https://tromsoe-ai.cei.uec.ac.jp/~nanjo/public/aurora_alert/latest_skibotn.jpg","timestamp_mode":"download_time","interval_seconds":60,
     "producer":{"name":"Tromsø AI aurora project and BACC operators","institution":"The University of Electro-Communications / UiT / UNIS","website":"https://tromsoe-ai.cei.uec.ac.jp/","acknowledgement":"Images courtesy of the Tromsø AI aurora project and the originating BACC Skibotn camera operators at UiT and UNIS.","copyright":"Copyright the originating camera data producer","license":null},
     "latitude_deg":69.35,"longitude_deg":20.36,"altitude_m":20,"enabled":true
   }

@@ -165,7 +165,14 @@ pub async fn crawl_once(
         if bytes.len() < 1024 {
             continue;
         }
-        let (observed, basis) = parse_timestamp(source, &url, downloaded)?;
+        let downloaded=Utc::now();
+        let (mut observed, mut basis) = parse_timestamp(source, &url, downloaded)?;
+        if matches!(source.timestamp_mode,TimestampMode::DownloadTime){
+            let data=bytes.clone();
+            if let Ok(Some((time,method)))=tokio::task::spawn_blocking(move||crate::image_time::read(&data,downloaded)).await{
+                observed=time;basis=method;
+            }
+        }
         let conn = db::open(db_path)?;
         let stored = archive::store_image(
             &conn,
@@ -207,40 +214,28 @@ pub async fn run_loop(
         .timeout(Duration::from_secs(30))
         .build()
         .unwrap();
-    let mut next_due: HashMap<String, Instant> = HashMap::new();
-    loop {
-        for source in sources.iter().filter(|s| s.enabled) {
-            if db::open(&db_path)
-                .ok()
-                .and_then(|conn| {
-                    conn.query_row(
-                        "SELECT enabled FROM sources WHERE id=?1",
-                        [&source.id],
-                        |r| r.get::<_, bool>(0),
-                    )
-                    .ok()
-                })
-                .is_some_and(|enabled| !enabled)
-            {
-                continue;
-            }
-            let now = Instant::now();
-            if next_due.get(&source.id).is_some_and(|due| *due > now) {
-                continue;
-            }
-            next_due.insert(
-                source.id.clone(),
-                now + Duration::from_secs(source.interval_seconds.max(30)),
-            );
+    let slots=Arc::new(tokio::sync::Semaphore::new(4));
+    let mut jobs=tokio::task::JoinSet::new();
+    for (index,source) in sources.iter().filter(|s|s.enabled).cloned().enumerate(){
+        let client=client.clone();let db_path=db_path.clone();let archive_root=archive_root.clone();let slots=slots.clone();
+        jobs.spawn(async move{
+            tokio::time::sleep(Duration::from_secs(index as u64)).await;
+            let mut timer=tokio::time::interval(Duration::from_secs(source.interval_seconds.max(30)));
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop{
+            timer.tick().await;
+            let enabled=db::open(&db_path).ok().and_then(|conn|conn.query_row("SELECT enabled FROM sources WHERE id=?1",[&source.id],|r|r.get::<_,bool>(0)).ok()).unwrap_or(false);
+            if !enabled{continue}
+            let _permit=slots.acquire().await.unwrap();
             let started = Utc::now();
-            let conn = match db::open(&db_path) {
+            let run_id={let conn = match db::open(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("database: {e:#}");
                     continue;
                 }
             };
-            let _ = db::upsert_source(&conn, source);
+            let _ = db::upsert_source(&conn, &source);
             let run_id = conn
                 .execute(
                     "INSERT INTO crawler_runs(source_id,started_utc,state) VALUES(?1,?2,'running')",
@@ -248,8 +243,8 @@ pub async fn run_loop(
                 )
                 .ok()
                 .map(|_| conn.last_insert_rowid());
-            drop(conn);
-            let result = crawl_once(source, &client, &db_path, &archive_root).await;
+            run_id};
+            let result = crawl_once(&source, &client, &db_path, &archive_root).await;
             if let (Some(run_id), Ok(conn)) = (run_id, db::open(&db_path)) {
                 match result {
                     Ok((d, n, x)) => {
@@ -266,7 +261,8 @@ pub async fn run_loop(
                     }
                 }
             }
-        }
-        tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+        });
     }
+    while let Some(result)=jobs.join_next().await{if let Err(e)=result{tracing::error!("camera worker stopped: {e}")}}
 }

@@ -87,13 +87,25 @@ function igrfContourVertices(values:Float32Array){
   return new Float32Array(vertices);
 }
 
-export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>number) {
+export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>number,onLoading:(loading:boolean)=>void=()=>{}) {
   const gl = canvas.getContext('webgl', { antialias: true }); if (!gl) return () => {};
   const program=makeProgram(gl,VERTEX,FRAGMENT),lineProgram=makeProgram(gl,LINE_VERTEX,LINE_FRAGMENT);gl.useProgram(program);
   const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
   const position = gl.getAttribLocation(program,'position'); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
   const resolution=gl.getUniformLocation(program,'resolution'),rotation=gl.getUniformLocation(program,'rotation'),zoomLoc=gl.getUniformLocation(program,'zoom'),sunLoc=gl.getUniformLocation(program,'sunDirection');
   let yaw=-.35,pitch=-.45,zoom=.78,dragging=false,last=[0,0],animation=0;
+  let cameraSites:{name:string;world:number[]}[]=[];
+  const tooltip=document.createElement('div');tooltip.style.cssText='position:absolute;display:none;pointer-events:none;z-index:5;background:#04111eee;color:white;padding:6px 9px;border:1px solid #54756a;border-radius:4px;font:12px sans-serif';canvas.parentElement?.appendChild(tooltip);
+  const hover=(e:PointerEvent)=>{
+    tooltip.style.display='none';if(dragging)return;
+    const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);let best=10,name='';
+    for(const s of cameraSites){const[x,y,z]=s.world,xx=Math.cos(yaw)*x-Math.sin(yaw)*z,zz=Math.sin(yaw)*x+Math.cos(yaw)*z,yy=Math.cos(pitch)*y+Math.sin(pitch)*zz,depth=-Math.sin(pitch)*y+Math.cos(pitch)*zz;if(depth<0)continue;
+      const d=Math.hypot(e.clientX-r.left-r.width/2-xx*zoom*side/2,e.clientY-r.top-r.height/2+yy*zoom*side/2);if(d<best){best=d;name=s.name}
+    }
+    if(name){tooltip.textContent=name;tooltip.style.display='block';tooltip.style.left=`${e.clientX-r.left+12}px`;tooltip.style.top=`${e.clientY-r.top+12}px`;}
+  };
+  const hideTooltip=()=>{tooltip.style.display='none'};
+  canvas.addEventListener('pointermove',hover);canvas.addEventListener('pointerleave',hideTooltip);
   const zoomControl=(event:Event)=>{const action=(event as CustomEvent<string>).detail;if(action==='reset'){zoom=.78}else{zoom=Math.max(.5,Math.min(8,zoom*(action==='in'?1.35:1/1.35)))}};
   canvas.addEventListener('gaia-zoom',zoomControl);
   const pointerDown=(e:PointerEvent)=>{dragging=true;last=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)};
@@ -129,21 +141,32 @@ void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(reso
 precision highp float;varying vec3 color;varying float visible;void main(){if(visible<0.)discard;gl_FragColor=vec4(color,1.);}`);
   const layers:{buffer:WebGLBuffer;count:number;points:boolean}[]=[];
   const addLayer=(values:number[]|Float32Array,points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
-  const abort=new AbortController();
+  const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
   void fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json()).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(s.latitude_deg===null||s.longitude_deg===null)continue;const lat=s.latitude_deg*Math.PI/180,lon=s.longitude_deg*Math.PI/180;sites.push(Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon),...(s.enabled?(s.calibrated?[.3,1,.7]:[1,.25,.3]):[.5,.5,.5]));}
     addLayer(sites,true);
-    const queue=sources.filter(s=>s.enabled&&s.calibrated);
-    await Promise.all([0,1].map(async()=>{while(queue.length&&!abort.signal.aborted){
-      const s=queue.shift()!;
-      try{
-        const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection`,{headers:{Accept:'application/octet-stream'},cache:'no-store',signal:abort.signal});
-        if(!r.ok)throw new Error(await r.text());
-        const bytes=await r.arrayBuffer();if(abort.signal.aborted)return;
-        addLayer(new Float32Array(bytes),false);
-      }catch(e){if(!abort.signal.aborted)console.error(`Projection ${s.name}`,e)}
-    }}));
+    cameraSites=sources.filter(s=>s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{name:s.name,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
+    let lastMinute=-1;
+    const updateFrames=async()=>{
+      const epoch=getEpochMillis(),minute=Math.floor(epoch/60000);if(minute===lastMinute)return;
+      lastMinute=minute;frameAbort.abort();frameAbort=new AbortController();const request=frameAbort;
+      onLoading(true);
+      for(let i=layers.length-1;i>=0;i--)if(!layers[i].points){gl.deleteBuffer(layers[i].buffer);layers.splice(i,1)}
+      const queue=sources.filter(s=>s.enabled&&s.calibrated);
+      const at=new Date(epoch).toISOString();
+      await Promise.all([0,1].map(async()=>{while(queue.length&&!request.signal.aborted){
+        const s=queue.shift()!;
+        try{
+          const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?at=${encodeURIComponent(at)}`,{headers:{Accept:'application/octet-stream'},cache:'no-store',signal:request.signal});
+          if(r.status===404)continue;if(!r.ok)throw new Error(await r.text());
+          const bytes=await r.arrayBuffer();if(request.signal.aborted||abort.signal.aborted)return;
+          addLayer(new Float32Array(bytes),false);
+        }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
+      }}));
+      if(!request.signal.aborted)onLoading(false);
+    };
+    void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),200);
   }).catch(console.error);
   // Final overlay pass: measured image colors are unlit and opaque, above both
   // the Earth's night shading and IGRF lines. The shader still hides the far side.
@@ -176,5 +199,5 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
     gl.uniform3f(gl.getUniformLocation(lineProgram,'lineColor'),...color);
     gl.drawArrays(gl.LINES,0,count);
   }drawLayers(w,h);animation=requestAnimationFrame(draw)};draw();
-  return()=>{abort.abort();for(const layer of layers)gl.deleteBuffer(layer.buffer);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  return()=>{tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

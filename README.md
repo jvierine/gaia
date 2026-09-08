@@ -12,7 +12,7 @@ The public viewer is at <https://juha.no/gaia/>.
 - `src/globe.ts`: custom TypeScript/WebGL globe. It draws political boundaries and coastlines, 30° full IGRF-14 magnetic dip-latitude contours, the magnetic and geographic equators, current Sun position and terminator. The Rust service evaluates all degree/order 1–13 coefficients and caches one grid per calendar year.
 - `app/`: viewer, camera registry, data-flow status, contributor workflow and acknowledgements.
 - `sources/core.json`: human-editable camera-source catalogue.
-- `/mnt/shovel/gaia/YYYY-MM-DD/<source>/<image-id>/`: immutable original image and provenance metadata. SQLite lives at `/mnt/shovel/gaia/gaia.sqlite3`; AIDA calibration HDF5 files live under `/mnt/shovel/gaia/calibrations/`.
+- `/mnt/shovel/gaia/YYYY-MM-DD/<source>/<image-id>/`: immutable original image and provenance metadata. SQLite lives on the server-local filesystem at `/home/j/var/gaia/gaia.sqlite3` because CIFS file locking is unsuitable for SQLite WAL; AIDA calibration HDF5 files live under `/mnt/shovel/gaia/calibrations/`.
 
 The Rust service SHA-256 deduplicates downloads. It checks only a bounded number of newest archive entries and one frame from snapshot URLs per poll. Historical bulk acquisition is deliberately not enabled by default.
 

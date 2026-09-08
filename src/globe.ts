@@ -108,10 +108,17 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   canvas.addEventListener('pointermove',hover);canvas.addEventListener('pointerleave',hideTooltip);
   const zoomControl=(event:Event)=>{const action=(event as CustomEvent<string>).detail;if(action==='reset'){zoom=.78}else{zoom=Math.max(.5,Math.min(8,zoom*(action==='in'?1.35:1/1.35)))}};
   canvas.addEventListener('gaia-zoom',zoomControl);
-  const pointerDown=(e:PointerEvent)=>{dragging=true;last=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)};
-  const pointerMove=(e:PointerEvent)=>{if(!dragging)return;yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));last=[e.clientX,e.clientY]};
-  const pointerUp=()=>{dragging=false}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
+  const pointers=new Map<number,[number,number]>();let pinchDistance=0;
+  const distance=()=>{const p=[...pointers.values()];return p.length<2?0:Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1])};
+  const pointerDown=(e:PointerEvent)=>{if(e.pointerType==='mouse'&&e.button!==0)return;e.preventDefault();hideTooltip();pointers.set(e.pointerId,[e.clientX,e.clientY]);dragging=true;last=[e.clientX,e.clientY];pinchDistance=distance();canvas.setPointerCapture(e.pointerId)};
+  const pointerMove=(e:PointerEvent)=>{
+    if(!pointers.has(e.pointerId))return;e.preventDefault();pointers.set(e.pointerId,[e.clientX,e.clientY]);
+    if(pointers.size>=2){const d=distance();if(pinchDistance>0&&d>0)zoom=Math.max(.5,Math.min(8,zoom*d/pinchDistance));pinchDistance=d;return}
+    yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));last=[e.clientX,e.clientY];
+  };
+  const pointerUp=(e:PointerEvent)=>{pointers.delete(e.pointerId);pinchDistance=distance();dragging=pointers.size>0;if(dragging)last=[...pointers.values()][0]}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('wheel',wheel,{passive:false});
+  canvas.addEventListener('pointercancel',pointerUp);canvas.addEventListener('lostpointercapture',pointerUp);
   const boundaryBuffer=gl.createBuffer();let boundaryVertices=0;
   void fetch('/gaia/world.geojson').then(r=>r.json()).then(world=>{
     const vertices:number[]=[];

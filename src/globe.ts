@@ -115,6 +115,7 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
   const layers:{buffer:WebGLBuffer;count:number;points:boolean}[]=[];
   const addLayer=(values:number[],points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
   void fetch('/gaia/api/sources').then(r=>r.json()).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+    const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(s.latitude_deg===null||s.longitude_deg===null)continue;const lat=s.latitude_deg*Math.PI/180,lon=s.longitude_deg*Math.PI/180;sites.push(Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon),...(s.enabled?(s.calibrated?[.3,1,.7]:[1,.25,.3]):[.5,.5,.5]));}
     for(const s of sources.filter(s=>s.enabled&&s.calibrated)){try{const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection`);if(!r.ok)throw new Error(await r.text());const result=await r.json();addLayer(result.vertices,false);console.info(`Projected ${s.name}: ${result.width} × ${result.height}; © ${s.producer}`)}catch(e){console.error(`Projection ${s.name}`,e)}}
     addLayer(sites,true);

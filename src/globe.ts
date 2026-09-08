@@ -21,8 +21,7 @@ float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 void main(){
   vec2 p=(2.*gl_FragCoord.xy-resolution.xy)/min(resolution.x,resolution.y)/zoom;
   float r2=dot(p,p); vec3 bg=vec3(.003,.012,.022);
-  float stars=step(.9975,hash(floor(gl_FragCoord.xy*.7)))*.34;
-  if(r2>1.){gl_FragColor=vec4(bg+stars,1.);return;}
+  if(r2>1.){gl_FragColor=vec4(bg,1.);return;}
   vec3 n=normalize(vec3(p.x,p.y,sqrt(1.-r2)));
   n=rotY(rotation.x)*rotX(rotation.y)*n;
   float lat=asin(n.y),lon=atan(n.x,n.z); vec2 ll=vec2(lon,lat);

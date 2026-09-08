@@ -6,6 +6,7 @@ mod igrf_grid;
 mod model;
 mod quality;
 mod projection;
+mod pixel_mask;
 use axum::{
     Json, Router,
     body::Body,

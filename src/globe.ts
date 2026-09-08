@@ -122,7 +122,26 @@ precision highp float;varying vec3 color;varying float visible;void main(){if(vi
     addLayer(sites,true);
     credits.textContent+=' | Images: '+sources.filter(s=>s.enabled&&s.calibrated).map(s=>`${s.name} © ${s.producer}`).join('; ');
   }).catch(console.error);
-  const drawLayers=(w:number,h:number)=>{gl.useProgram(imageProgram);gl.uniform2f(gl.getUniformLocation(imageProgram,'resolution'),w,h);gl.uniform2f(gl.getUniformLocation(imageProgram,'rotation'),yaw,pitch);gl.uniform1f(gl.getUniformLocation(imageProgram,'zoom'),zoom);for(const layer of layers){gl.bindBuffer(gl.ARRAY_BUFFER,layer.buffer);for(const [name,offset] of [['world',0],['rgb',12]] as const){const a=gl.getAttribLocation(imageProgram,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,3,gl.FLOAT,false,24,offset)}gl.drawArrays(layer.points?gl.POINTS:gl.TRIANGLES,0,layer.count)}};
+  // Final overlay pass: measured image colors are unlit and opaque, above both
+  // the Earth's night shading and IGRF lines. The shader still hides the far side.
+  const drawLayers=(w:number,h:number)=>{
+    const depthTest=gl.isEnabled(gl.DEPTH_TEST),blend=gl.isEnabled(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);
+    gl.useProgram(imageProgram);
+    gl.uniform2f(gl.getUniformLocation(imageProgram,'resolution'),w,h);
+    gl.uniform2f(gl.getUniformLocation(imageProgram,'rotation'),yaw,pitch);
+    gl.uniform1f(gl.getUniformLocation(imageProgram,'zoom'),zoom);
+    for(const layer of layers){
+      gl.bindBuffer(gl.ARRAY_BUFFER,layer.buffer);
+      for(const [name,offset] of [['world',0],['rgb',12]] as const){
+        const a=gl.getAttribLocation(imageProgram,name);
+        gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,3,gl.FLOAT,false,24,offset);
+      }
+      gl.drawArrays(layer.points?gl.POINTS:gl.TRIANGLES,0,layer.count);
+    }
+    if(depthTest)gl.enable(gl.DEPTH_TEST);
+    if(blend)gl.enable(gl.BLEND);
+  };
   void fetch('/gaia/api/igrf-maglat').then(r=>{if(!r.ok)throw new Error(`IGRF grid ${r.status}`);return r.arrayBuffer()}).then(buffer=>{const values=new Uint8Array(buffer);if(values.length!==360*181)throw new Error(`unexpected IGRF grid length ${values.length}`);const vertices=igrfContourVertices(values);magneticVertices=vertices.length/2;gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW)}).catch(console.error);
   const solarDirection=(time:number)=>{const jd=time/86400000+2440587.5,t=(jd-2451545)/36525,l0=(280.46646+t*(36000.76983+t*.0003032))*Math.PI/180,m=(357.52911+t*(35999.05029-.0001537*t))*Math.PI/180,lambda=l0+(1.914602-.004817*t-.000014*t*t)*Math.sin(m)*Math.PI/180+.019993*Math.sin(2*m)*Math.PI/180+.000289*Math.sin(3*m)*Math.PI/180,epsilon=(23.439291-.0130042*t)*Math.PI/180,decl=Math.asin(Math.sin(epsilon)*Math.sin(lambda)),ra=Math.atan2(Math.cos(epsilon)*Math.sin(lambda),Math.cos(lambda)),gmst=(280.46061837+360.98564736629*(jd-2451545)+.000387933*t*t-t*t*t/38710000)*Math.PI/180,lon=ra-gmst;return[Math.cos(decl)*Math.sin(lon),Math.sin(decl),Math.cos(decl)*Math.cos(lon)]};
   const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform2f(rotation,yaw,pitch);gl.uniform1f(zoomLoc,zoom);const sun=solarDirection(getEpochMillis());gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);if(magneticVertices){gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.enableVertexAttribArray(magneticPosition);gl.vertexAttribPointer(magneticPosition,2,gl.FLOAT,false,0,0);gl.uniform2f(gl.getUniformLocation(lineProgram,'resolution'),w,h);gl.uniform2f(gl.getUniformLocation(lineProgram,'rotation'),yaw,pitch);gl.uniform1f(gl.getUniformLocation(lineProgram,'zoom'),zoom);gl.drawArrays(gl.LINES,0,magneticVertices)}drawLayers(w,h);animation=requestAnimationFrame(draw)};draw();

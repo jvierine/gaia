@@ -1,0 +1,899 @@
+[
+  {
+    "id": "starvisor-alkeevskiy",
+    "name": "STARVISOR Alkeevskiy",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_vkn.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Alkeevskiy camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/vkl",
+      "acknowledgement": "Image from the Alkeevskiy camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Alkeevskiy camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 54,
+    "longitude_deg": 49,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/vkl"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-almetyevsk",
+    "name": "STARVISOR Almetyevsk",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_alt.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Almetyevsk camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/alme",
+      "acknowledgement": "Image from the Almetyevsk camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Almetyevsk camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 54,
+    "longitude_deg": 52,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/alme"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-aykhal",
+    "name": "STARVISOR Aykhal",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_ayk2.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Aykhal camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/aykh",
+      "acknowledgement": "Image from the Aykhal camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Aykhal camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 65,
+    "longitude_deg": 111,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/aykh"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-azevo",
+    "name": "STARVISOR Azevo",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_azv.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Azevo camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/azevo",
+      "acknowledgement": "Image from the Azevo camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Azevo camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 56,
+    "longitude_deg": 53,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/azevo"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-bagdarin",
+    "name": "STARVISOR Bagdarin",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_bag.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Bagdarin camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/bagd",
+      "acknowledgement": "Image from the Bagdarin camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Bagdarin camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 54,
+    "longitude_deg": 113,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/bagd"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-berezniki",
+    "name": "STARVISOR Berezniki",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_brz.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Berezniki camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/bere",
+      "acknowledgement": "Image from the Berezniki camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Berezniki camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 59,
+    "longitude_deg": 57,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/bere"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-chelyabinsk",
+    "name": "STARVISOR Chelyabinsk",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_chb.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Chelyabinsk camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/chel",
+      "acknowledgement": "Image from the Chelyabinsk camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Chelyabinsk camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 55,
+    "longitude_deg": 61,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/chel"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-gulkevichi",
+    "name": "STARVISOR Gulkevichi",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_gul.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Gulkevichi camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/gulk",
+      "acknowledgement": "Image from the Gulkevichi camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Gulkevichi camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 45,
+    "longitude_deg": 40,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/gulk"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-irbit",
+    "name": "STARVISOR Irbit",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_irb.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Irbit camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/irb1",
+      "acknowledgement": "Image from the Irbit camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Irbit camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 57,
+    "longitude_deg": 63,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/irb1"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-kaliningrad",
+    "name": "STARVISOR Kaliningrad",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_klnsky.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Kaliningrad camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/klng",
+      "acknowledgement": "Image from the Kaliningrad camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Kaliningrad camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 54,
+    "longitude_deg": 20,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/klng"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-kaluga",
+    "name": "STARVISOR Kaluga",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_klg.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Kaluga camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/klga",
+      "acknowledgement": "Image from the Kaluga camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Kaluga camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 54,
+    "longitude_deg": 36,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/klga"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-kamensk-uralsky",
+    "name": "STARVISOR Kamensk-Uralsky",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_kur.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Kamensk-Uralsky camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/kmur",
+      "acknowledgement": "Image from the Kamensk-Uralsky camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Kamensk-Uralsky camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 56,
+    "longitude_deg": 61,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/kmur"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-klin",
+    "name": "STARVISOR Klin",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_zhr.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Klin camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/zkh",
+      "acknowledgement": "Image from the Klin camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Klin camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 56,
+    "longitude_deg": 36,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/zkh"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-krasnodar",
+    "name": "STARVISOR Krasnodar",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_nov.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Krasnodar camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/novo",
+      "acknowledgement": "Image from the Krasnodar camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Krasnodar camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 45,
+    "longitude_deg": 38,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/novo"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-lebedevka",
+    "name": "STARVISOR Lebedevka",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_lbd.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Lebedevka camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/leb",
+      "acknowledgement": "Image from the Lebedevka camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Lebedevka camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 60,
+    "longitude_deg": 29,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/leb"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-moscow",
+    "name": "STARVISOR Moscow",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_msc.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Moscow camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/moscow",
+      "acknowledgement": "Image from the Moscow camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Moscow camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 55,
+    "longitude_deg": 37,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/moscow"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-murmansk",
+    "name": "STARVISOR Murmansk",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_mur.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Murmansk camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/mrm",
+      "acknowledgement": "Image from the Murmansk camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Murmansk camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 69,
+    "longitude_deg": 33,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/mrm"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-nu-rnberg",
+    "name": "STARVISOR Nürnberg",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_nrb.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Nürnberg camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/nrn",
+      "acknowledgement": "Image from the Nürnberg camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Nürnberg camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 49,
+    "longitude_deg": 11,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/nrn"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-ostrolensky",
+    "name": "STARVISOR Ostrolensky",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_ost.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Ostrolensky camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/ostr",
+      "acknowledgement": "Image from the Ostrolensky camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Ostrolensky camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 53,
+    "longitude_deg": 59,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/ostr"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-perm",
+    "name": "STARVISOR Perm",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_prm.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Perm camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/perm",
+      "acknowledgement": "Image from the Perm camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Perm camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 58,
+    "longitude_deg": 56,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/perm"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-popovo",
+    "name": "STARVISOR Popovo",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_ppv.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Popovo camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/pop",
+      "acknowledgement": "Image from the Popovo camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Popovo camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 57,
+    "longitude_deg": 38,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/pop"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-provideniya",
+    "name": "STARVISOR Provideniya",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_prv.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Provideniya camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/pro",
+      "acknowledgement": "Image from the Provideniya camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Provideniya camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 64,
+    "longitude_deg": -173,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/pro"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-pyatireche",
+    "name": "STARVISOR Pyatireche",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_ptr.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Pyatireche camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/pya",
+      "acknowledgement": "Image from the Pyatireche camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Pyatireche camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 60,
+    "longitude_deg": 30,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/pya"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-russkoye",
+    "name": "STARVISOR Russkoye",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_rus.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Russkoye camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/russ",
+      "acknowledgement": "Image from the Russkoye camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Russkoye camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 47,
+    "longitude_deg": 38,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/russ"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-ryazan",
+    "name": "STARVISOR Ryazan",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_rzn.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Ryazan camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/ryaz",
+      "acknowledgement": "Image from the Ryazan camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Ryazan camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 54,
+    "longitude_deg": 40,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/ryaz"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-shchuchyn",
+    "name": "STARVISOR Shchuchyn",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_sch.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Shchuchyn camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/shch",
+      "acknowledgement": "Image from the Shchuchyn camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Shchuchyn camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 53,
+    "longitude_deg": 24,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/shch"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-solovetsky",
+    "name": "STARVISOR Solovetsky",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_slvn.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Solovetsky camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/sln",
+      "acknowledgement": "Image from the Solovetsky camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Solovetsky camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 65,
+    "longitude_deg": 35,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/sln"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-st-petersburg",
+    "name": "STARVISOR St.Petersburg",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_spbd.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "St.Petersburg camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/stpbd",
+      "acknowledgement": "Image from the St.Petersburg camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the St.Petersburg camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 60,
+    "longitude_deg": 30,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/stpbd"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-strezhevoy",
+    "name": "STARVISOR Strezhevoy",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/capture_str.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Strezhevoy camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/strz",
+      "acknowledgement": "Image from the Strezhevoy camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Strezhevoy camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 61,
+    "longitude_deg": 77,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/strz"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-the-coastal-fort-reef",
+    "name": "STARVISOR The Coastal Fort «Reef»",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_rif.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "The Coastal Fort «Reef» camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/reef",
+      "acknowledgement": "Image from the The Coastal Fort «Reef» camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the The Coastal Fort «Reef» camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 60,
+    "longitude_deg": 29,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/reef"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-tula",
+    "name": "STARVISOR Tula",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_tul.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Tula camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/tul",
+      "acknowledgement": "Image from the Tula camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Tula camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 54,
+    "longitude_deg": 37,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/tul"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-uglich",
+    "name": "STARVISOR Uglich",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_ugl.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Uglich camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/ugch",
+      "acknowledgement": "Image from the Uglich camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Uglich camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 57,
+    "longitude_deg": 38,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/ugch"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-utkino",
+    "name": "STARVISOR Utkino",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_utk.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Utkino camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/utkino",
+      "acknowledgement": "Image from the Utkino camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Utkino camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 57,
+    "longitude_deg": 40,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/utkino"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-vologda",
+    "name": "STARVISOR Vologda",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_vlg.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Vologda camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/vlgd",
+      "acknowledgement": "Image from the Vologda camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Vologda camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 59,
+    "longitude_deg": 39,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/vlgd"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-vologda-east",
+    "name": "STARVISOR Vologda-East",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_vlge.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Vologda-East camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/vlgde",
+      "acknowledgement": "Image from the Vologda-East camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Vologda-East camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 59,
+    "longitude_deg": 39,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/vlgde"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-vologda-west",
+    "name": "STARVISOR Vologda-West",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/capture_vlg.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Vologda-West camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/vlgdw",
+      "acknowledgement": "Image from the Vologda-West camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Vologda-West camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 59,
+    "longitude_deg": 39,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/vlgdw"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-vorkuta",
+    "name": "STARVISOR Vorkuta",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_vrk.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Vorkuta camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/vrkt",
+      "acknowledgement": "Image from the Vorkuta camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Vorkuta camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 67,
+    "longitude_deg": 64,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/vrkt"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-yaroslavl",
+    "name": "STARVISOR Yaroslavl",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_yar.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Yaroslavl camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/yars",
+      "acknowledgement": "Image from the Yaroslavl camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Yaroslavl camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 57,
+    "longitude_deg": 39,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/yars"
+    },
+    "enabled": true
+  },
+  {
+    "id": "starvisor-yurga",
+    "name": "STARVISOR Yurga",
+    "kind": "snapshot_url",
+    "url": "https://pics.starvisor.net/galleries/orig/cap_urg.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Yurga camera operator",
+      "institution": "STARVISOR Night Sky Patrol",
+      "website": "https://starvisor.net/yurg",
+      "acknowledgement": "Image from the Yurga camera, made available by the STARVISOR Night Sky Patrol network.",
+      "copyright": "Copyright remains with the Yurga camera operator and STARVISOR as applicable.",
+      "license": null
+    },
+    "latitude_deg": 55,
+    "longitude_deg": 84,
+    "altitude_m": null,
+    "request_headers": {
+      "Referer": "https://starvisor.net/yurg"
+    },
+    "enabled": true
+  }
+]

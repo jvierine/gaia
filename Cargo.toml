@@ -1,0 +1,31 @@
+[package]
+name = "gaia-datacenter"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[[bin]]
+name = "gaia-server"
+path = "backend/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8.9", features = ["multipart"] }
+chrono = { version = "0.4", features = ["serde"] }
+ferromagnetic = "0.0.1-alpha.5"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+regex = "1.12"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "chrono"] }
+scraper = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"

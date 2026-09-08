@@ -1,0 +1,21 @@
+[Unit]
+Description=GAIA auroral image data center
+After=network-online.target mnt-shovel.mount
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=j
+WorkingDirectory=/home/j/src/gaia
+Environment=RUST_LOG=gaia_datacenter=info,tower_http=info
+Environment=GAIA_ARCHIVE_ROOT=/mnt/shovel/gaia
+Environment=GAIA_DB_PATH=/mnt/shovel/gaia/gaia.sqlite3
+Environment=GAIA_SOURCES=/home/j/src/gaia/sources
+Environment=GAIA_STATIC_DIR=/var/www/html/gaia
+Environment=GAIA_LISTEN=127.0.0.1:8765
+ExecStart=/home/j/src/gaia/target/release/gaia-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

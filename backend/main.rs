@@ -152,6 +152,13 @@ async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>
     Ok(Json(rows.filter_map(Result::ok).collect()))
 }
 
+async fn history(State(s):State<AppState>)->ApiResult<Json<Vec<String>>>{
+    let conn=db::open(&s.db_path).map_err(internal)?;
+    let mut q=conn.prepare("SELECT DISTINCT strftime('%Y-%m-%dT%H:%M:00Z',i.observation_utc) AS minute FROM images i JOIN sources s ON s.id=i.source_id WHERE s.enabled=1 AND EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) AND julianday(i.observation_utc)>=julianday('now','-1 day') ORDER BY minute").map_err(internal)?;
+    let rows=q.query_map([],|r|r.get::<_,String>(0)).map_err(internal)?;
+    Ok(Json(rows.collect::<Result<Vec<_>,_>>().map_err(internal)?))
+}
+
 #[derive(Deserialize)]
 struct SuggestionInput {
     name: Option<String>,
@@ -492,6 +499,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/enabled", post(set_enabled))
         .route("/api/sources/{id}/settings", get(get_camera_settings).post(camera_settings))
         .route("/api/credits", get(credits))
+        .route("/api/history", get(history))
         .route("/api/calibrations", post(calibration))
         .route("/api/ingest", post(ingest))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))

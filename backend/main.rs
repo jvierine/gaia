@@ -234,6 +234,23 @@ struct CameraSettingsInput {
     crop: Option<Value>,
     mask: Option<Value>,
 }
+async fn get_camera_settings(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let row = conn.query_row(
+        "SELECT c.crop_json,c.mask_json FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
+        [&id],
+        |r| Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?)),
+    ).map_err(|e| if matches!(e,rusqlite::Error::QueryReturnedNoRows) {
+        (StatusCode::NOT_FOUND,"camera not found".into())
+    } else { internal(e) })?;
+    let parse = |text:Option<String>| -> ApiResult<Value> {
+        text.map(|t|serde_json::from_str(&t).map_err(internal)).unwrap_or(Ok(Value::Null))
+    };
+    Ok(Json(json!({"crop":parse(row.0)?,"mask":parse(row.1)?})))
+}
 async fn camera_settings(
     Path(id): Path<String>,
     State(s): State<AppState>,
@@ -454,7 +471,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/suggestions", post(suggest))
         .route("/api/sources/{id}/location", post(set_location))
         .route("/api/sources/{id}/enabled", post(set_enabled))
-        .route("/api/sources/{id}/settings", post(camera_settings))
+        .route("/api/sources/{id}/settings", get(get_camera_settings).post(camera_settings))
         .route("/api/calibrations", post(calibration))
         .route("/api/ingest", post(ingest))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))

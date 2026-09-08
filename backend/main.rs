@@ -109,7 +109,7 @@ async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
 
 async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
-    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) FROM sources s JOIN producers p ON p.id=s.producer_id ORDER BY s.name").map_err(internal)?;
+    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled FROM sources s JOIN producers p ON p.id=s.producer_id ORDER BY s.name").map_err(internal)?;
     let rows = q
         .query_map([], |r| {
             let last: Option<String> = r.get(4)?;
@@ -127,6 +127,7 @@ async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>
                 latitude_deg: r.get(9)?,
                 longitude_deg: r.get(10)?,
                 calibrated: r.get(11)?,
+                enabled: r.get(12)?,
                 state: state.into(),
                 timestamp_mode: r.get(3)?,
                 last_observation_utc: r.get(6)?,
@@ -203,6 +204,59 @@ async fn set_location(
     Ok(Json(
         json!({"state":"saved","latitude_deg":input.latitude_deg,"longitude_deg":input.longitude_deg}),
     ))
+}
+
+#[derive(Deserialize)]
+struct EnabledInput {
+    enabled: bool,
+}
+async fn set_enabled(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    Json(input): Json<EnabledInput>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let changed = conn
+        .execute(
+            "UPDATE sources SET enabled=?1 WHERE id=?2",
+            rusqlite::params![input.enabled, id],
+        )
+        .map_err(internal)?;
+    if changed == 0 {
+        return Err((StatusCode::NOT_FOUND, "camera not found".into()));
+    }
+    Ok(Json(json!({"state":"saved","enabled":input.enabled})))
+}
+
+#[derive(Deserialize)]
+struct CameraSettingsInput {
+    crop: Option<Value>,
+    mask: Option<Value>,
+}
+async fn camera_settings(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    Json(input): Json<CameraSettingsInput>,
+) -> ApiResult<Json<Value>> {
+    let valid = |value: &Option<Value>| {
+        value
+            .as_ref()
+            .is_none_or(|v| serde_json::to_string(v).is_ok_and(|text| text.len() <= 100_000))
+    };
+    if !valid(&input.crop) || !valid(&input.mask) {
+        return Err((StatusCode::BAD_REQUEST, "crop or mask is too large".into()));
+    }
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let exists: i64 = conn
+        .query_row("SELECT count(*) FROM sources WHERE id=?1", [&id], |r| {
+            r.get(0)
+        })
+        .map_err(internal)?;
+    if exists == 0 {
+        return Err((StatusCode::NOT_FOUND, "camera not found".into()));
+    }
+    conn.execute("INSERT INTO camera_settings(source_id,updated_utc,crop_json,mask_json) VALUES(?1,?2,?3,?4) ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,crop_json=excluded.crop_json,mask_json=excluded.mask_json",rusqlite::params![id,Utc::now().to_rfc3339(),input.crop.map(|v|v.to_string()),input.mask.map(|v|v.to_string())]).map_err(internal)?;
+    Ok(Json(json!({"state":"saved"})))
 }
 
 async fn latest_image(
@@ -380,6 +434,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/igrf-maglat", get(igrf_maglat))
         .route("/api/suggestions", post(suggest))
         .route("/api/sources/{id}/location", post(set_location))
+        .route("/api/sources/{id}/enabled", post(set_enabled))
+        .route("/api/sources/{id}/settings", post(camera_settings))
         .route("/api/calibrations", post(calibration))
         .route("/api/ingest", post(ingest))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))

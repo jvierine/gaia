@@ -61,6 +61,7 @@ pub struct SourceStatus {
     pub latitude_deg: Option<f64>,
     pub longitude_deg: Option<f64>,
     pub calibrated: bool,
+    pub enabled: bool,
     pub state: String,
     pub timestamp_mode: String,
     pub last_observation_utc: Option<String>,

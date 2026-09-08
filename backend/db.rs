@@ -23,8 +23,7 @@ pub fn upsert_source(conn: &Connection, source: &crate::model::SourceConfig) -> 
     conn.execute("INSERT INTO sources(id,name,kind,url,timestamp_mode,interval_seconds,producer_id,latitude_deg,longitude_deg,altitude_m,enabled,config_json)
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(id) DO UPDATE SET name=excluded.name,
         kind=excluded.kind,url=excluded.url,timestamp_mode=excluded.timestamp_mode,interval_seconds=excluded.interval_seconds,
-        producer_id=excluded.producer_id,latitude_deg=excluded.latitude_deg,longitude_deg=excluded.longitude_deg,
-        altitude_m=excluded.altitude_m,enabled=excluded.enabled,config_json=excluded.config_json",
+        producer_id=excluded.producer_id,config_json=excluded.config_json",
         params![source.id, source.name, format!("{:?}", source.kind).to_lowercase(), source.url,
             format!("{:?}", source.timestamp_mode).to_lowercase(), source.interval_seconds as i64, producer_id,
             source.latitude_deg, source.longitude_deg, source.altitude_m, source.enabled, serde_json::to_string(source)?])?;

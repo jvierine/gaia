@@ -210,6 +210,20 @@ pub async fn run_loop(
     let mut next_due: HashMap<String, Instant> = HashMap::new();
     loop {
         for source in sources.iter().filter(|s| s.enabled) {
+            if db::open(&db_path)
+                .ok()
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT enabled FROM sources WHERE id=?1",
+                        [&source.id],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .ok()
+                })
+                .is_some_and(|enabled| !enabled)
+            {
+                continue;
+            }
             let now = Instant::now();
             if next_due.get(&source.id).is_some_and(|due| *due > now) {
                 continue;

@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS calibrations(
   valid_from_utc TEXT, valid_to_utc TEXT, method TEXT NOT NULL, hdf5_path TEXT NOT NULL,
   residual_px REAL, image_sha256 TEXT, submitted_by TEXT
 );
+CREATE TABLE IF NOT EXISTS camera_settings(
+  source_id TEXT PRIMARY KEY REFERENCES sources(id), updated_utc TEXT NOT NULL,
+  crop_json TEXT, mask_json TEXT, updated_by TEXT
+);
 CREATE TABLE IF NOT EXISTS crawler_runs(
   id INTEGER PRIMARY KEY, source_id TEXT NOT NULL REFERENCES sources(id), started_utc TEXT NOT NULL,
   finished_utc TEXT, state TEXT NOT NULL, discovered INTEGER NOT NULL DEFAULT 0,

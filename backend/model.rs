@@ -41,6 +41,8 @@ pub struct SourceConfig {
     pub image_link_regex: Option<String>,
     pub timestamp_regex: Option<String>,
     pub timestamp_format: Option<String>,
+    /// Optional upstream stream-update time; not an exposure timestamp.
+    pub stream_updated_header: Option<String>,
     pub json_items_pointer: Option<String>,
     pub json_url_field: Option<String>,
     pub json_timestamp_field: Option<String>,

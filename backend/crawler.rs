@@ -153,6 +153,9 @@ pub async fn crawl_once(
             request = request.header(k, v)
         }
         let response = request.send().await?.error_for_status()?;
+        let stream_updated=source.stream_updated_header.as_deref()
+            .and_then(|key|response.headers().get(key)).and_then(|v|v.to_str().ok())
+            .and_then(|v|chrono::DateTime::parse_from_rfc3339(v).ok()).map(|v|v.with_timezone(&Utc));
         let media = archive::validate_media_type(
             response
                 .headers()
@@ -167,6 +170,11 @@ pub async fn crawl_once(
         }
         let downloaded=Utc::now();
         let (mut observed, mut basis) = parse_timestamp(source, &url, downloaded)?;
+        if basis=="download_time" {
+            if let Some(time)=stream_updated.filter(|t|*t<=downloaded+chrono::Duration::minutes(2)){
+                observed=time;basis="source_stream_update";
+            }
+        }
         if matches!(source.timestamp_mode,TimestampMode::DownloadTime){
             let data=bytes.clone();
             if let Ok(Some((time,method)))=tokio::task::spawn_blocking(move||crate::image_time::read(&data,downloaded)).await{

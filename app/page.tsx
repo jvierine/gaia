@@ -1,6 +1,6 @@
 'use client';
 
-import { Activity, Aperture, CircleHelp, Database, Lightbulb, Radio, Satellite, Send, SlidersHorizontal, X } from 'lucide-react';
+import { Activity, Aperture, CircleHelp, Database, Lightbulb, Satellite, Send, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { startGaiaGlobe } from '../src/globe';
 
@@ -118,16 +118,7 @@ export default function Home() {
       </nav>
       <div className="live-pill"><span /> LIVE · 12:42 UTC</div>
     </header>
-    <section className="workspace">
-      <aside className="control-panel">
-        <div className="eyebrow"><Radio size={14} /> GLOBAL MOSAIC</div><h1>Aurora now</h1><p className="timestamp">08 September 2026 · 12:42:00 UTC</p>
-        <div className="metric-grid"><div><strong>18</strong><span>active imagers</span></div><div><strong>94%</strong><span>clear-sky coverage</span></div></div>
-        <label className="control-label">RENDERING</label>
-        <button className="select-button"><span><Aperture size={16} /> Equalized mosaic</span><span>⌄</span></button>
-        <button className="select-button"><span><Satellite size={16} /> Magnetic-zenith priority</span><span>⌄</span></button>
-        <div className="quality-card"><div><span className="quality-dot" /><strong>Quality mask active</strong></div><p>Cloud, moon, trees and structures are down-weighted before tessellation.</p></div>
-        <button className="settings-button"><SlidersHorizontal size={16} /> Display settings</button>
-      </aside>
+    <section className="workspace viewer-only">
       <section className="viewer">
         {view === 'globe' && <Globe onLoading={setFramesLoading} epochMillis={selectedEpoch} live={timeMinutes===1440} onCredits={()=>setView('about')}/>}
         {view === 'globe' && <div className="timeline-dock"><button onClick={()=>{if(!playing&&timeMinutes===1440&&historyMinutes.length)setTimeMinutes(historyMinutes[0]);setPlaying(!playing)}} aria-label={playing?'Pause 24 hour playback':'Play last 24 hours'}>{playing?'Ⅱ':'▶'}</button><div><div className="timeline-label"><strong>LAST 24 HOURS</strong><time>{new Date(selectedEpoch).toISOString().replace('T',' ').slice(0,19)} UTC {framesLoading?'· loading':''}</time></div><input type="range" min="0" max="1440" step="1" value={timeMinutes} onChange={e=>{setTimeMinutes(Number(e.target.value));setPlaying(false)}}/><div className="timeline-ticks"><span>−24 h</span><span>−18 h</span><span>−12 h</span><span>−6 h</span><span>now</span></div></div></div>}

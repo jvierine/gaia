@@ -13,6 +13,7 @@ pub enum SourceKind {
     HtmlIndex,
     JsonFeed,
     SnapshotUrl,
+    NorskMeteor,
     Push,
 }
 

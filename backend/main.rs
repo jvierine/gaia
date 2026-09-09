@@ -1,5 +1,6 @@
 mod archive;
 mod crawler;
+mod norsk_meteor;
 mod db;
 mod geometry;
 mod igrf_grid;

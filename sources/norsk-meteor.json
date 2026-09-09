@@ -1,0 +1,24 @@
+[
+  {
+    "id": "nmn-kri-cam1",
+    "name": "Norsk Meteornettverk Kristiansand camera 1",
+    "kind": "norsk_meteor",
+    "url": "https://norskmeteornettverk.no/data/?station=ams123&camera=1",
+    "timestamp_mode": "archive",
+    "timestamp_regex": "_(?<timestamp>[0-9]{8}_[0-9]{4})_image",
+    "timestamp_format": "%Y%m%d_%H%M",
+    "interval_seconds": 300,
+    "latitude_deg": 58.0945324,
+    "longitude_deg": 7.96403523,
+    "altitude_m": 40,
+    "enabled": true,
+    "producer": {
+      "name": "Norsk Meteornettverk",
+      "institution": "Norsk Meteornettverk and participating camera operators",
+      "website": "https://norskmeteornettverk.no/data/",
+      "acknowledgement": "Images courtesy of Norsk Meteornettverk and the Kristiansand station operator. Thank you to Steinar Midtskogen and the network contributors for providing camera access.",
+      "copyright": "Copyright retained by Norsk Meteornettverk and the originating camera operator. Public access does not transfer copyright.",
+      "license": null
+    }
+  }
+]

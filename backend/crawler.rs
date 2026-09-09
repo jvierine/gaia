@@ -78,6 +78,9 @@ fn parse_timestamp(
 
 async fn candidates(client: &Client, source: &SourceConfig) -> Result<Vec<String>> {
     let url = expand_url(&source.url, Utc::now());
+    if matches!(source.kind, SourceKind::NorskMeteor) {
+        return crate::norsk_meteor::candidates(client, source, Utc::now()).await;
+    }
     if matches!(source.kind, SourceKind::SnapshotUrl | SourceKind::Push) {
         return Ok(vec![url]);
     }

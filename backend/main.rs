@@ -1,16 +1,16 @@
 mod archive;
 mod crawler;
-mod norsk_meteor;
-mod meteor_backfill;
 mod db;
 mod geometry;
 mod igrf_grid;
+mod image_time;
+mod meteor_backfill;
 mod model;
-mod quality;
+mod norsk_meteor;
+mod pixel_mask;
 mod projection;
 mod publish;
-mod pixel_mask;
-mod image_time;
+mod quality;
 use axum::{
     Json, Router,
     body::Body,
@@ -114,10 +114,12 @@ async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
 }
 
 async fn credits(State(s): State<AppState>) -> ApiResult<Json<Vec<Value>>> {
-    let conn=db::open(&s.db_path).map_err(internal)?;
-    let mut query=conn.prepare("SELECT name,website,acknowledgement,copyright FROM producers ORDER BY name").map_err(internal)?;
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let mut query = conn
+        .prepare("SELECT name,website,acknowledgement,copyright FROM producers ORDER BY name")
+        .map_err(internal)?;
     let rows=query.query_map([],|r|Ok(json!({"name":r.get::<_,String>(0)?,"website":r.get::<_,Option<String>>(1)?,"acknowledgement":r.get::<_,String>(2)?,"copyright":r.get::<_,String>(3)?}))).map_err(internal)?;
-    Ok(Json(rows.collect::<Result<Vec<_>,_>>().map_err(internal)?))
+    Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
 }
 
 async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>> {
@@ -155,11 +157,34 @@ async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>
     Ok(Json(rows.filter_map(Result::ok).collect()))
 }
 
-async fn history(State(s):State<AppState>)->ApiResult<Json<Vec<String>>>{
-    let conn=db::open(&s.db_path).map_err(internal)?;
+async fn history(State(s): State<AppState>) -> ApiResult<Json<Vec<String>>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
     let mut q=conn.prepare("SELECT DISTINCT strftime('%Y-%m-%dT%H:%M:00Z',i.observation_utc) AS minute FROM images i JOIN sources s ON s.id=i.source_id WHERE s.enabled=1 AND EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) AND julianday(i.observation_utc)>=julianday('now','-1 day') ORDER BY minute").map_err(internal)?;
-    let rows=q.query_map([],|r|r.get::<_,String>(0)).map_err(internal)?;
-    Ok(Json(rows.collect::<Result<Vec<_>,_>>().map_err(internal)?))
+    let rows = q
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(internal)?;
+    Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
+}
+
+async fn source_frames(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Vec<Value>>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let mut query = conn
+        .prepare("SELECT id,observation_utc,width,height FROM images WHERE source_id=?1 AND julianday(observation_utc)>=julianday('now','-1 day') ORDER BY observation_utc")
+        .map_err(internal)?;
+    let rows = query
+        .query_map([id], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "observation_utc": row.get::<_, String>(1)?,
+                "width": row.get::<_, Option<i64>>(2)?,
+                "height": row.get::<_, Option<i64>>(3)?,
+            }))
+        })
+        .map_err(internal)?;
+    Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
 }
 
 #[derive(Deserialize)]
@@ -248,10 +273,18 @@ async fn set_enabled(
     Ok(Json(json!({"state":"saved","enabled":input.enabled})))
 }
 
-async fn remove_source(Path(id):Path<String>,State(s):State<AppState>)->ApiResult<Json<Value>>{
-    let mut conn=db::open(&s.db_path).map_err(internal)?;let transaction=conn.transaction().map_err(internal)?;
-    let changed=transaction.execute("UPDATE sources SET enabled=0 WHERE id=?1",[&id]).map_err(internal)?;
-    if changed==0{return Err((StatusCode::NOT_FOUND,"camera not found".into()))}
+async fn remove_source(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let mut conn = db::open(&s.db_path).map_err(internal)?;
+    let transaction = conn.transaction().map_err(internal)?;
+    let changed = transaction
+        .execute("UPDATE sources SET enabled=0 WHERE id=?1", [&id])
+        .map_err(internal)?;
+    if changed == 0 {
+        return Err((StatusCode::NOT_FOUND, "camera not found".into()));
+    }
     transaction.execute("INSERT INTO removed_sources(source_id,removed_utc) VALUES(?1,?2) ON CONFLICT(source_id) DO UPDATE SET removed_utc=excluded.removed_utc",rusqlite::params![id,Utc::now().to_rfc3339()]).map_err(internal)?;
     transaction.commit().map_err(internal)?;
     Ok(Json(json!({"state":"removed","archive_preserved":true})))
@@ -274,8 +307,9 @@ async fn get_camera_settings(
     ).map_err(|e| if matches!(e,rusqlite::Error::QueryReturnedNoRows) {
         (StatusCode::NOT_FOUND,"camera not found".into())
     } else { internal(e) })?;
-    let parse = |text:Option<String>| -> ApiResult<Value> {
-        text.map(|t|serde_json::from_str(&t).map_err(internal)).unwrap_or(Ok(Value::Null))
+    let parse = |text: Option<String>| -> ApiResult<Value> {
+        text.map(|t| serde_json::from_str(&t).map_err(internal))
+            .unwrap_or(Ok(Value::Null))
     };
     Ok(Json(json!({"crop":parse(row.0)?,"mask":parse(row.1)?})))
 }
@@ -306,32 +340,122 @@ async fn camera_settings(
 }
 
 #[derive(Deserialize)]
-struct ProjectionQuery { at:Option<String>,format:Option<String> }
-async fn projected_image(Path(id):Path<String>,State(s):State<AppState>,axum::extract::Query(query):axum::extract::Query<ProjectionQuery>,headers:axum::http::HeaderMap)->ApiResult<axum::response::Response> {
-    let at=query.at.map(|t|DateTime::parse_from_rfc3339(&t).map(|v|v.with_timezone(&Utc)).map_err(|_|(StatusCode::BAD_REQUEST,"invalid frame time".into()))).transpose()?;
-    if matches!(query.format.as_deref(),Some("assets"|"timeline")){
-        let timeline=query.format.as_deref()==Some("timeline");
-        let p=tokio::task::spawn_blocking(move||if timeline{projection::timeline(&s,&id)}else{projection::assets(&s,&id,at)}).await.map_err(internal)?.map_err(|e|if e.to_string().contains("Query returned no rows"){(StatusCode::NOT_FOUND,"no historical frame".into())}else{internal(e)})?;
-        return Ok(([(header::CACHE_CONTROL,"no-store")],Json(p)).into_response());
+struct ProjectionQuery {
+    at: Option<String>,
+    format: Option<String>,
+}
+async fn projected_image(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ProjectionQuery>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<axum::response::Response> {
+    let at = query
+        .at
+        .map(|t| {
+            DateTime::parse_from_rfc3339(&t)
+                .map(|v| v.with_timezone(&Utc))
+                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid frame time".into()))
+        })
+        .transpose()?;
+    if matches!(query.format.as_deref(), Some("assets" | "timeline")) {
+        let timeline = query.format.as_deref() == Some("timeline");
+        let p = tokio::task::spawn_blocking(move || {
+            if timeline {
+                projection::timeline(&s, &id)
+            } else {
+                projection::assets(&s, &id, at)
+            }
+        })
+        .await
+        .map_err(internal)?
+        .map_err(|e| {
+            if e.to_string().contains("Query returned no rows") {
+                (StatusCode::NOT_FOUND, "no historical frame".into())
+            } else {
+                internal(e)
+            }
+        })?;
+        return Ok(([(header::CACHE_CONTROL, "no-store")], Json(p)).into_response());
     }
-    let p=tokio::task::spawn_blocking(move||projection::build(&s,&id,at)).await.map_err(internal)?.map_err(|e|if e.to_string().contains("Query returned no rows"){(StatusCode::NOT_FOUND,"no frame within ten minutes before selected time".into())}else{internal(e)})?;
-    let mut response=if headers.get(header::ACCEPT).and_then(|v|v.to_str().ok())==Some("application/octet-stream"){
-        let mut bytes=Vec::with_capacity(p.vertices.len()*4);
-        for value in &p.vertices {bytes.extend_from_slice(&value.to_le_bytes());}
-        ([(header::CONTENT_TYPE,"application/octet-stream")],bytes).into_response()
-    }else{Json(p).into_response()};
-    response.headers_mut().insert(header::CACHE_CONTROL,axum::http::HeaderValue::from_static("no-store"));
+    let p = tokio::task::spawn_blocking(move || projection::build(&s, &id, at))
+        .await
+        .map_err(internal)?
+        .map_err(|e| {
+            if e.to_string().contains("Query returned no rows") {
+                (
+                    StatusCode::NOT_FOUND,
+                    "no frame within ten minutes before selected time".into(),
+                )
+            } else {
+                internal(e)
+            }
+        })?;
+    let mut response = if headers.get(header::ACCEPT).and_then(|v| v.to_str().ok())
+        == Some("application/octet-stream")
+    {
+        let mut bytes = Vec::with_capacity(p.vertices.len() * 4);
+        for value in &p.vertices {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
+    } else {
+        Json(p).into_response()
+    };
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
     Ok(response)
 }
-async fn projection_asset(Path(name):Path<String>,State(s):State<AppState>)->ApiResult<axum::response::Response>{
-    let Some((key,ext))=name.rsplit_once('.')else{return Err((StatusCode::BAD_REQUEST,"invalid asset".into()))};
-    if key.len()!=64||!key.bytes().all(|b|b.is_ascii_hexdigit())||!matches!(ext,"bin"|"png"){return Err((StatusCode::BAD_REQUEST,"invalid asset".into()))}
-    let bytes=tokio::fs::read(s.archive_root.join("projection-cache").join(&name)).await.map_err(|_|(StatusCode::NOT_FOUND,"asset not ready".into()))?;
-    Ok(([(header::CONTENT_TYPE,if ext=="png"{"image/png"}else{"application/octet-stream"}),(header::CACHE_CONTROL,"public, max-age=31536000, immutable")],bytes).into_response())
+async fn projection_asset(
+    Path(name): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<axum::response::Response> {
+    let Some((key, ext)) = name.rsplit_once('.') else {
+        return Err((StatusCode::BAD_REQUEST, "invalid asset".into()));
+    };
+    if key.len() != 64
+        || !key.bytes().all(|b| b.is_ascii_hexdigit())
+        || !matches!(ext, "bin" | "png")
+    {
+        return Err((StatusCode::BAD_REQUEST, "invalid asset".into()));
+    }
+    let bytes = tokio::fs::read(s.archive_root.join("projection-cache").join(&name))
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "asset not ready".into()))?;
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                if ext == "png" {
+                    "image/png"
+                } else {
+                    "application/octet-stream"
+                },
+            ),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
-async fn image_texture(Path(id):Path<String>,State(s):State<AppState>)->ApiResult<axum::response::Response>{
-    let bytes=tokio::task::spawn_blocking(move||projection::image_texture(&s,&id)).await.map_err(internal)?.map_err(internal)?;
-    Ok(([(header::CONTENT_TYPE,"image/png"),(header::CACHE_CONTROL,"public, max-age=31536000, immutable")],bytes).into_response())
+async fn image_texture(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<axum::response::Response> {
+    let bytes = tokio::task::spawn_blocking(move || projection::image_texture(&s, &id))
+        .await
+        .map_err(internal)?
+        .map_err(internal)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 async fn latest_image(
     Path(id): Path<String>,
@@ -361,6 +485,39 @@ async fn latest_image(
             row.7.map(|v| v.to_string()).unwrap_or_default(),
         )
         .header("X-GAIA-Source-Name", row.8)
+        .body(Body::from(bytes))
+        .unwrap())
+}
+
+async fn original_image(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Response<Body>> {
+    let row = {
+        let conn = db::open(&s.db_path).map_err(internal)?;
+        conn.query_row("SELECT i.archive_path,i.media_type,p.name,p.copyright,i.observation_utc,s.latitude_deg,s.longitude_deg,s.altitude_m,s.name,s.id FROM images i JOIN sources s ON s.id=i.source_id JOIN producers p ON p.id=s.producer_id WHERE i.id=?1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<f64>>(5)?,r.get::<_,Option<f64>>(6)?,r.get::<_,Option<f64>>(7)?,r.get::<_,String>(8)?,r.get::<_,String>(9)?))).map_err(|e|if matches!(e,rusqlite::Error::QueryReturnedNoRows){(StatusCode::NOT_FOUND,"image not found".into())}else{internal(e)})?
+    };
+    let bytes = tokio::fs::read(&row.0).await.map_err(internal)?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, row.1)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header("X-GAIA-Producer", row.2)
+        .header("X-GAIA-Copyright", row.3)
+        .header("X-GAIA-Observation-UTC", row.4)
+        .header(
+            "X-GAIA-Latitude-Deg",
+            row.5.map(|v| v.to_string()).unwrap_or_default(),
+        )
+        .header(
+            "X-GAIA-Longitude-Deg",
+            row.6.map(|v| v.to_string()).unwrap_or_default(),
+        )
+        .header(
+            "X-GAIA-Altitude-M",
+            row.7.map(|v| v.to_string()).unwrap_or_default(),
+        )
+        .header("X-GAIA-Source-Name", row.8)
+        .header("X-GAIA-Source-ID", row.9)
         .body(Body::from(bytes))
         .unwrap())
 }
@@ -513,11 +670,15 @@ async fn main() -> anyhow::Result<()> {
         igrf_year,
     };
     if let Some(index) = std::env::args().position(|arg| arg == "--backfill-nmn") {
-        let date = std::env::args().nth(index + 1).ok_or_else(|| anyhow::anyhow!("--backfill-nmn requires YYYY-MM-DD (night starting that UTC date)"))?;
+        let date = std::env::args().nth(index + 1).ok_or_else(|| {
+            anyhow::anyhow!("--backfill-nmn requires YYYY-MM-DD (night starting that UTC date)")
+        })?;
         return meteor_backfill::run(&source_configs, &db_path, &archive_root, &date).await;
     }
 
-    if std::env::args().any(|arg|arg=="--publish") { return publish::run(&state); }
+    if std::env::args().any(|arg| arg == "--publish") {
+        return publish::run(&state);
+    }
     // Stage a migrated archive without running two collectors against providers.
     if std::env::var("GAIA_CRAWLER_ENABLED").as_deref() != Ok("0") {
         tokio::spawn(crawler::run_loop(source_configs, db_path, archive_root));
@@ -530,17 +691,22 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/status", get(status))
         .route("/api/sources", get(sources))
         .route("/api/sources/{id}/latest", get(latest_image))
+        .route("/api/sources/{id}/frames", get(source_frames))
         .route("/api/sources/{id}/projection", get(projected_image))
         .route("/api/igrf-maglat", get(igrf_maglat))
         .route("/api/suggestions", post(suggest))
         .route("/api/sources/{id}/location", post(set_location))
         .route("/api/sources/{id}/enabled", post(set_enabled))
         .route("/api/sources/{id}", delete(remove_source))
-        .route("/api/sources/{id}/settings", get(get_camera_settings).post(camera_settings))
+        .route(
+            "/api/sources/{id}/settings",
+            get(get_camera_settings).post(camera_settings),
+        )
         .route("/api/credits", get(credits))
         .route("/api/history", get(history))
         .route("/api/projection-assets/{name}", get(projection_asset))
         .route("/api/images/{id}/texture", get(image_texture))
+        .route("/api/images/{id}/original", get(original_image))
         .route("/api/calibrations", post(calibration))
         .route("/api/ingest", post(ingest))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))

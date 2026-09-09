@@ -66,36 +66,25 @@ pub fn ecef_to_lat_lon(p: [f64; 3]) -> (f64, f64) {
     (p[2].asin() * 180.0 / PI, p[1].atan2(p[0]) * 180.0 / PI)
 }
 
-/// Centered-dipole magnetic zenith. Replace through the IGRF adapter when epoch coefficients are available.
-pub fn magnetic_zenith_direction(lat_deg: f64, lon_deg: f64) -> [f64; 3] {
-    let p = norm(observer_ecef(lat_deg, lon_deg, 0.0));
-    let pole = observer_ecef(80.65, -72.68, 0.0);
-    let m = norm(pole);
-    // Dipole field direction, flipped outward for the visible magnetic zenith.
-    let b = [
-        3.0 * p[0] * dot(m, p) - m[0],
-        3.0 * p[1] * dot(m, p) - m[1],
-        3.0 * p[2] * dot(m, p) - m[2],
+/// Smallest angle between two unoriented axes. This is invariant to B -> -B.
+pub fn axial_angle(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (a, b) = (norm(a), norm(b));
+    let cross = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
     ];
-    let b = norm(b);
-    if dot(b, p) < 0.0 {
-        [-b[0], -b[1], -b[2]]
-    } else {
-        b
-    }
+    let cross_norm = dot(cross, cross).sqrt();
+    let theta = cross_norm.atan2(dot(a, b).clamp(-1.0, 1.0));
+    if theta > PI / 2.0 { PI - theta } else { theta }
 }
 
-pub fn magnetic_zenith_weight(
-    los: [f64; 3],
-    lat_deg: f64,
-    lon_deg: f64,
-    clear_probability: f64,
-    obstruction_probability: f64,
-) -> f64 {
-    let alignment = dot(norm(los), magnetic_zenith_direction(lat_deg, lon_deg)).max(0.0);
-    alignment.powf(6.0)
-        * clear_probability.clamp(0.0, 1.0)
-        * (1.0 - obstruction_probability.clamp(0.0, 1.0))
+/// Laplacian magnetic-axis preference exp(-|theta_B|/S).
+pub fn magnetic_axis_weight(los: [f64; 3], field: [f64; 3], falloff_rad: f64) -> f64 {
+    if !falloff_rad.is_finite() || falloff_rad <= 0.0 {
+        return 0.0;
+    }
+    (-axial_angle(los, field).abs() / falloff_rad).exp()
 }
 
 #[cfg(test)]
@@ -111,9 +100,19 @@ mod tests {
         assert!((llon - 20.0).abs() < 1e-6)
     }
     #[test]
-    fn magnetic_weight_rejects_obstruction() {
-        let d = magnetic_zenith_direction(69.0, 20.0);
-        assert!(magnetic_zenith_weight(d, 69.0, 20.0, 1.0, 0.0) > 0.99);
-        assert_eq!(magnetic_zenith_weight(d, 69.0, 20.0, 1.0, 1.0), 0.0)
+    fn axial_angle_uses_nearest_field_direction() {
+        let u = [1.0, 0.0, 0.0];
+        assert!(axial_angle(u, [-1.0, 0.0, 0.0]) < 1e-12);
+        assert!((axial_angle(u, [0.0, 1.0, 0.0]) - PI / 2.0).abs() < 1e-12);
+    }
+    #[test]
+    fn laplacian_weight_has_requested_scale() {
+        let s = 20f64.to_radians();
+        let u = [1.0, 0.0, 0.0];
+        let b = [s.cos(), s.sin(), 0.0];
+        assert!((magnetic_axis_weight(u, b, s) - (-1.0f64).exp()).abs() < 1e-12);
+        assert!(
+            (magnetic_axis_weight(u, [-b[0], -b[1], -b[2]], s) - (-1.0f64).exp()).abs() < 1e-12
+        );
     }
 }

@@ -99,6 +99,10 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const position = gl.getAttribLocation(program,'position'); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
   const resolution=gl.getUniformLocation(program,'resolution'),rotation=gl.getUniformLocation(program,'rotation'),zoomLoc=gl.getUniformLocation(program,'zoom'),sunLoc=gl.getUniformLocation(program,'sunDirection');
   let yaw=publicOnly?.35:-.35,pitch=publicOnly?-1.15:-.45,zoom=.78,dragging=false,last=[0,0],animation=0;
+  // Sun-fixed frame. While locked, yaw and pitch are driven from the sun-earth
+  // line every frame: the view looks down on the north pole with the sun upwards and
+  // the planet rotating underneath. The manual orientation is restored when unlocked.
+  let sunLock=false,manualYaw=yaw,manualPitch=pitch;
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null};
   let cameraSites:{label:string;url?:string;world:number[]}[]=[],publicCameras=new Map<number,PublicCamera>();
   type Attribution={url:string;width:number;height:number;data:Uint8ClampedArray};
@@ -136,13 +140,15 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   canvas.addEventListener('pointermove',hover);canvas.addEventListener('pointerleave',hideTooltip);
   const zoomControl=(event:Event)=>{const action=(event as CustomEvent<string>).detail;if(action==='reset'){zoom=.78}else{zoom=Math.max(.5,Math.min(8,zoom*(action==='in'?1.35:1/1.35)))}};
   canvas.addEventListener('gaia-zoom',zoomControl);
+  const sunLockControl=(event:Event)=>{const next=!!(event as CustomEvent<boolean>).detail;if(next===sunLock)return;if(next){manualYaw=yaw;manualPitch=pitch}else{yaw=manualYaw;pitch=manualPitch}sunLock=next};
+  canvas.addEventListener('gaia-sunlock',sunLockControl);
   const pointers=new Map<number,[number,number]>();let pinchDistance=0,press:[number,number]|null=null,moved=false;
   const distance=()=>{const p=[...pointers.values()];return p.length<2?0:Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1])};
   const pointerDown=(e:PointerEvent)=>{if(e.pointerType==='mouse'&&e.button!==0)return;e.preventDefault();hideTooltip();pointers.set(e.pointerId,[e.clientX,e.clientY]);dragging=true;last=[e.clientX,e.clientY];press=[e.clientX,e.clientY];moved=false;pinchDistance=distance();canvas.setPointerCapture(e.pointerId)};
   const pointerMove=(e:PointerEvent)=>{
     if(!pointers.has(e.pointerId))return;e.preventDefault();pointers.set(e.pointerId,[e.clientX,e.clientY]);if(press&&Math.hypot(e.clientX-press[0],e.clientY-press[1])>5)moved=true;
     if(pointers.size>=2){const d=distance();if(pinchDistance>0&&d>0)zoom=Math.max(.5,Math.min(8,zoom*d/pinchDistance));pinchDistance=d;return}
-    yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));last=[e.clientX,e.clientY];
+    if(!sunLock){yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));}last=[e.clientX,e.clientY];
   };
   const pointerUp=(e:PointerEvent)=>{const station=!moved&&pointers.size===1&&publicOnly?stationCamera(e.clientX,e.clientY):null,projected=!station&&!moved&&pointers.size===1&&publicOnly?projectedCamera(e.clientX,e.clientY):null,open=station?.url||projected?.website_url;pointers.delete(e.pointerId);pinchDistance=distance();dragging=pointers.size>0;if(dragging)last=[...pointers.values()][0];else press=null;if(open)window.open(open,'_blank','noopener,noreferrer')}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('wheel',wheel,{passive:false});
@@ -337,8 +343,16 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   };
   void (publicOnly?fetch('/gaia/public/manifest.json',{cache:'no-store'}).then(r=>r.json()).then(m=>m.igrf_url):Promise.resolve(`/gaia/api/igrf-maglat?format=f32-v2&year=${new Date().getUTCFullYear()}`)).then(url=>fetch(url)).then(r=>{if(!r.ok)throw new Error(`IGRF grid ${r.status}`);return r.arrayBuffer()}).then(buffer=>{const values=new Float32Array(buffer);if(values.length!==720*361)throw new Error(`unexpected IGRF grid length ${values.length}`);const vertices=igrfContourVertices(values);magneticVertices=vertices.length/2;gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW)}).catch(console.error);
   const solarDirection=(time:number)=>{const jd=time/86400000+2440587.5,t=(jd-2451545)/36525,l0=(280.46646+t*(36000.76983+t*.0003032))*Math.PI/180,m=(357.52911+t*(35999.05029-.0001537*t))*Math.PI/180,lambda=l0+(1.914602-.004817*t-.000014*t*t)*Math.sin(m)*Math.PI/180+.019993*Math.sin(2*m)*Math.PI/180+.000289*Math.sin(3*m)*Math.PI/180,epsilon=(23.439291-.0130042*t)*Math.PI/180,decl=Math.asin(Math.sin(epsilon)*Math.sin(lambda)),ra=Math.atan2(Math.cos(epsilon)*Math.sin(lambda),Math.cos(lambda)),gmst=(280.46061837+360.98564736629*(jd-2451545)+.000387933*t*t-t*t*t/38710000)*Math.PI/180,lon=ra-gmst;return[Math.cos(decl)*Math.sin(lon),Math.sin(decl),Math.cos(decl)*Math.cos(lon)]};
+  // Orientation for the sun-fixed, earth-rotating mode. Note the GLSL mat3
+  // constructors above are column-major, so the view is
+  // camX=cos(yaw)x-sin(yaw)z, camY=cos(pitch)y+sin(pitch)z', camZ=-sin(pitch)y+cos(pitch)z'.
+  // pitch=-PI/2 puts the north pole at camera (0,0,1), the centre of the disc, so
+  // the view looks straight down on the pole. yaw then spins the globe until the
+  // subsolar meridian points to the top: the sun maps to (0,cos decl,sin decl),
+  // straight up, and the planet rotates underneath it as the epoch advances.
+  const sunUpOrientation=(sun:number[]):[number,number]=>[Math.atan2(sun[0],sun[2])+Math.PI,-Math.PI/2];
   let lastEpochTime=performance.now();
-  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform2f(rotation,yaw,pitch);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;const sun=solarDirection(displayEpoch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
+  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;const sun=solarDirection(displayEpoch);if(sunLock){const[lockedYaw,lockedPitch]=sunUpOrientation(sun);yaw=lockedYaw;pitch=lockedPitch}gl.uniform2f(rotation,yaw,pitch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
     if(!count)continue;gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,lineBuffer);
     gl.enableVertexAttribArray(magneticPosition);gl.vertexAttribPointer(magneticPosition,2,gl.FLOAT,false,0,0);
     gl.uniform2f(gl.getUniformLocation(lineProgram,'resolution'),w,h);
@@ -347,5 +361,5 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     gl.uniform3f(gl.getUniformLocation(lineProgram,'lineColor'),...color);
     gl.drawArrays(gl.LINES,0,count);
   }drawLayers(w,h);measure();animation=requestAnimationFrame(draw)};draw();
-  return()=>{perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  return()=>{perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);canvas.removeEventListener('gaia-sunlock',sunLockControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

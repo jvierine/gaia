@@ -5,11 +5,13 @@ type Props={
   className:string;
   getEpochMillis:()=>number;
   onLoading?:(loading:boolean)=>void;
+  /** Drive the orientation from the sun-earth line, sun up, planet rotating underneath. */
+  sunLock?:boolean;
   children?:ReactNode;
 };
 
 /** The single 3D stitched-atlas view used by both the public and admin shells. */
-export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},children}:Props){
+export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},sunLock=false,children}:Props){
   const canvas=useRef<HTMLCanvasElement>(null),epoch=useRef(getEpochMillis),loading=useRef(onLoading);
   epoch.current=getEpochMillis;loading.current=onLoading;
   useEffect(()=>{
@@ -23,6 +25,7 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
       loading.current(false);console.error('GAIA WebGL failed',error);canvas.current?.classList.add('webgl-failed');
     }
   },[]);
+  useEffect(()=>{canvas.current?.dispatchEvent(new CustomEvent('gaia-sunlock',{detail:sunLock}))},[sunLock]);
   const zoom=(detail:'in'|'out'|'reset')=>canvas.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail}));
   return <div className={className}>
     <canvas ref={canvas} className="gaia-globe-canvas" aria-label="Interactive WebGL Earth with auroral image coverage"/>

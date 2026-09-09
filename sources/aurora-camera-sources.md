@@ -1,6 +1,6 @@
 # GAIA auroral camera source catalogue
 
-Research snapshot: **2026-09-08 UTC**. This catalogue is input to a future,
+Research snapshot: **2026-09-09 UTC**. This catalogue is input to a future,
 low-impact near-real-time crawler. It is not a statement that GAIA has permission
 to archive or republish every reachable image.
 
@@ -691,8 +691,13 @@ Husafell's dataset DOI is
 #### Greenland
 
 - **Narsarsuaq:** the DTU/TGO fixed camera is documented in
-  [europe-arctic.md](#dtu-space-narsarsuaq). It is the clearest
-  current-image candidate found, but needs camera-specific permission.
+  [this catalogue](#dtu-space-narsarsuaq). Its direct 1200×1200 JPEG remains
+  reachable and the operator page documents one-minute updates with an explicit
+  UT overlay. A live probe on 2026-09-09 found a server `Last-Modified` value
+  from that day but pixels stamped `2026-05-24 03:20:00 UT`; HTTP freshness is
+  therefore unsafe for this feed. It is present in `iceland-greenland.json` but
+  disabled until the pixels resume updating and camera-specific retention and
+  redisplay permission is confirmed.
 - **Pituffik/Thule:** the [THAAO sky-camera archive](https://www.thuleatmos-it.it/dataaccess/allskycamera/index.php)
   at 76.5 N, -68.8 E has DOI
   [10.13127/thaao/skycam](https://doi.org/10.13127/thaao/skycam) and CC BY 4.0
@@ -706,12 +711,18 @@ Husafell's dataset DOI is
 
 - [China-Iceland Arctic Observatory, Kárhóll](https://karholl.arcticportal.org/en/)
   advertises a live fixed all-sky camera, linked to an HTTP IP address. Endpoint
-  stability, timestamp semantics, and reuse rights remain unverified. Contact
-  `info@karholl.is` before enabling.
+  was unreachable on 2026-09-09; timestamp semantics and reuse rights remain
+  unverified. Contact `info@karholl.is` before enabling.
 - OMTI Husafell supplies DOI-backed archive coverage but is not a verified
   realtime image feed and requires PI consultation.
 - [NetNURDS Aðaldalshraun](https://www.netnurds.com/) is a private fixed all-sky
-  live/timelapse camera. Contact `tim@netnurds.com`; no archival licence found.
+  live/timelapse camera at the coordinates printed on its frame, 65.9 N,
+  17.4 W. The stable JPEG is `https://netnurds.com/indi-allsky/image.jpg`.
+  It contains a `YYYY.MM.DD HH:MM:SS` overlay, and Iceland uses UTC year-round;
+  its `Last-Modified` header tracked the overlay within seconds in a 2026-09-09
+  probe. GAIA polls it no faster than every five minutes and only below -4°
+  approximate solar altitude. Copyright and acknowledgement are retained in the
+  source record. Contact `tim@netnurds.com`; no archival licence was found.
 - Iceland-at-Night advertises fixed cameras near Hella and Arnarstapi, but its
   proprietary streams and absent reuse terms make it a permission/discovery lead,
   not an immediate crawler source.

@@ -76,7 +76,20 @@ fn parse_timestamp(
     Ok((naive.and_utc(), "source_filename"))
 }
 
+fn parse_http_or_rfc3339_time(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .or_else(|_| DateTime::parse_from_rfc2822(value))
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
 async fn candidates(client: &Client, source: &SourceConfig) -> Result<Vec<String>> {
+    if source.darkness_sun_altitude_deg.is_some_and(|threshold| {
+        crate::norsk_meteor::solar_altitude_deg(source, Utc::now())
+            .is_some_and(|altitude| altitude > threshold)
+    }) {
+        return Ok(vec![]);
+    }
     let url = expand_url(&source.url, Utc::now());
     if matches!(source.kind, SourceKind::NorskMeteor) {
         return crate::norsk_meteor::candidates(client, source, Utc::now()).await;
@@ -162,7 +175,7 @@ pub async fn archive_urls(source: &SourceConfig, client: &Client, db_path: &Path
         let response = request.send().await?.error_for_status()?;
         let stream_updated=source.stream_updated_header.as_deref()
             .and_then(|key|response.headers().get(key)).and_then(|v|v.to_str().ok())
-            .and_then(|v|chrono::DateTime::parse_from_rfc3339(v).ok()).map(|v|v.with_timezone(&Utc));
+            .and_then(parse_http_or_rfc3339_time);
         let media = archive::validate_media_type(
             response
                 .headers()
@@ -224,9 +237,7 @@ pub async fn run_loop(
     archive_root: std::path::PathBuf,
 ) {
     let client = Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/142.0",
-        )
+        .user_agent("Mozilla/5.0 (compatible; GAIA-Aurora-Archive/0.1; +https://juha.no/gaia/; contact=gaia@juha.no)")
         .default_headers({
             let mut h = reqwest::header::HeaderMap::new();
             h.insert(
@@ -300,4 +311,25 @@ pub async fn run_loop(
         });
     }
     while let Some(result)=jobs.join_next().await{if let Err(e)=result{tracing::error!("camera worker stopped: {e}")}}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_http_or_rfc3339_time;
+
+    #[test]
+    fn parses_last_modified_and_api_times() {
+        assert_eq!(
+            parse_http_or_rfc3339_time("Wed, 09 Sep 2026 09:31:59 GMT")
+                .unwrap()
+                .to_rfc3339(),
+            "2026-09-09T09:31:59+00:00"
+        );
+        assert_eq!(
+            parse_http_or_rfc3339_time("2026-09-09T09:31:59Z")
+                .unwrap()
+                .to_rfc3339(),
+            "2026-09-09T09:31:59+00:00"
+        );
+    }
 }

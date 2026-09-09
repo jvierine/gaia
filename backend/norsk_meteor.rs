@@ -20,13 +20,17 @@ fn selection(url: &str) -> Result<(String, u8)> {
 }
 
 // Approximate solar altitude is only a crawler daylight gate, never a map overlay.
-pub fn daylight(source: &SourceConfig, now: DateTime<Utc>) -> bool {
-    let (Some(lat), Some(lon)) = (source.latitude_deg, source.longitude_deg) else { return false; };
+pub fn solar_altitude_deg(source: &SourceConfig, now: DateTime<Utc>) -> Option<f64> {
+    let (Some(lat), Some(lon)) = (source.latitude_deg, source.longitude_deg) else { return None; };
     let decl = (23.44_f64 * (std::f64::consts::TAU * (now.ordinal() as f64 - 81.0) / 365.25).sin()).to_radians();
     let hour = (now.hour() as f64 + now.minute() as f64 / 60.0) * 15.0 + lon - 180.0;
     let lat = lat.to_radians();
     let altitude = (lat.sin()*decl.sin()+lat.cos()*decl.cos()*hour.to_radians().cos()).asin().to_degrees();
-    altitude > -4.0
+    Some(altitude)
+}
+
+pub fn daylight(source: &SourceConfig, now: DateTime<Utc>) -> bool {
+    solar_altitude_deg(source, now).is_some_and(|altitude| altitude > -4.0)
 }
 
 pub async fn candidates(client: &Client, source: &SourceConfig, now: DateTime<Utc>) -> Result<Vec<String>> {

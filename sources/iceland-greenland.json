@@ -1,0 +1,46 @@
+[
+  {
+    "id": "netnurds-adaldalshraun-allsky",
+    "name": "Aðaldalshraun all-sky",
+    "kind": "snapshot_url",
+    "url": "https://netnurds.com/indi-allsky/image.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "Dr Timothy Hicks / NetNürds",
+      "institution": null,
+      "website": "https://www.netnurds.com/",
+      "acknowledgement": "Image courtesy of Dr Timothy Hicks and NetNürds, Aðaldalshraun, Iceland.",
+      "copyright": "Copyright Dr Timothy Hicks / netnurds.com",
+      "license": null
+    },
+    "latitude_deg": 65.9,
+    "longitude_deg": -17.4,
+    "altitude_m": null,
+    "darkness_sun_altitude_deg": -4.0,
+    "stream_updated_header": "last-modified",
+    "enabled": true
+  },
+  {
+    "id": "dtu-narsarsuaq-allsky",
+    "name": "DTU Narsarsuaq all-sky",
+    "kind": "snapshot_url",
+    "url": "https://fox.phys.uit.no/ASC/naq.jpg",
+    "timestamp_mode": "download_time",
+    "interval_seconds": 300,
+    "producer": {
+      "name": "DTU Space and Tromsø Geophysical Observatory",
+      "institution": "Technical University of Denmark / UiT The Arctic University of Norway",
+      "website": "https://fox.phys.uit.no/ASC/NAQ.html",
+      "acknowledgement": "Image courtesy of DTU Space and Tromsø Geophysical Observatory, UiT.",
+      "copyright": "Copyright DTU Space and Tromsø Geophysical Observatory as applicable",
+      "license": null
+    },
+    "latitude_deg": 61.16,
+    "longitude_deg": -45.44,
+    "altitude_m": null,
+    "darkness_sun_altitude_deg": 0.0,
+    "stream_updated_header": null,
+    "enabled": false
+  }
+]

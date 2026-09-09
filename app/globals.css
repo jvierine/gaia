@@ -92,11 +92,13 @@
 .calibration-picker h2{margin:8px 0}
 .calibration-picker>p{color:var(--muted);line-height:1.55}
 .calibration-list{display:grid;gap:8px;margin:18px 0 6px}
-.calibration-list label{display:flex;align-items:flex-start;gap:12px;padding:13px 15px;border:1px solid var(--line);background:#091724;cursor:pointer}
-.calibration-list label:hover{border-color:var(--aqua)}
-.calibration-list label.chosen{border-color:var(--aqua);background:#0c2530}
-.calibration-list input{margin:2px 0 0;accent-color:var(--aqua);flex:none}
-.calibration-list label>span{display:grid;gap:3px;min-width:0}
+.calibration-list [role=radio]{display:flex;align-items:flex-start;gap:12px;width:100%;padding:13px 15px;border:1px solid var(--line);background:#091724;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.calibration-list [role=radio]:hover{border-color:var(--aqua)}
+.calibration-list [role=radio]:disabled{opacity:.6;cursor:progress}
+.calibration-list [role=radio].chosen{border-color:var(--aqua);background:#0c2530}
+.calibration-list .mark{flex:none;width:14px;height:14px;margin-top:2px;border:1px solid #547082;border-radius:50%}
+.calibration-list [role=radio].chosen .mark{border-color:var(--aqua);box-shadow:inset 0 0 0 3px var(--aqua)}
+.calibration-list [role=radio]>span:last-child{display:grid;gap:3px;min-width:0}
 .calibration-list strong{color:#dceef0;font-weight:500}
 .calibration-list small{color:var(--muted);font-size:11px}
 .calibration-note{color:var(--muted);font-size:11px;margin:10px 0 0}

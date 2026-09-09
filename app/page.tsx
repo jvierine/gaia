@@ -117,17 +117,21 @@ function CalibrationPicker({camera,onClose}:{camera:Camera;onClose:()=>void}){
     <p>Every calibration ever sent for this camera is kept, with the star fit it came from. Choose which one is used to map the camera onto the 100 km shell, or leave it automatic to follow each calibration&rsquo;s validity interval.</p>
     {error&&<p role="alert">{error}</p>}
     {loading?<p role="status">Loading calibrations&hellip;</p>:rows.length===0?<div className="history-empty">No calibration has been sent for this camera yet.</div>:<>
-      <div className="calibration-list">
-        <label className={selected===null?'chosen':''}><input type="radio" name="calibration" checked={selected===null} disabled={busy} onChange={()=>void choose(null)}/>
-          <span><strong>Automatic</strong><small>Use whichever calibration is valid at each frame&rsquo;s observation time</small></span></label>
-        {rows.map(row=><label key={row.id} className={row.selected?'chosen':''}>
-          <input type="radio" name="calibration" checked={row.selected} disabled={busy} onChange={()=>void choose(row.id)}/>
+      {/* An explicit radiogroup rather than <input type=radio>: controlled radios
+          sharing a name let the browser's own group behaviour diverge from React's
+          state, which showed a calibration as chosen while none was selected. */}
+      <div className="calibration-list" role="radiogroup" aria-label="Calibration used for mapping">
+        <button type="button" role="radio" aria-checked={selected===null} disabled={busy} className={selected===null?'chosen':''} onClick={()=>void choose(null)}>
+          <span className="mark" aria-hidden="true"/>
+          <span><strong>Automatic</strong><small>Use whichever calibration is valid at each frame&rsquo;s observation time</small></span></button>
+        {rows.map(row=><button key={row.id} type="button" role="radio" aria-checked={row.selected} disabled={busy} className={row.selected?'chosen':''} onClick={()=>void choose(row.id)}>
+          <span className="mark" aria-hidden="true"/>
           <span><strong>{stamp(row.created_utc)}</strong>
             <small>{row.star_count==null?'star count unavailable':`${row.star_count} identified star${row.star_count===1?'':'s'}`}
               {' \u00b7 '}{row.residual_px==null?'no residual recorded':`${row.residual_px.toFixed(3)} px RMS`}
               {' \u00b7 '}{row.method}</small>
             <small>{row.valid_from_utc||row.valid_to_utc?`valid ${stamp(row.valid_from_utc)||'from the start'} to ${stamp(row.valid_to_utc)||'open'}`:'valid at any time'}</small>
-          </span></label>)}
+          </span></button>)}
       </div>
       <p className="calibration-note">{selected===null?'Automatic selection is active.':'A fixed calibration is active; its validity interval is ignored.'} Switching rebuilds this camera&rsquo;s projection mesh on the next publish.</p>
     </>}

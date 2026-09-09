@@ -1,6 +1,7 @@
 mod archive;
 mod crawler;
 mod norsk_meteor;
+mod meteor_backfill;
 mod db;
 mod geometry;
 mod igrf_grid;
@@ -502,6 +503,11 @@ async fn main() -> anyhow::Result<()> {
         igrf,
         igrf_year,
     };
+    if let Some(index) = std::env::args().position(|arg| arg == "--backfill-nmn") {
+        let date = std::env::args().nth(index + 1).ok_or_else(|| anyhow::anyhow!("--backfill-nmn requires YYYY-MM-DD (night starting that UTC date)"))?;
+        return meteor_backfill::run(&source_configs, &db_path, &archive_root, &date).await;
+    }
+
     if std::env::args().any(|arg|arg=="--publish") { return publish::run(&state); }
     // Stage a migrated archive without running two collectors against providers.
     if std::env::var("GAIA_CRAWLER_ENABLED").as_deref() != Ok("0") {

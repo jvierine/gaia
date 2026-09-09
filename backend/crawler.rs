@@ -137,6 +137,11 @@ pub async fn crawl_once(
     archive_root: &Path,
 ) -> Result<(usize, usize, usize)> {
     let urls = candidates(client, source).await?;
+    archive_urls(source, client, db_path, archive_root, urls).await
+}
+
+pub async fn archive_urls(source: &SourceConfig, client: &Client, db_path: &Path,
+    archive_root: &Path, urls: Vec<String>) -> Result<(usize, usize, usize)> {
     let discovered = urls.len();
     let mut downloaded_count = 0;
     let mut duplicates = 0;
@@ -234,17 +239,28 @@ pub async fn run_loop(
         .build()
         .unwrap();
     let slots=Arc::new(tokio::sync::Semaphore::new(4));
+    // Keep this on-demand provider from occupying all general crawler slots.
+    let meteor_slots=Arc::new(tokio::sync::Semaphore::new(2));
+    let meteor_count=sources.iter().filter(|s|s.enabled && matches!(s.kind,SourceKind::NorskMeteor)).count().max(1);
+    let mut meteor_index=0usize;
     let mut jobs=tokio::task::JoinSet::new();
     for (index,source) in sources.iter().filter(|s|s.enabled).cloned().enumerate(){
         let client=client.clone();let db_path=db_path.clone();let archive_root=archive_root.clone();let slots=slots.clone();
+        let is_meteor=matches!(source.kind,SourceKind::NorskMeteor);
+        let meteor_slots=meteor_slots.clone();
+        let initial_delay=if is_meteor {
+            let offset=(meteor_index as u64)*source.interval_seconds/(meteor_count as u64);
+            meteor_index+=1; offset
+        } else { index as u64 };
         jobs.spawn(async move{
-            tokio::time::sleep(Duration::from_secs(index as u64)).await;
+            tokio::time::sleep(Duration::from_secs(initial_delay)).await;
             let mut timer=tokio::time::interval(Duration::from_secs(source.interval_seconds.max(30)));
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop{
             timer.tick().await;
             let enabled=db::open(&db_path).ok().and_then(|conn|conn.query_row("SELECT enabled FROM sources WHERE id=?1",[&source.id],|r|r.get::<_,bool>(0)).ok()).unwrap_or(false);
             if !enabled{continue}
+            let _meteor_permit=if is_meteor {Some(meteor_slots.acquire().await.unwrap())} else {None};
             let _permit=slots.acquire().await.unwrap();
             let started = Utc::now();
             let run_id={let conn = match db::open(&db_path) {

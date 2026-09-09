@@ -1,6 +1,6 @@
 # GAIA — Global Auroral Image Archive
 
-GAIA is a UiT data center for near-real-time, attributed auroral imagery. It acquires public camera frames at a polite cadence, preserves the producer's copyright and requested acknowledgement, calibrates wide-field lenses through [AIDA/WISC](https://juha.no/aida/), and projects usable pixels onto a 100 km emission shell. Overlaps are tessellated with preference for the view nearest magnetic zenith.
+GAIA is a UiT data center for near-real-time, attributed auroral imagery. It acquires public camera frames at a polite cadence, preserves the producer's copyright and requested acknowledgement, calibrates wide-field lenses through [AIDA/WISC](https://juha.no/aida/), and projects usable pixels onto a 100 km emission shell. Overlaps are blended with preference for the view nearest magnetic zenith, and each camera's contribution is tapered smoothly to zero between 75° and 85° zenith angle so horizon-grazing pixels drop out of the composite.
 
 Authors: Juha Vierinen and Björn Gustavsson, UiT The Arctic University of Norway.
 

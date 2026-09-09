@@ -108,6 +108,27 @@ pub fn run(s: &AppState) -> Result<()> {
         "GAIA_MAGNETIC_FALLOFF_DEG must be in (0,90]"
     );
     let falloff_rad = falloff_deg.to_radians();
+    // Zenith-angle taper: full weight out to the start angle, smoothly to zero
+    // across the width. Keeps horizon-grazing pixels, where the projection
+    // smears worst, out of the composite.
+    let taper_start_deg = std::env::var("GAIA_ZENITH_TAPER_START_DEG")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(75.0);
+    let taper_width_deg = std::env::var("GAIA_ZENITH_TAPER_WIDTH_DEG")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(10.0);
+    anyhow::ensure!(
+        taper_start_deg.is_finite() && taper_start_deg > 0.0 && taper_start_deg <= 90.0,
+        "GAIA_ZENITH_TAPER_START_DEG must be in (0,90]"
+    );
+    anyhow::ensure!(
+        taper_width_deg.is_finite() && taper_width_deg > 0.0 && taper_width_deg <= 90.0,
+        "GAIA_ZENITH_TAPER_WIDTH_DEG must be in (0,90]"
+    );
+    let (taper_start_rad, taper_width_rad) =
+        (taper_start_deg.to_radians(), taper_width_deg.to_radians());
     let mut magnetic_weight_cache: BTreeMap<String, Vec<f32>> = BTreeMap::new();
     // Five-minute history plus the latest minute. Reuse immutable completed frames.
     let mut epochs: Vec<i64> = ((end - 86400) / 300..=end / 300).map(|n| n * 300).collect();
@@ -130,14 +151,14 @@ pub fn run(s: &AppState) -> Result<()> {
         let texture_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "atlas-v3-igrf-laplacian-{falloff_deg:.6}:{epoch}:{}",
+                "atlas-v4-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}:{epoch}:{}",
                 serde_json::to_string(&inputs)?
             ))
         );
         let source_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "source-v3-igrf-laplacian-{falloff_deg:.6}:{epoch}:{}",
+                "source-v4-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}:{epoch}:{}",
                 serde_json::to_string(&inputs)?
             ))
         );
@@ -180,7 +201,7 @@ pub fn run(s: &AppState) -> Result<()> {
                     let weight_key = format!(
                         "{:x}",
                         Sha256::digest(format!(
-                            "magnetic-weight-v1:{geometry_name}:{}:{falloff_deg:.6}",
+                            "magnetic-weight-v2:{geometry_name}:{}:{falloff_deg:.6}:{taper_start_deg:.6}:{taper_width_deg:.6}",
                             s.igrf_year
                         ))
                     );
@@ -210,7 +231,14 @@ pub fn run(s: &AppState) -> Result<()> {
                                     -field.inclination,
                                 );
                                 let look = [hit[0] - o[0], hit[1] - o[1], hit[2] - o[2]];
-                                geometry::magnetic_axis_weight(look, field_ecef, falloff_rad) as f32
+                                // Magnetic-axis preference, tapered off towards the horizon.
+                                let taper = geometry::zenith_taper(
+                                    geometry::zenith_angle(o, look),
+                                    taper_start_rad,
+                                    taper_width_rad,
+                                );
+                                (geometry::magnetic_axis_weight(look, field_ecef, falloff_rad)
+                                    * taper) as f32
                             })
                             .collect::<Vec<_>>();
                         let bytes = weights
@@ -354,7 +382,7 @@ pub fn run(s: &AppState) -> Result<()> {
     })?.collect::<Result<Vec<_>,_>>()?;
     let lens_models = publish_lens_models(&conn, &assets)?;
     let lens_model_documentation = json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
-    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S)","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
+    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a)","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
     let manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
     atomic(&root.join("manifest.json"), &serde_json::to_vec(&manifest)?)?;
     Ok(())

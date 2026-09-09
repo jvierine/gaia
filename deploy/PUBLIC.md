@@ -9,12 +9,18 @@ plus the most recent minute. Publication runs five minutes after the preceding
 run finishes. Original ingestion retains its existing cadence and archive.
 Textures are lossless transparent WebP, 4096×2048 geographic atlases, draped on
 the existing WebGL 100 km shell. Existing crop/mask geometry is rasterized;
-overlap selection uses full-IGRF magnetic zenith. No new cloud classifier or
-photometric equalization is introduced by this publisher. Missing data stays
-transparent; camera observations must be within ten minutes before frame time.
+overlaps use a unit-normalized Laplacian magnetic-axis blend. For each camera,
+IGRF-14 is evaluated at the ray's 100 km shell intersection and
+`w=exp(-abs(theta_B)/S)`, with the axial angle folded into `[0,pi/2]` and
+`S=20 degrees` by default. Magnetic weights are cached by geometry, IGRF year,
+and falloff angle. No photometric equalization is introduced by this publisher
+yet. Missing data stays transparent; camera observations must be within ten
+minutes before frame time.
 
 Build the public frontend with `VITE_GAIA_PUBLIC=1 npm run build:static`.
-Deploy that build only to juha.no; retain the full admin frontend on Revontuli.
+Deploy that build to `j@juha.no:/var/www/html/gaia/`; `/gaia/public/` is the
+separate Apache alias backed by `/mnt/shovel/gaia/public/`. Retain the full admin
+frontend in `/home/j/src/gaia/web-dist/` on Revontuli.
 `apache-public.conf` serves prepared files and denies the old public API.
 The public viewer provides globe interaction, history playback and credits only.
 

@@ -500,7 +500,12 @@ async fn main() -> anyhow::Result<()> {
         igrf,
         igrf_year,
     };
-    tokio::spawn(crawler::run_loop(source_configs, db_path, archive_root));
+    // Stage a migrated archive without running two collectors against providers.
+    if std::env::var("GAIA_CRAWLER_ENABLED").as_deref() != Ok("0") {
+        tokio::spawn(crawler::run_loop(source_configs, db_path, archive_root));
+    } else {
+        tracing::info!("Crawler disabled for staging/read-only operation");
+    }
     let static_dir = std::env::var("GAIA_STATIC_DIR").unwrap_or_else(|_| "web-dist".into());
     let app = Router::new()
         .route("/api/health", get(health))

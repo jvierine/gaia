@@ -1,0 +1,19 @@
+[Unit]
+Description=GAIA Rust archive and projection backend
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/j/src/gaia
+Environment=RUST_LOG=gaia_datacenter=info,tower_http=info
+Environment=GAIA_ARCHIVE_ROOT=/mnt/data/juha/gaia
+Environment=GAIA_DB_PATH=/mnt/data/juha/gaia/gaia.sqlite3
+Environment=GAIA_SOURCES=/home/j/src/gaia/sources
+Environment=GAIA_STATIC_DIR=/home/j/src/gaia/web-dist
+Environment=GAIA_LISTEN=127.0.0.1:18765
+Environment=GAIA_CRAWLER_ENABLED=0
+ExecStart=/mnt/data/juha/gaia-build/release/gaia-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

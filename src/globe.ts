@@ -89,6 +89,7 @@ function igrfContourVertices(values:Float32Array){
 
 export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>number,onLoading:(loading:boolean)=>void=()=>{},publicOnly=false) {
   const gl = canvas.getContext('webgl', { antialias: true }); if (!gl) return () => {};
+  const mobilePublic=publicOnly&&matchMedia('(pointer:coarse)').matches;
   const perf=new URLSearchParams(location.search).has('perf')?document.createElement('output'):null;
   if(perf){perf.style.cssText='position:absolute;right:16px;top:70px;color:#9cddc4;font:12px monospace;pointer-events:none';canvas.parentElement?.appendChild(perf)}
   let perfStart=performance.now(),perfFrames=0,perfErrors=0;
@@ -214,8 +215,11 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
               if(!texture){texture=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,texture);
               gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
               gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-              gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);textureCache.set(asset.texture_url,texture);}
-              textureSizes.set(texture,[im.naturalWidth,im.naturalHeight]);
+              const limit=Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number,mobilePublic?2048:8192);
+              const scale=Math.min(1,limit/Math.max(im.naturalWidth,im.naturalHeight));
+              let upload:HTMLImageElement|HTMLCanvasElement=im;
+              if(scale<1){const reduced=document.createElement('canvas');reduced.width=Math.max(1,Math.round(im.naturalWidth*scale));reduced.height=Math.max(1,Math.round(im.naturalHeight*scale));reduced.getContext('2d')!.drawImage(im,0,0,reduced.width,reduced.height);upload=reduced;}
+              gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,upload);textureCache.set(asset.texture_url,texture);textureSizes.set(texture,[upload.width,upload.height]);}
             }finally{URL.revokeObjectURL(url)}
           }
           if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s)});
@@ -241,7 +245,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         if(epoch<Date.now()-240000)for(let i=1;i<=3;i++)void prepare(epoch+i*60000);
         const protectedFrames=[...frames,...[...ready.values()].flat()];
         // Keep a bounded GPU cache; HTTP caching retains older frame assets.
-        for(const [key,t] of textureCache){if(textureCache.size<=(publicOnly?6:96))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
+        for(const [key,t] of textureCache){if(textureCache.size<=(mobilePublic?3:publicOnly?6:96))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
         for(const [key,g] of geometryCache){if(geometryCache.size<=32)break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
         onLoading(false);
       }

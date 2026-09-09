@@ -17,7 +17,7 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{Response, StatusCode, header},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
 use model::{PipelineStage, SourceStatus, SystemStatus};
@@ -58,7 +58,7 @@ async fn igrf_maglat(State(s): State<AppState>) -> Response<Body> {
 async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
     let active: i64 = conn
-        .query_row("SELECT count(*) FROM sources WHERE enabled=1", [], |r| {
+        .query_row("SELECT count(*) FROM sources WHERE enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=sources.id)", [], |r| {
             r.get(0)
         })
         .unwrap_or(0);
@@ -122,7 +122,7 @@ async fn credits(State(s): State<AppState>) -> ApiResult<Json<Vec<Value>>> {
 
 async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
-    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled FROM sources s JOIN producers p ON p.id=s.producer_id ORDER BY s.name").map_err(internal)?;
+    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled FROM sources s JOIN producers p ON p.id=s.producer_id WHERE NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.name").map_err(internal)?;
     let rows = q
         .query_map([], |r| {
             let last: Option<String> = r.get(4)?;
@@ -246,6 +246,15 @@ async fn set_enabled(
         return Err((StatusCode::NOT_FOUND, "camera not found".into()));
     }
     Ok(Json(json!({"state":"saved","enabled":input.enabled})))
+}
+
+async fn remove_source(Path(id):Path<String>,State(s):State<AppState>)->ApiResult<Json<Value>>{
+    let mut conn=db::open(&s.db_path).map_err(internal)?;let transaction=conn.transaction().map_err(internal)?;
+    let changed=transaction.execute("UPDATE sources SET enabled=0 WHERE id=?1",[&id]).map_err(internal)?;
+    if changed==0{return Err((StatusCode::NOT_FOUND,"camera not found".into()))}
+    transaction.execute("INSERT INTO removed_sources(source_id,removed_utc) VALUES(?1,?2) ON CONFLICT(source_id) DO UPDATE SET removed_utc=excluded.removed_utc",rusqlite::params![id,Utc::now().to_rfc3339()]).map_err(internal)?;
+    transaction.commit().map_err(internal)?;
+    Ok(Json(json!({"state":"removed","archive_preserved":true})))
 }
 
 #[derive(Deserialize)]
@@ -526,6 +535,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/suggestions", post(suggest))
         .route("/api/sources/{id}/location", post(set_location))
         .route("/api/sources/{id}/enabled", post(set_enabled))
+        .route("/api/sources/{id}", delete(remove_source))
         .route("/api/sources/{id}/settings", get(get_camera_settings).post(camera_settings))
         .route("/api/credits", get(credits))
         .route("/api/history", get(history))

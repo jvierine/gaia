@@ -99,29 +99,48 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const position = gl.getAttribLocation(program,'position'); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
   const resolution=gl.getUniformLocation(program,'resolution'),rotation=gl.getUniformLocation(program,'rotation'),zoomLoc=gl.getUniformLocation(program,'zoom'),sunLoc=gl.getUniformLocation(program,'sunDirection');
   let yaw=publicOnly?.35:-.35,pitch=publicOnly?-1.15:-.45,zoom=.78,dragging=false,last=[0,0],animation=0;
-  let cameraSites:{name:string;world:number[]}[]=[];
+  type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null};
+  let cameraSites:{label:string;url?:string;world:number[]}[]=[],publicCameras=new Map<number,PublicCamera>();
+  type Attribution={url:string;width:number;height:number;data:Uint8ClampedArray};
+  let attribution:Attribution|null=null;
+  const attributionCache=new Map<string,Promise<Attribution>>();
+  const loadAttribution=(url:string)=>{
+    let result=attributionCache.get(url);if(result)return result;
+    result=new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>{const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;const context=c.getContext('2d',{willReadFrequently:true});if(!context){reject(new Error('Attribution canvas unavailable'));return}context.drawImage(im,0,0);resolve({url,width:c.width,height:c.height,data:context.getImageData(0,0,c.width,c.height).data})};im.onerror=()=>reject(new Error('Attribution map unavailable'));im.src=url});attributionCache.set(url,result);return result;
+  };
+  const projectedCamera=(clientX:number,clientY:number)=>{
+    if(!attribution)return null;const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);
+    const px=(2*(clientX-r.left)-r.width)/side/zoom,py=(r.height-2*(clientY-r.top))/side/zoom,r2=px*px+py*py;if(r2>1)return null;
+    const z=Math.sqrt(1-r2),cx=px,cy=Math.cos(pitch)*py-Math.sin(pitch)*z,cz=Math.sin(pitch)*py+Math.cos(pitch)*z;
+    const wx=Math.cos(yaw)*cx+Math.sin(yaw)*cz,wy=cy,wz=-Math.sin(yaw)*cx+Math.cos(yaw)*cz;
+    const u=(Math.atan2(wx,wz)/(2*Math.PI)+.5+1)%1,v=.5-Math.asin(Math.max(-1,Math.min(1,wy)))/Math.PI;
+    const x=Math.min(attribution.width-1,Math.floor(u*attribution.width)),y=Math.min(attribution.height-1,Math.max(0,Math.floor(v*attribution.height))),i=(y*attribution.width+x)*4;
+    return publicCameras.get((attribution.data[i]<<16)|(attribution.data[i+1]<<8)|attribution.data[i+2])||null;
+  };
+  const locationLabel=(camera:PublicCamera)=>camera.latitude_deg==null||camera.longitude_deg==null?'location unavailable':`${Math.abs(camera.latitude_deg).toFixed(2)}°${camera.latitude_deg>=0?'N':'S'}, ${Math.abs(camera.longitude_deg).toFixed(2)}°${camera.longitude_deg>=0?'E':'W'}`;
   const tooltip=document.createElement('div');tooltip.style.cssText='position:absolute;display:none;pointer-events:none;z-index:5;background:#04111eee;color:white;padding:6px 9px;border:1px solid #54756a;border-radius:4px;font:12px sans-serif';canvas.parentElement?.appendChild(tooltip);
   const hover=(e:PointerEvent)=>{
     tooltip.style.display='none';if(dragging)return;
-    const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);let best=10,name='';
+    const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);let best=10,label='',url:string|undefined;
+    const projected=projectedCamera(e.clientX,e.clientY);if(projected){label=`${projected.institution} · ${projected.name}\n${locationLabel(projected)} · click for originating provider`;url=projected.website_url}
     for(const s of cameraSites){const[x,y,z]=s.world,xx=Math.cos(yaw)*x-Math.sin(yaw)*z,zz=Math.sin(yaw)*x+Math.cos(yaw)*z,yy=Math.cos(pitch)*y+Math.sin(pitch)*zz,depth=-Math.sin(pitch)*y+Math.cos(pitch)*zz;if(depth<0)continue;
-      const d=Math.hypot(e.clientX-r.left-r.width/2-xx*zoom*side/2,e.clientY-r.top-r.height/2+yy*zoom*side/2);if(d<best){best=d;name=s.name}
+      const d=Math.hypot(e.clientX-r.left-r.width/2-xx*zoom*side/2,e.clientY-r.top-r.height/2+yy*zoom*side/2);if(d<best){best=d;label=s.label;url=s.url}
     }
-    if(name){tooltip.textContent=name;tooltip.style.display='block';tooltip.style.left=`${e.clientX-r.left+12}px`;tooltip.style.top=`${e.clientY-r.top+12}px`;}
+    if(label){tooltip.textContent=label;tooltip.dataset.url=url||'';tooltip.style.whiteSpace='pre-line';tooltip.style.display='block';tooltip.style.left=`${e.clientX-r.left+12}px`;tooltip.style.top=`${e.clientY-r.top+12}px`;}
   };
   const hideTooltip=()=>{tooltip.style.display='none'};
   canvas.addEventListener('pointermove',hover);canvas.addEventListener('pointerleave',hideTooltip);
   const zoomControl=(event:Event)=>{const action=(event as CustomEvent<string>).detail;if(action==='reset'){zoom=.78}else{zoom=Math.max(.5,Math.min(8,zoom*(action==='in'?1.35:1/1.35)))}};
   canvas.addEventListener('gaia-zoom',zoomControl);
-  const pointers=new Map<number,[number,number]>();let pinchDistance=0;
+  const pointers=new Map<number,[number,number]>();let pinchDistance=0,press:[number,number]|null=null,moved=false;
   const distance=()=>{const p=[...pointers.values()];return p.length<2?0:Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1])};
-  const pointerDown=(e:PointerEvent)=>{if(e.pointerType==='mouse'&&e.button!==0)return;e.preventDefault();hideTooltip();pointers.set(e.pointerId,[e.clientX,e.clientY]);dragging=true;last=[e.clientX,e.clientY];pinchDistance=distance();canvas.setPointerCapture(e.pointerId)};
+  const pointerDown=(e:PointerEvent)=>{if(e.pointerType==='mouse'&&e.button!==0)return;e.preventDefault();hideTooltip();pointers.set(e.pointerId,[e.clientX,e.clientY]);dragging=true;last=[e.clientX,e.clientY];press=[e.clientX,e.clientY];moved=false;pinchDistance=distance();canvas.setPointerCapture(e.pointerId)};
   const pointerMove=(e:PointerEvent)=>{
-    if(!pointers.has(e.pointerId))return;e.preventDefault();pointers.set(e.pointerId,[e.clientX,e.clientY]);
+    if(!pointers.has(e.pointerId))return;e.preventDefault();pointers.set(e.pointerId,[e.clientX,e.clientY]);if(press&&Math.hypot(e.clientX-press[0],e.clientY-press[1])>5)moved=true;
     if(pointers.size>=2){const d=distance();if(pinchDistance>0&&d>0)zoom=Math.max(.5,Math.min(8,zoom*d/pinchDistance));pinchDistance=d;return}
     yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));last=[e.clientX,e.clientY];
   };
-  const pointerUp=(e:PointerEvent)=>{pointers.delete(e.pointerId);pinchDistance=distance();dragging=pointers.size>0;if(dragging)last=[...pointers.values()][0]}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
+  const pointerUp=(e:PointerEvent)=>{const open=!moved&&pointers.size===1&&publicOnly?projectedCamera(e.clientX,e.clientY):null;pointers.delete(e.pointerId);pinchDistance=distance();dragging=pointers.size>0;if(dragging)last=[...pointers.values()][0];else press=null;if(open?.website_url)window.open(open.website_url,'_blank','noopener,noreferrer')}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('wheel',wheel,{passive:false});
   canvas.addEventListener('pointercancel',pointerUp);canvas.addEventListener('lostpointercapture',pointerUp);
   const boundaryBuffer=gl.createBuffer();let boundaryVertices=0;
@@ -149,7 +168,7 @@ attribute vec3 world;attribute vec3 rgb;attribute vec2 uv;varying vec2 texCoord;
 uniform vec2 resolution;uniform vec2 rotation;uniform float zoom;
 mat3 rotY(float a){float c=cos(a),s=sin(a);return mat3(c,0.,-s,0.,1.,0.,s,0.,c);}
 mat3 rotX(float a){float c=cos(a),s=sin(a);return mat3(1.,0.,0.,0.,c,s,0.,-s,c);}
-void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;texCoord=uv;gl_PointSize=3.;}`,`
+void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;texCoord=uv;gl_PointSize=7.;}`,`
 precision highp float;varying vec2 texCoord;varying vec3 color;varying float visible;uniform sampler2D frame;uniform bool textured;void main(){if(visible<0.)discard;gl_FragColor=textured?texture2D(frame,texCoord):vec4(color,1.);}`);
   type Geometry={buffer:WebGLBuffer;count:number};
   const geometryCache=new Map<string,Geometry>(),textureCache=new Map<string,WebGLTexture>();
@@ -163,18 +182,18 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   type SmoothState={textures:[WebGLTexture,WebGLTexture];index:number;target:WebGLTexture;changed:number;initialized:boolean;size:[number,number]};
   const smoothStates=new Map<number,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
-  let frames:{geometry:Geometry;texture:WebGLTexture;order:number}[]=[];
+  let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string}[]=[];
   const layers:{buffer:WebGLBuffer;count:number;points:boolean}[]=[];
   const addLayer=(values:number[]|Float32Array,points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
-  void (publicOnly?Promise.resolve([{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+  void (publicOnly?fetch('/gaia/public/manifest.json',{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{label:`${c.institution} · ${c.name}\n${locationLabel(c)}`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const site of cameraSites)sites.push(...site.world,.96,.88,.28);addLayer(sites,true);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(s.latitude_deg===null||s.longitude_deg===null)continue;const lat=s.latitude_deg*Math.PI/180,lon=s.longitude_deg*Math.PI/180;sites.push(Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon),...(s.enabled?(s.calibrated?[.3,1,.7]:[1,.25,.3]):[.5,.5,.5]));}
     addLayer(sites,true);
-    cameraSites=sources.filter(s=>s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{name:s.name,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
+    if(!publicOnly)cameraSites=sources.filter(s=>s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{label:`${s.producer} · ${s.name}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
     let lastMinute=-1;
     type Asset={geometry_url:string;texture_url:string;vertex_count:number};
-    type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string}[]};
+    type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string;source_map_url?:string}[]};
     const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
     const catalogue=(id:string)=>{
       let c=catalogues.get(id);if(!c||c.expires<Date.now()){
@@ -222,7 +241,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
               gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,upload);textureCache.set(asset.texture_url,texture);textureSizes.set(texture,[upload.width,upload.height]);}
             }finally{URL.revokeObjectURL(url)}
           }
-          if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s)});
+          if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s),sourceMapUrl:frame.source_map_url});
         }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
       }}));
       return nextFrames.sort((a,b)=>a.order-b.order);
@@ -240,6 +259,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       if(lastMinute===minute&&!abort.signal.aborted){
         if(epoch<displayEpoch||Math.abs(epoch-displayEpoch)>600000){clearSmooth();displayEpoch=epoch}
         frames=next;
+        const sourceMapUrl=frames[0]?.sourceMapUrl;if(sourceMapUrl)void loadAttribution(sourceMapUrl).then(value=>{if(frames[0]?.sourceMapUrl===value.url)attribution=value}).catch(console.warn);else attribution=null;
         for(const key of pending.keys())if(key<minute||key>minute+3){pending.delete(key);ready.delete(key)}
         // Decode the next three minutes ahead of playback, not on each tick.
         if(epoch<Date.now()-240000)for(let i=1;i<=3;i++)void prepare(epoch+i*60000);

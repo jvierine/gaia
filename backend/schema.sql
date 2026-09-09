@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS camera_settings(
   source_id TEXT PRIMARY KEY REFERENCES sources(id), updated_utc TEXT NOT NULL,
   crop_json TEXT, mask_json TEXT, updated_by TEXT
 );
+CREATE TABLE IF NOT EXISTS removed_sources(
+  source_id TEXT PRIMARY KEY REFERENCES sources(id), removed_utc TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS crawler_runs(
   id INTEGER PRIMARY KEY, source_id TEXT NOT NULL REFERENCES sources(id), started_utc TEXT NOT NULL,
   finished_utc TEXT, state TEXT NOT NULL, discovered INTEGER NOT NULL DEFAULT 0,

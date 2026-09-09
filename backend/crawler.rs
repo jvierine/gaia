@@ -269,7 +269,7 @@ pub async fn run_loop(
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop{
             timer.tick().await;
-            let enabled=db::open(&db_path).ok().and_then(|conn|conn.query_row("SELECT enabled FROM sources WHERE id=?1",[&source.id],|r|r.get::<_,bool>(0)).ok()).unwrap_or(false);
+            let enabled=db::open(&db_path).ok().and_then(|conn|conn.query_row("SELECT enabled AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=sources.id) FROM sources WHERE id=?1",[&source.id],|r|r.get::<_,bool>(0)).ok()).unwrap_or(false);
             if !enabled{continue}
             let _meteor_permit=if is_meteor {Some(meteor_slots.acquire().await.unwrap())} else {None};
             let _permit=slots.acquire().await.unwrap();

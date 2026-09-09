@@ -7,7 +7,7 @@ mod model;
 mod quality;
 mod projection;
 mod pixel_mask;
-#[cfg(test)] mod image_time;
+mod image_time;
 use axum::{
     Json, Router,
     body::Body,

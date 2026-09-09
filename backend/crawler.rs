@@ -183,8 +183,12 @@ pub async fn crawl_once(
                 observed=time;basis="source_stream_update";
             }
         }
-        // OCR is disabled. Never launch external programs or send images to
-        // an OCR service. Keep the timestamp basis explicit for later reprocessing.
+        if basis == "download_time" && std::env::var("GAIA_OCR_ENABLED").as_deref() == Ok("1") {
+            if let Some((time, provenance)) = crate::image_time::read(&bytes, downloaded, archive_root).await {
+                observed = time;
+                basis = provenance;
+            }
+        }
         let conn = db::open(db_path)?;
         let stored = archive::store_image(
             &conn,

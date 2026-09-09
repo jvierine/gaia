@@ -11,6 +11,7 @@ Environment=GAIA_SOURCES=/home/j/src/gaia/sources
 Environment=GAIA_STATIC_DIR=/home/j/src/gaia/web-dist
 Environment=GAIA_LISTEN=127.0.0.1:18765
 Environment=GAIA_CRAWLER_ENABLED=0
+Environment=GAIA_OCR_ENABLED=1
 ExecStart=/mnt/data/juha/gaia-build/release/gaia-server
 Restart=on-failure
 RestartSec=5

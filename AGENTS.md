@@ -19,6 +19,28 @@
 - If a repository-scoped deploy key is used, configure only `bgu001`'s Git settings to select it for this checkout. The shared repository itself retains `origin = git@github.com:jvierine/gaia.git`, so pushes visibly target Juha's repository and `j` continues to use his own GitHub identity.
 - Validate access without printing credentials: as `bgu001`, run `git ls-remote origin HEAD`, then push an ordinary reviewed commit. Never use commands that print credential-store contents or private-key material.
 
+### Public GUI deployment as bgu001
+
+- Björn's SSH account on `juha.no` is `bgu001`. His dedicated deployment key stays on Revontuli at `/home/bgu001/.ssh/gaia_juha_no_ed25519`; only its public key is installed on juha.no. This is separate from the GitHub key. Never copy or print the private key.
+- From Revontuli as `bgu001`, connect without a password using `ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.no`. The account has group write access to `/var/www/html/gaia` through `gaia-deploy`; deploying the static GUI needs no sudo or service restart.
+- Develop and commit in `/mnt/data/juha/gaia/code`, coordinate builds with `j` because this is a shared checkout, and push to `jvierine/gaia`. Both users must preserve group write permissions on deployed files. Do not run simultaneous builds/deployments.
+- Build the public bundle in a separate output directory so the live admin build is not overwritten:
+
+```sh
+cd /mnt/data/juha/gaia/code
+umask 002
+VITE_GAIA_PUBLIC=1 npm run build:static -- --outDir public-dist
+ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.no 'mkdir -p /home/bgu001/gaia-deploy-backups; cp -a /var/www/html/gaia/index.html /home/bgu001/gaia-deploy-backups/index-$(date -u +%Y%m%dT%H%M%SZ).html'
+rsync -r --chmod=D2775,F664 --exclude=index.html -e 'ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes' public-dist/ bgu001@juha.no:/var/www/html/gaia/
+rsync -r --chmod=F664 -e 'ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes' public-dist/index.html bgu001@juha.no:/var/www/html/gaia/index.pending
+ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.no 'mv /var/www/html/gaia/index.pending /var/www/html/gaia/index.html'
+```
+
+- Upload assets first and atomically replace the entry HTML last. Retain previous hashed assets for existing viewers and rollback; do not use `rsync --delete`. Backups of the entry HTML live in `/home/bgu001/gaia-deploy-backups` on juha.no.
+- For shared-view changes, build the matching admin target with `npm run build:static` (without `VITE_GAIA_PUBLIC`) from the same commit; its `web-dist` directory is served directly on Revontuli. Verify both live pages, asset hashes, station interaction, playback, and WebGL errors.
+- `/gaia/public/` is a separate Apache alias backed by `/mnt/shovel/gaia/public`. The existing Revontuli publisher remains responsible for those prepared data. GUI deployment does not change that publisher or grant access to raw data, databases, or other juha.no applications.
+- Authentication check: run the SSH command above with `-o BatchMode=yes` and `id`. Deployment permission check: create and remove a temporary file inside `/var/www/html/gaia` before uploading. Keys from another workstation must be authorized separately.
+
 ## Codebase map
 
 - `src/GaiaGlobeView.tsx`: shared public/admin 3D view component. Both shells instantiate this file.

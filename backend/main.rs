@@ -6,6 +6,7 @@ mod igrf_grid;
 mod model;
 mod quality;
 mod projection;
+mod publish;
 mod pixel_mask;
 mod image_time;
 use axum::{
@@ -500,6 +501,7 @@ async fn main() -> anyhow::Result<()> {
         igrf,
         igrf_year,
     };
+    if std::env::args().any(|arg|arg=="--publish") { return publish::run(&state); }
     // Stage a migrated archive without running two collectors against providers.
     if std::env::var("GAIA_CRAWLER_ENABLED").as_deref() != Ok("0") {
         tokio::spawn(crawler::run_loop(source_configs, db_path, archive_root));

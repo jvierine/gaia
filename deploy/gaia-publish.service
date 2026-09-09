@@ -1,0 +1,8 @@
+[Unit]
+Description=Stitch GAIA textures and push static public playback to juha.no
+[Service]
+Type=oneshot
+WorkingDirectory=/home/j/src/gaia
+ExecStart=/bin/sh /home/j/src/gaia/deploy/publish-public.sh
+Nice=10
+TimeoutStartSec=3600

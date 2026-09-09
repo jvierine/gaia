@@ -19,11 +19,11 @@ CREATE TABLE IF NOT EXISTS images(
 CREATE TABLE IF NOT EXISTS calibrations(
   id TEXT PRIMARY KEY, source_id TEXT REFERENCES sources(id), created_utc TEXT NOT NULL,
   valid_from_utc TEXT, valid_to_utc TEXT, method TEXT NOT NULL, hdf5_path TEXT NOT NULL,
-  residual_px REAL, image_sha256 TEXT, submitted_by TEXT
+  residual_px REAL, image_sha256 TEXT, submitted_by TEXT, star_count INTEGER
 );
 CREATE TABLE IF NOT EXISTS camera_settings(
   source_id TEXT PRIMARY KEY REFERENCES sources(id), updated_utc TEXT NOT NULL,
-  crop_json TEXT, mask_json TEXT, updated_by TEXT
+  crop_json TEXT, mask_json TEXT, updated_by TEXT, selected_calibration_id TEXT
 );
 CREATE TABLE IF NOT EXISTS removed_sources(
   source_id TEXT PRIMARY KEY REFERENCES sources(id), removed_utc TEXT NOT NULL

@@ -85,3 +85,18 @@
   .globe-stage .gaia-globe-hint{right:0;bottom:58px}
   .globe-stage .gaia-globe-tools{right:22px;bottom:72px}
 }
+
+/* Lens-calibration history and picker. */
+.calibration-picker{position:relative;width:min(760px,96vw);max-height:92vh;overflow:auto;padding:28px;border:1px solid #29404d;background:#071521}
+.calibration-picker .close{position:absolute;right:14px;top:14px;border:0;background:none;cursor:pointer}
+.calibration-picker h2{margin:8px 0}
+.calibration-picker>p{color:var(--muted);line-height:1.55}
+.calibration-list{display:grid;gap:8px;margin:18px 0 6px}
+.calibration-list label{display:flex;align-items:flex-start;gap:12px;padding:13px 15px;border:1px solid var(--line);background:#091724;cursor:pointer}
+.calibration-list label:hover{border-color:var(--aqua)}
+.calibration-list label.chosen{border-color:var(--aqua);background:#0c2530}
+.calibration-list input{margin:2px 0 0;accent-color:var(--aqua);flex:none}
+.calibration-list label>span{display:grid;gap:3px;min-width:0}
+.calibration-list strong{color:#dceef0;font-weight:500}
+.calibration-list small{color:var(--muted);font-size:11px}
+.calibration-note{color:var(--muted);font-size:11px;margin:10px 0 0}

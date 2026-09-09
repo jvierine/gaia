@@ -10,7 +10,24 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(include_str!("schema.sql"))?;
+    // schema.sql is replayed on every open, but CREATE TABLE IF NOT EXISTS cannot
+    // widen a table that already exists, so added columns are applied here.
+    add_column(&conn, "calibrations", "star_count", "INTEGER")?;
+    add_column(&conn, "camera_settings", "selected_calibration_id", "TEXT")?;
     Ok(conn)
+}
+
+/// Adds a column unless it is already present. Table and column names are
+/// compile-time literals from this crate, never request data.
+fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
+    let mut q = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing = q
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !existing.iter().any(|name| name == column) {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+    }
+    Ok(())
 }
 
 pub fn upsert_source(conn: &Connection, source: &crate::model::SourceConfig) -> Result<()> {

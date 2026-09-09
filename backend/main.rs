@@ -530,6 +530,7 @@ async fn calibration(
     let mut valid_from = None;
     let mut residual_px = None;
     let mut submitter = None;
+    let mut star_count = None;
     let mut bytes = None;
     while let Some(field) = mp
         .next_field()
@@ -544,6 +545,9 @@ async fn calibration(
                 residual_px = field.text().await.ok().and_then(|v| v.parse::<f64>().ok())
             }
             "submitted_by" => submitter = Some(field.text().await.map_err(internal)?),
+            "star_count" => {
+                star_count = field.text().await.ok().and_then(|v| v.parse::<i64>().ok())
+            }
             "calibration" => bytes = Some(field.bytes().await.map_err(internal)?.to_vec()),
             _ => {}
         }
@@ -575,10 +579,111 @@ async fn calibration(
     let tmp = dir.join(format!(".{id}.tmp"));
     std::fs::write(&tmp, &data).map_err(internal)?;
     std::fs::rename(&tmp, &path).map_err(internal)?;
-    conn.execute("INSERT INTO calibrations(id,source_id,created_utc,valid_from_utc,method,hdf5_path,residual_px,submitted_by) VALUES(?1,?2,?3,?4,'AIDA/WISC',?5,?6,?7)",rusqlite::params![id,source,Utc::now().to_rfc3339(),valid_from,path.to_string_lossy(),residual_px,submitter]).map_err(internal)?;
+    // The uploader may state the star count; otherwise take it from the fitted set
+    // in the file itself. A new calibration is always an extra row, so the previous
+    // optical parameters, residual and star count are all retained.
+    let stars = star_count.or_else(|| {
+        projection::dataset_rows(&path.to_string_lossy(), "/selected_stars")
+            .ok()
+            .map(|n| n as i64)
+    });
+    conn.execute("INSERT INTO calibrations(id,source_id,created_utc,valid_from_utc,method,hdf5_path,residual_px,submitted_by,star_count) VALUES(?1,?2,?3,?4,'AIDA/WISC',?5,?6,?7,?8)",rusqlite::params![id,source,Utc::now().to_rfc3339(),valid_from,path.to_string_lossy(),residual_px,submitter,stars]).map_err(internal)?;
     Ok((
         StatusCode::CREATED,
-        Json(json!({"id":id,"state":"calibrated","source_id":source})),
+        Json(json!({"id":id,"state":"calibrated","source_id":source,"star_count":stars,"residual_px":residual_px})),
+    ))
+}
+
+/// Every calibration held for one camera, newest first, with the star count and
+/// residual of each fit so an operator can compare them before switching.
+async fn source_calibrations(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let selected: Option<String> = conn
+        .query_row(
+            "SELECT selected_calibration_id FROM camera_settings WHERE source_id=?1",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap_or(None);
+    let rows: Vec<(String, String, Option<String>, Option<String>, String, String, Option<f64>, Option<i64>)> = conn
+        .prepare("SELECT id,created_utc,valid_from_utc,valid_to_utc,method,hdf5_path,residual_px,star_count FROM calibrations WHERE source_id=?1 ORDER BY julianday(created_utc) DESC")
+        .map_err(internal)?
+        .query_map([&id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+        })
+        .map_err(internal)?
+        .filter_map(Result::ok)
+        .collect();
+    let mut out = Vec::new();
+    for (cid, created, from, to, method, path, residual, stars) in rows {
+        // Calibrations archived before the star count was recorded still have the
+        // fitted set in their HDF5, so fill it in once and keep it.
+        let stars = match stars {
+            Some(n) => Some(n),
+            None => {
+                let found = projection::dataset_rows(&path, "/selected_stars")
+                    .ok()
+                    .map(|n| n as i64);
+                if let Some(n) = found {
+                    let _ = conn.execute(
+                        "UPDATE calibrations SET star_count=?1 WHERE id=?2",
+                        rusqlite::params![n, cid],
+                    );
+                }
+                found
+            }
+        };
+        out.push(json!({
+            "id": cid, "created_utc": created, "valid_from_utc": from, "valid_to_utc": to,
+            "method": method, "residual_px": residual, "star_count": stars,
+            "selected": selected.as_deref() == Some(cid.as_str()),
+        }));
+    }
+    Ok(Json(
+        json!({"source_id":id,"selected_calibration_id":selected,"calibrations":out}),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct SelectedCalibrationInput {
+    /// None restores automatic selection by validity window.
+    calibration_id: Option<String>,
+}
+
+/// Chooses which calibration maps this camera. The projection cache key contains
+/// the calibration's file path, so switching rebuilds the mesh on its own.
+async fn set_selected_calibration(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    Json(input): Json<SelectedCalibrationInput>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    if let Some(chosen) = &input.calibration_id {
+        let owned: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM calibrations WHERE id=?1 AND source_id=?2",
+                rusqlite::params![chosen, id],
+                |r| r.get(0),
+            )
+            .map_err(internal)?;
+        if owned == 0 {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "no such calibration for this camera".into(),
+            ));
+        }
+    }
+    conn.execute(
+        "INSERT INTO camera_settings(source_id,updated_utc,selected_calibration_id) VALUES(?1,?2,?3)
+         ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,selected_calibration_id=excluded.selected_calibration_id",
+        rusqlite::params![id, Utc::now().to_rfc3339(), input.calibration_id],
+    )
+    .map_err(internal)?;
+    Ok(Json(
+        json!({"source_id":id,"selected_calibration_id":input.calibration_id}),
     ))
 }
 
@@ -708,6 +813,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/images/{id}/texture", get(image_texture))
         .route("/api/images/{id}/original", get(original_image))
         .route("/api/calibrations", post(calibration))
+        .route(
+            "/api/sources/{id}/calibrations",
+            get(source_calibrations).post(set_selected_calibration),
+        )
         .route("/api/ingest", post(ingest))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))

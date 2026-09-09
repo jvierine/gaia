@@ -16,6 +16,17 @@ fn numeric(path:&str, name:&str, attr:bool)->Result<Vec<f64>> {
     let data=text.split("DATA {").nth(1).context("missing calibration data")?.split('}').next().unwrap();
     data.split(',').map(|v|Ok(v.trim().parse()?)).collect()
 }
+/// First dataspace dimension of an HDF5 dataset, e.g. the number of identified
+/// stars in `/selected_stars`. Read from the header so a change in column count
+/// cannot be mistaken for a change in row count.
+pub fn dataset_rows(path:&str,name:&str)->Result<usize>{
+    let out=std::process::Command::new("h5dump").args(["-H","-d",name,path]).output()?;
+    if !out.status.success(){bail!("cannot read calibration {name}")}
+    let text=String::from_utf8(out.stdout)?;
+    let dims=text.split("SIMPLE { (").nth(1).context("missing calibration dataspace")?;
+    let first=dims.split(')').next().unwrap().split(',').next().context("empty dataspace")?;
+    Ok(first.trim().parse()?)
+}
 fn ray(x:f64,y:f64,p:&[f64],mode:i32)->Option<[f64;3]>{
     let xd=(x-0.5-p[5])/p[0];let yd=(y-0.5-p[6])/p[1];
     let (mut u,mut v)=(xd,yd);
@@ -47,7 +58,7 @@ pub fn build(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Resu
         serde_json::from_value(v["polygons"].clone())?
     }else{vec![]};
     let at=at.map(|t|t.to_rfc3339());
-    let (path,cal,lat,lon,alt,utc):(String,String,f64,f64,f64,String)=conn.query_row("SELECT i.archive_path,c.hdf5_path,s.latitude_deg,s.longitude_deg,COALESCE(s.altitude_m,0),i.observation_utc FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1) WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",rusqlite::params![id,at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
+    let (path,cal,lat,lon,alt,utc):(String,String,f64,f64,f64,String)=conn.query_row("SELECT i.archive_path,c.hdf5_path,s.latitude_deg,s.longitude_deg,COALESCE(s.altitude_m,0),i.observation_utc FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=COALESCE((SELECT cs2.selected_calibration_id FROM camera_settings cs2 WHERE cs2.source_id=s.id AND EXISTS(SELECT 1 FROM calibrations csel WHERE csel.id=cs2.selected_calibration_id AND csel.source_id=s.id)),(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1)) WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",rusqlite::params![id,at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
     let p=numeric(&cal,"wisc_optpar_with_optmod",false)?;if p.len()<9{bail!("invalid lens parameters")}
     let cw=numeric(&cal,"image_width",true)?[0];let ch=numeric(&cal,"image_height",true)?[0];
     let image=image::open(&path)?.thumbnail(256,256).to_rgb8();let(w,h)=image.dimensions();
@@ -77,7 +88,7 @@ pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Res
     use sha2::{Digest,Sha256};
     let conn=db::open(&s.db_path)?;let time=at.map(|v|v.to_rfc3339());
     let (path,cal,utc,key,calibration_id):(String,String,String,String,String)=conn.query_row(
-        "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json),c.id FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1) LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",
+        "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json),c.id FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=COALESCE((SELECT cs2.selected_calibration_id FROM camera_settings cs2 WHERE cs2.source_id=s.id AND EXISTS(SELECT 1 FROM calibrations csel WHERE csel.id=cs2.selected_calibration_id AND csel.source_id=s.id)),(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1)) LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",
         rusqlite::params![id,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
     let cal_stamp=std::fs::metadata(cal)?.modified()?;
     let geometry_key=format!("{:x}",Sha256::digest(format!("geometry-v3-seasonal-adaptive4-256-100km:{key}:{cal_stamp:?}")));

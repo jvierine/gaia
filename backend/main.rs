@@ -294,6 +294,8 @@ async fn remove_source(
 struct CameraSettingsInput {
     crop: Option<Value>,
     mask: Option<Value>,
+    /// Omitted leaves the camera's current choice untouched.
+    mask_enabled: Option<bool>,
 }
 async fn get_camera_settings(
     Path(id): Path<String>,
@@ -301,9 +303,9 @@ async fn get_camera_settings(
 ) -> ApiResult<Json<Value>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
     let row = conn.query_row(
-        "SELECT c.crop_json,c.mask_json FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
+        "SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
         [&id],
-        |r| Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?)),
+        |r| Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,bool>(2)?)),
     ).map_err(|e| if matches!(e,rusqlite::Error::QueryReturnedNoRows) {
         (StatusCode::NOT_FOUND,"camera not found".into())
     } else { internal(e) })?;
@@ -311,7 +313,9 @@ async fn get_camera_settings(
         text.map(|t| serde_json::from_str(&t).map_err(internal))
             .unwrap_or(Ok(Value::Null))
     };
-    Ok(Json(json!({"crop":parse(row.0)?,"mask":parse(row.1)?})))
+    Ok(Json(
+        json!({"crop":parse(row.0)?,"mask":parse(row.1)?,"mask_enabled":row.2}),
+    ))
 }
 async fn camera_settings(
     Path(id): Path<String>,
@@ -335,7 +339,19 @@ async fn camera_settings(
     if exists == 0 {
         return Err((StatusCode::NOT_FOUND, "camera not found".into()));
     }
-    conn.execute("INSERT INTO camera_settings(source_id,updated_utc,crop_json,mask_json) VALUES(?1,?2,?3,?4) ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,crop_json=excluded.crop_json,mask_json=excluded.mask_json",rusqlite::params![id,Utc::now().to_rfc3339(),input.crop.map(|v|v.to_string()),input.mask.map(|v|v.to_string())]).map_err(internal)?;
+    // The column is NOT NULL, so resolve an omitted flag to the stored choice
+    // rather than binding NULL and resetting cameras that predate the switch.
+    let mask_enabled = match input.mask_enabled {
+        Some(value) => value,
+        None => conn
+            .query_row(
+                "SELECT COALESCE(mask_enabled,1) FROM camera_settings WHERE source_id=?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap_or(true),
+    };
+    conn.execute("INSERT INTO camera_settings(source_id,updated_utc,crop_json,mask_json,mask_enabled) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,crop_json=excluded.crop_json,mask_json=excluded.mask_json,mask_enabled=excluded.mask_enabled",rusqlite::params![id,Utc::now().to_rfc3339(),input.crop.map(|v|v.to_string()),input.mask.map(|v|v.to_string()),mask_enabled]).map_err(internal)?;
     Ok(Json(json!({"state":"saved"})))
 }
 

@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS calibrations(
 );
 CREATE TABLE IF NOT EXISTS camera_settings(
   source_id TEXT PRIMARY KEY REFERENCES sources(id), updated_utc TEXT NOT NULL,
-  crop_json TEXT, mask_json TEXT, updated_by TEXT, selected_calibration_id TEXT
+  crop_json TEXT, mask_json TEXT, updated_by TEXT, selected_calibration_id TEXT,
+  mask_enabled INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS removed_sources(
   source_id TEXT PRIMARY KEY REFERENCES sources(id), removed_utc TEXT NOT NULL

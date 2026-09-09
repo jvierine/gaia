@@ -77,13 +77,13 @@ pub fn run(s: &AppState) -> Result<()> {
     let mut mask_outlines: BTreeMap<String, ([f64; 4], Vec<Vec<[f64; 2]>>, [f64; 2])> =
         BTreeMap::new();
     for (id, _, _, _) in &cameras {
-        let (crop_json, mask_json): (Option<String>, Option<String>) = conn
+        let (crop_json, mask_json, mask_enabled): (Option<String>, Option<String>, bool) = conn
             .query_row(
-                "SELECT c.crop_json,c.mask_json FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
+                "SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, true));
         let (raw_w, raw_h): (f64, f64) = conn
             .query_row(
                 "SELECT width,height FROM images WHERE source_id=?1 AND width IS NOT NULL AND height IS NOT NULL ORDER BY observation_utc DESC LIMIT 1",
@@ -102,7 +102,8 @@ pub fn run(s: &AppState) -> Result<()> {
                 ])
             })
             .unwrap_or([0.0, 0.0, 1.0, 1.0]);
-        let polygons = mask_json
+        // A switched-off mask excludes no pixels, so it must not feather either.
+        let polygons = if !mask_enabled { None } else { mask_json }
             .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
             .filter(|v| v["coordinate_system"] == "normalized_image")
             .and_then(|v| {

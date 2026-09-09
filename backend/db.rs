@@ -14,6 +14,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     // widen a table that already exists, so added columns are applied here.
     add_column(&conn, "calibrations", "star_count", "INTEGER")?;
     add_column(&conn, "camera_settings", "selected_calibration_id", "TEXT")?;
+    add_column(&conn, "camera_settings", "mask_enabled", "INTEGER NOT NULL DEFAULT 1")?;
     Ok(conn)
 }
 

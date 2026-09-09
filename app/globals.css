@@ -102,3 +102,12 @@
 .calibration-list strong{color:#dceef0;font-weight:500}
 .calibration-list small{color:var(--muted);font-size:11px}
 .calibration-note{color:var(--muted);font-size:11px;margin:10px 0 0}
+
+/* Per-camera switch for the obstruction mask. Outlines stay on record when off. */
+.mask-switch{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:9px 13px;border:1px solid var(--aqua);border-radius:999px;background:#0d2b33;color:#dceef0;cursor:pointer;user-select:none;width:fit-content}
+.mask-switch:hover{background:#12414a}
+.mask-switch input{width:17px;height:17px;margin:0;flex:none;accent-color:var(--aqua);cursor:pointer}
+.mask-switch span{display:grid;line-height:1.25}
+.mask-switch strong{font-size:12px;letter-spacing:.05em}
+.mask-switch small{color:var(--muted);font-size:10px}
+.mask-actions.mask-off{opacity:.55}

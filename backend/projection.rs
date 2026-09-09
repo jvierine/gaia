@@ -47,12 +47,14 @@ fn ray(x:f64,y:f64,p:&[f64],mode:i32)->Option<[f64;3]>{
 }
 pub fn build(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Result<Projection>{
     let conn=db::open(&s.db_path)?;
-    let (crop_json,mask_json):(Option<String>,Option<String>)=conn.query_row("SELECT c.crop_json,c.mask_json FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let (crop_json,mask_json,mask_enabled):(Option<String>,Option<String>,bool)=conn.query_row("SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
     let crop=if let Some(text)=crop_json {
         let v:Value=serde_json::from_str(&text)?;
         [v["left"].as_f64().context("invalid crop left")?,v["top"].as_f64().context("invalid crop top")?,v["right"].as_f64().context("invalid crop right")?,v["bottom"].as_f64().context("invalid crop bottom")?]
     }else{[0.,0.,1.,1.]};
-    let polygons:Vec<Vec<[f64;2]>>=if let Some(text)=mask_json {
+    // The obstruction outlines are kept on record but ignored while the camera's
+    // mask is switched off, so turning it back on needs no redrawing.
+    let polygons:Vec<Vec<[f64;2]>>=if !mask_enabled {vec![]} else if let Some(text)=mask_json {
         let v:Value=serde_json::from_str(&text)?;
         if v["coordinate_system"]!="normalized_image"{bail!("unsupported mask coordinate system")}
         serde_json::from_value(v["polygons"].clone())?
@@ -88,7 +90,7 @@ pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Res
     use sha2::{Digest,Sha256};
     let conn=db::open(&s.db_path)?;let time=at.map(|v|v.to_rfc3339());
     let (path,cal,utc,key,calibration_id):(String,String,String,String,String)=conn.query_row(
-        "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json),c.id FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=COALESCE((SELECT cs2.selected_calibration_id FROM camera_settings cs2 WHERE cs2.source_id=s.id AND EXISTS(SELECT 1 FROM calibrations csel WHERE csel.id=cs2.selected_calibration_id AND csel.source_id=s.id)),(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1)) LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",
+        "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json,COALESCE(cs.mask_enabled,1)),c.id FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=COALESCE((SELECT cs2.selected_calibration_id FROM camera_settings cs2 WHERE cs2.source_id=s.id AND EXISTS(SELECT 1 FROM calibrations csel WHERE csel.id=cs2.selected_calibration_id AND csel.source_id=s.id)),(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1)) LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",
         rusqlite::params![id,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
     let cal_stamp=std::fs::metadata(cal)?.modified()?;
     let geometry_key=format!("{:x}",Sha256::digest(format!("geometry-v3-seasonal-adaptive4-256-100km:{key}:{cal_stamp:?}")));

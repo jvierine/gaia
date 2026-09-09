@@ -1,7 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {startGaiaGlobe} from './globe';
 import './public-viewer.css';
 import GaiaLogo from './GaiaLogo';
+import GaiaGlobeView from './GaiaGlobeView';
 
 type LensModel={calibration_id:string;created_utc:string;valid_from_utc?:string|null;valid_to_utc?:string|null;method:string;residual_px?:number|null;format:string;sha256:string;url:string};
 type CameraLens={source_id:string;name:string;producer:string;latitude_deg?:number|null;longitude_deg?:number|null;models:LensModel[]};
@@ -11,16 +11,15 @@ const date=(value?:string|null)=>value?new Date(value).toISOString().slice(0,10)
 const location=(camera:Camera)=>camera.latitude_deg==null||camera.longitude_deg==null?'Location unavailable':`${Math.abs(camera.latitude_deg).toFixed(3)}°${camera.latitude_deg>=0?'N':'S'}, ${Math.abs(camera.longitude_deg).toFixed(3)}°${camera.longitude_deg>=0?'E':'W'}`;
 
 export default function PublicViewer(){
-  const canvas=useRef<HTMLCanvasElement>(null),epoch=useRef(Date.now()),loading=useRef(false);
+  const epoch=useRef(Date.now()),loading=useRef(false);
   const [manifest,setManifest]=useState<Manifest>(),[index,setIndex]=useState(-1),[play,setPlay]=useState(false),[credits,setCredits]=useState(false),[error,setError]=useState('');
   useEffect(()=>{const controller=new AbortController();const refresh=()=>fetch('/gaia/public/manifest.json',{cache:'no-store',signal:controller.signal}).then(r=>{if(!r.ok)throw Error('Published images unavailable');return r.json()}).then(m=>{setManifest(m);setError('')}).catch(e=>{if(!controller.signal.aborted)setError(String(e.message))});void refresh();const timer=setInterval(refresh,60000);return()=>{controller.abort();clearInterval(timer)}},[]);
-  useEffect(()=>canvas.current?startGaiaGlobe(canvas.current,()=>epoch.current,b=>{loading.current=b},true):undefined,[]);
   useEffect(()=>{if(manifest?.images.length)epoch.current=Date.parse(manifest.images[index<0?manifest.images.length-1:Math.min(index,manifest.images.length-1)].at)},[manifest,index]);
   useEffect(()=>{if(!play||!manifest?.images.length)return;const timer=setInterval(()=>{if(!loading.current)setIndex(i=>(i+1)%manifest.images.length)},250);return()=>clearInterval(timer)},[play,manifest]);
   const frames=manifest?.images||[],at=frames[index<0?frames.length-1:Math.min(index,frames.length-1)]?.at;
   return <main className="gaia-public">
     <header className="public-header"><div className="public-brand"><GaiaLogo/><div><h1>GAIA <span>Data Center</span></h1><p>Global Auroral Image Archive</p></div></div><button aria-expanded={credits} onClick={()=>setCredits(!credits)}>ⓘ <span>Info &amp; credits</span></button></header>
-    <div className="public-globe"><canvas ref={canvas} aria-label="Interactive auroral globe"/><div className="public-hint">Drag to rotate · Scroll or pinch to zoom · Hover or tap imagery for its camera</div>
+    <GaiaGlobeView className="public-globe" getEpochMillis={()=>epoch.current} onLoading={value=>{loading.current=value}}>
     {credits&&<section className="public-info" role="dialog" aria-label="Information and credits">
       <div className="public-info-heading"><h2>About GAIA</h2><button onClick={()=>setCredits(false)} aria-label="Close information">✕</button></div>
       <p>GAIA compiles low-resolution, geographically projected views of aurora from publicly available data sources. GAIA <strong>does not provide or redistribute the original high-resolution camera images</strong>. Obtain originals directly from the originating provider using the camera links below or by clicking projected imagery on the globe.</p>
@@ -37,7 +36,7 @@ export default function PublicViewer(){
       <h2>Camera providers &amp; credits</h2>
       <p>Every listed camera links to its originating provider. All images remain the copyright of their respective producers.</p>
       <div className="camera-credits">{manifest?.cameras?.map(camera=><details key={camera.source_id}><summary><a href={camera.website_url} target="_blank" rel="noreferrer">{camera.name} ↗</a></summary><p><strong>{camera.institution}</strong><br/>{location(camera)}<br/>{camera.acknowledgement}<br/>{camera.copyright}</p></details>)}</div>
-    </section>}</div>
+    </section>}</GaiaGlobeView>
     <section className="public-playback" aria-label="Aurora playback"><div className="public-playback-row"><button className="public-play" disabled={!frames.length} onClick={()=>{if(!play&&index<0)setIndex(0);setPlay(!play)}}>{play?'❚❚ Pause':'▶ Play'}</button><button disabled={!frames.length} onClick={()=>{setPlay(false);setIndex(-1)}}>Latest</button><time>{at?new Date(at).toISOString().replace('T',' ').replace('.000Z',' UTC'):'Waiting for publication'}</time></div><input aria-label="Observation time" disabled={!frames.length} type="range" min={0} max={Math.max(0,frames.length-1)} value={index<0?Math.max(0,frames.length-1):Math.min(index,frames.length-1)} onChange={e=>setIndex(Number(e.target.value))}/><div className="public-timeline-labels"><span>{frames.length?new Date(frames[0].at).toISOString().slice(0,16).replace('T',' '):'No frames'} UTC</span><span>{frames.length} composites · last 24 hours</span></div>{error&&<span role="alert">{error}</span>}</section>
   </main>
 }

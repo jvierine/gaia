@@ -2,7 +2,7 @@
 
 import { Activity, Aperture, CircleHelp, Database, Lightbulb, Satellite, Send, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { startGaiaGlobe } from '../src/globe';
+import GaiaGlobeView from '../src/GaiaGlobeView';
 
 type ViewName = 'globe' | 'cameras' | 'status' | 'calibrate' | 'about';
 type Camera = {id:string;name:string;producer:string;state:string;timestamp_mode:string;latitude_deg:number|null;longitude_deg:number|null;calibrated:boolean;enabled:boolean;images_24h:number;message?:string|null};
@@ -87,20 +87,9 @@ function Credits(){
 }
 
 function Globe({epochMillis,live,onCredits,onLoading}:{epochMillis:number;live:boolean;onCredits:()=>void;onLoading:(loading:boolean)=>void}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const epochRef=useRef(()=>epochMillis);epochRef.current=()=>live?Date.now():epochMillis;
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    try { return startGaiaGlobe(canvas,()=>epochRef.current(),onLoading); } catch (error) { onLoading(false);console.error('GAIA WebGL failed', error); canvas.classList.add('webgl-failed'); }
-  }, []);
-
-  return <div className="globe-stage">
+  return <GaiaGlobeView className="globe-stage" getEpochMillis={()=>live?Date.now():epochMillis} onLoading={onLoading}>
     <button type="button" onClick={onCredits} aria-label="Data provider credits" title="Data provider credits" style={{position:'absolute',left:18,top:18,zIndex:2,border:0,background:'#031018cc',color:'#d6eee8',borderRadius:'50%',width:32,height:32,fontSize:24,cursor:'pointer'}}>ⓘ</button>
-    <canvas ref={canvasRef} className="globe-canvas" aria-label="Interactive WebGL Earth with auroral image coverage" />
-    <div className="coverage-readout"><span>67.2N 21.0E</span><strong>100 km emission shell</strong></div>
-    <div className="globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in" onClick={()=>canvasRef.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail:'in'}))}>+</button><button type="button" aria-label="Zoom out" onClick={()=>canvasRef.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail:'out'}))}>−</button><button type="button" aria-label="Reset globe" onClick={()=>canvasRef.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail:'reset'}))}>◎</button></div>
-  </div>;
+  </GaiaGlobeView>;
 }
 
 export default function Home() {

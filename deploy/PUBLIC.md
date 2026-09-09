@@ -20,7 +20,7 @@ minutes before frame time.
 Build the public frontend with `VITE_GAIA_PUBLIC=1 npm run build:static`.
 Deploy that build to `j@juha.no:/var/www/html/gaia/`; `/gaia/public/` is the
 separate Apache alias backed by `/mnt/shovel/gaia/public/`. Retain the full admin
-frontend in `/home/j/src/gaia/web-dist/` on Revontuli.
+frontend in `/mnt/data/juha/gaia/code/web-dist/` on Revontuli.
 `apache-public.conf` serves prepared files and denies the old public API.
 The public viewer provides globe interaction, history playback and credits only.
 

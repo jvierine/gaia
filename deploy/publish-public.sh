@@ -2,7 +2,7 @@
 set -eu
 export GAIA_ARCHIVE_ROOT=/mnt/data/juha/gaia
 export GAIA_DB_PATH=/mnt/data/juha/gaia/gaia.sqlite3
-export GAIA_SOURCES=/home/j/src/gaia/sources
+export GAIA_SOURCES=/mnt/data/juha/gaia/code/sources
 /mnt/data/juha/gaia-build/release/gaia-server --publish
 # The receiver never connects back. Retain one extra day of old assets for
 # already-open viewers; cleanup is restricted to generated public WebP files.

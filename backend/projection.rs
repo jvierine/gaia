@@ -76,9 +76,9 @@ pub fn build(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Resu
 pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Result<Value>{
     use sha2::{Digest,Sha256};
     let conn=db::open(&s.db_path)?;let time=at.map(|v|v.to_rfc3339());
-    let (path,cal,utc,key):(String,String,String,String)=conn.query_row(
-        "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json) FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1) LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",
-        rusqlite::params![id,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    let (path,cal,utc,key,calibration_id):(String,String,String,String,String)=conn.query_row(
+        "SELECT i.archive_path,c.hdf5_path,i.observation_utc,json_array(c.hdf5_path,s.latitude_deg,s.longitude_deg,s.altitude_m,i.width,i.height,cs.crop_json,cs.mask_json),c.id FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1) LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",
+        rusqlite::params![id,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
     let cal_stamp=std::fs::metadata(cal)?.modified()?;
     let geometry_key=format!("{:x}",Sha256::digest(format!("geometry-v3-seasonal-adaptive4-256-100km:{key}:{cal_stamp:?}")));
     let texture_key=format!("{:x}",Sha256::digest(format!("texture-v1-256:{path}")));
@@ -92,7 +92,7 @@ pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Res
         let im=image::open(&path)?.thumbnail(256,256).to_rgb8();
         let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));im.save_with_format(&tmp,image::ImageFormat::Png)?;std::fs::rename(tmp,&texture)?;
     }
-    Ok(json!({"source_id":id,"observation_utc":utc,"geometry_url":format!("/gaia/api/projection-assets/{geometry_key}.bin"),"texture_url":format!("/gaia/api/projection-assets/{texture_key}.png"),"vertex_count":std::fs::metadata(geometry)?.len()/20}))
+    Ok(json!({"source_id":id,"observation_utc":utc,"calibration_id":calibration_id,"geometry_url":format!("/gaia/api/projection-assets/{geometry_key}.bin"),"texture_url":format!("/gaia/api/projection-assets/{texture_key}.png"),"vertex_count":std::fs::metadata(geometry)?.len()/20}))
 }
 
 /// One catalogue request replaces per-camera projection queries on every tick.

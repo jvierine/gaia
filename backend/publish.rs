@@ -4,11 +4,24 @@ use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 const W:u32=4096;
 const H:u32=2048;
 fn atomic(path:&Path, bytes:&[u8])->Result<()> {
     let temp=path.with_extension("pending");std::fs::write(&temp,bytes)?;std::fs::rename(temp,path)?;Ok(())
+}
+fn publish_lens_models(conn:&rusqlite::Connection,assets:&Path)->Result<Vec<serde_json::Value>> {
+    let mut query=conn.prepare("SELECT s.id,s.name,p.name,s.latitude_deg,s.longitude_deg,c.id,c.created_utc,c.valid_from_utc,c.valid_to_utc,c.method,c.hdf5_path,c.residual_px FROM sources s JOIN producers p ON p.id=s.producer_id JOIN calibrations c ON c.source_id=s.id WHERE s.enabled=1 ORDER BY s.name,julianday(c.valid_from_utc),c.created_utc")?;
+    let rows=query.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<f64>>(3)?,r.get::<_,Option<f64>>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,String>(9)?,r.get::<_,String>(10)?,r.get::<_,Option<f64>>(11)?)))?;
+    let mut cameras:BTreeMap<String,serde_json::Value>=BTreeMap::new();
+    for row in rows {
+        let (source_id,name,producer,lat,lon,id,created,valid_from,valid_to,method,path,residual)=row?;
+        let bytes=std::fs::read(&path)?;let sha=format!("{:x}",Sha256::digest(&bytes));let filename=format!("lens-{sha}.h5");let destination=assets.join(&filename);
+        if !destination.exists(){atomic(&destination,&bytes)?}
+        let camera=cameras.entry(source_id.clone()).or_insert_with(||json!({"source_id":source_id,"name":name,"producer":producer,"latitude_deg":lat,"longitude_deg":lon,"models":[]}));
+        camera["models"].as_array_mut().unwrap().push(json!({"calibration_id":id,"created_utc":created,"valid_from_utc":valid_from,"valid_to_utc":valid_to,"method":method,"residual_px":residual,"format":"AIDA/WISC HDF5","sha256":sha,"url":format!("/gaia/public/assets/{filename}")}));
+    }
+    Ok(cameras.into_values().collect())
 }
 pub fn run(s:&AppState)->Result<()> {
     let root=s.archive_root.join("public");let assets=root.join("assets");std::fs::create_dir_all(&assets)?;
@@ -63,11 +76,13 @@ pub fn run(s:&AppState)->Result<()> {
             }
             let temp=dest.with_extension("pending");out.save_with_format(&temp,image::ImageFormat::WebP)?;std::fs::rename(temp,dest)?;
         }
-        frames.push(json!({"at":at.to_rfc3339(),"width":W,"height":H,"texture_url":format!("/gaia/public/assets/{name}"),"contributors":inputs.iter().map(|(id,_,_,_,a)|json!({"source_id":id,"observation_utc":a["observation_utc"]})).collect::<Vec<_>>()}));
+        frames.push(json!({"at":at.to_rfc3339(),"width":W,"height":H,"texture_url":format!("/gaia/public/assets/{name}"),"contributors":inputs.iter().map(|(id,_,_,_,a)|json!({"source_id":id,"observation_utc":a["observation_utc"],"calibration_id":a["calibration_id"]})).collect::<Vec<_>>()}));
     }
     frames.reverse();
     anyhow::ensure!(!frames.is_empty(),"No composites available; retaining previous publication");
     let credits=conn.prepare("SELECT DISTINCT p.name,p.website,p.acknowledgement,p.copyright FROM producers p JOIN sources s ON s.producer_id=p.id")?.query_map([],|r|Ok(json!({"name":r.get::<_,String>(0)?,"website":r.get::<_,Option<String>>(1)?,"acknowledgement":r.get::<_,String>(2)?,"copyright":r.get::<_,String>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
-    let manifest=json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
+    let lens_models=publish_lens_models(&conn,&assets)?;
+    let lens_model_documentation=json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
+    let manifest=json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
     atomic(&root.join("manifest.json"),&serde_json::to_vec(&manifest)?)?;Ok(())
 }

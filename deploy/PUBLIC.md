@@ -22,7 +22,11 @@ Assets are sent before atomic manifest replacement. Old generated textures
 remain for roughly 49 hours to cover open viewers; rsync deletion is restricted
 to `public/assets/`. Raw archives, calibrations and databases are never pruned
 by this job. Source observations and contributing camera IDs are recorded per
-frame; producer credits/copyright are retained in the manifest.
+frame; producer credits/copyright are retained in the manifest. Each contributor
+also records the exact seasonal calibration ID used. Content-addressed original
+AIDA/WISC HDF5 lens files, validity intervals, fit residuals, SHA-256 values,
+camera coordinates, and machine-readable usage conventions are published in the
+manifest's `lens_models` and `lens_model_documentation` fields.
 
 Rollback: restore the saved juha.no Apache config and prior frontend build,
 then restart its retained GAIA service. Do not enable two publisher instances.

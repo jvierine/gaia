@@ -147,7 +147,6 @@ pub async fn crawl_once(
             1
         })
     {
-        let downloaded = Utc::now();
         let mut request = client.get(&url);
         for (k, v) in &source.request_headers {
             request = request.header(k, v)
@@ -165,6 +164,7 @@ pub async fn crawl_once(
         )?
         .to_string();
         let bytes = response.bytes().await?;
+        let downloaded=Utc::now();
         if bytes.len() < 1024 {
             continue;
         }
@@ -177,19 +177,14 @@ pub async fn crawl_once(
             let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM images WHERE sha256=?1)",[digest],|r|r.get(0))?;
             if exists{duplicates+=1;continue}
         }
-        let downloaded=Utc::now();
         let (mut observed, mut basis) = parse_timestamp(source, &url, downloaded)?;
         if basis=="download_time" {
             if let Some(time)=stream_updated.filter(|t|*t<=downloaded+chrono::Duration::minutes(2)){
                 observed=time;basis="source_stream_update";
             }
         }
-        if matches!(source.timestamp_mode,TimestampMode::DownloadTime){
-            let data=bytes.clone();
-            if let Ok(Some((time,method)))=tokio::task::spawn_blocking(move||crate::image_time::read(&data,downloaded)).await{
-                observed=time;basis=method;
-            }
-        }
+        // OCR is disabled. Never launch external programs or send images to
+        // an OCR service. Keep the timestamp basis explicit for later reprocessing.
         let conn = db::open(db_path)?;
         let stored = archive::store_image(
             &conn,

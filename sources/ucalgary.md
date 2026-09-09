@@ -13,8 +13,8 @@ Do not infer station altitude or lens calibration from these coordinates.
 
 Streams are polled once per minute with `countdown_clock` left disabled.
 The `x-rt-stream-last-updated-utc` response header is retained as the
-`source_stream_update` timestamp basis when no explicit UTC exposure overlay
-can be read. This is an upstream update timestamp, not a measured exposure
+`source_stream_update` timestamp basis. OCR is disabled; missing or invalid
+headers fall back to download completion time. This is an upstream update timestamp, not a measured exposure
 time. Original downloads and download completion times are retained.
 Old overnight frames remain old; they are not presented as fresh observations.
 

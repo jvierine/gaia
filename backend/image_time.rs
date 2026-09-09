@@ -1,7 +1,5 @@
 //! Conservative OCR of explicitly UTC, full-date camera overlays.
 use chrono::{DateTime,NaiveDateTime,Utc};
-use std::io::{Cursor,Write};
-use std::process::{Command,Stdio};
 
 pub fn parse(text:&str,downloaded:DateTime<Utc>)->Option<(DateTime<Utc>,&'static str)>{
     let re=regex::Regex::new(r"(?i)(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(:\d{2})?\s+UTC\b").ok()?;
@@ -15,20 +13,6 @@ pub fn parse(text:&str,downloaded:DateTime<Utc>)->Option<(DateTime<Utc>,&'static
         result=Some((t,if c.get(3).is_some(){"image_ocr_utc_second"}else{"image_ocr_utc_minute"}));
     }
     result
-}
-
-pub fn read(bytes:&[u8],downloaded:DateTime<Utc>)->Option<(DateTime<Utc>,&'static str)>{
-    let image=image::load_from_memory(bytes).ok()?.to_luma8();
-    let strip=(image.height()/6).max(1);let mut canvas=image::GrayImage::new(image.width(),strip*2);
-    image::imageops::replace(&mut canvas,&image::imageops::crop_imm(&image,0,0,image.width(),strip).to_image(),0,0);
-    image::imageops::replace(&mut canvas,&image::imageops::crop_imm(&image,0,image.height()-strip,image.width(),strip).to_image(),0,strip as i64);
-    let scale=1600.0/canvas.width() as f64;
-    let canvas=image::imageops::resize(&canvas,1600,(canvas.height() as f64*scale).round() as u32,image::imageops::FilterType::Triangle);
-    let mut png=Cursor::new(Vec::new());image::DynamicImage::ImageLuma8(canvas).write_to(&mut png,image::ImageFormat::Png).ok()?;
-    let mut child=Command::new("timeout").env("OMP_THREAD_LIMIT","1").args(["8","tesseract","stdin","stdout","--psm","11"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
-    child.stdin.take()?.write_all(png.get_ref()).ok()?;
-    let output=child.wait_with_output().ok()?;if !output.status.success(){return None}
-    parse(&String::from_utf8_lossy(&output.stdout),downloaded)
 }
 
 #[cfg(test)] mod tests{

@@ -172,8 +172,8 @@ attribute vec3 world;attribute vec3 rgb;attribute vec2 uv;varying vec2 texCoord;
 uniform vec2 resolution;uniform vec2 rotation;uniform float zoom;
 mat3 rotY(float a){float c=cos(a),s=sin(a);return mat3(c,0.,-s,0.,1.,0.,s,0.,c);}
 mat3 rotX(float a){float c=cos(a),s=sin(a);return mat3(1.,0.,0.,0.,c,s,0.,-s,c);}
-void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;texCoord=uv;gl_PointSize=13.;}`,`
-precision highp float;varying vec2 texCoord;varying vec3 color;varying float visible;uniform sampler2D frame;uniform bool textured;void main(){if(visible<0.)discard;if(textured){gl_FragColor=texture2D(frame,texCoord);return;}float radius=length(gl_PointCoord-.5);if(radius>.5)discard;vec3 marker=mix(vec3(1.),color,smoothstep(.22,.34,radius));gl_FragColor=vec4(marker,1.);}`);
+void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;texCoord=uv;}`,`
+precision highp float;varying vec2 texCoord;varying vec3 color;varying float visible;uniform sampler2D frame;uniform bool textured;void main(){if(visible<0.)discard;if(textured){gl_FragColor=texture2D(frame,texCoord);return;}gl_FragColor=vec4(color,1.);}`);
   type Geometry={buffer:WebGLBuffer;count:number};
   const geometryCache=new Map<string,Geometry>(),textureCache=new Map<string,WebGLTexture>();
   const textureSizes=new Map<WebGLTexture,[number,number]>();
@@ -187,14 +187,23 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   const smoothStates=new Map<number,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
   let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string}[]=[];
-  const layers:{buffer:WebGLBuffer;count:number;points:boolean}[]=[];
-  const addLayer=(values:number[]|Float32Array,points:boolean)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6,points})};
+  const layers:{buffer:WebGLBuffer;count:number}[]=[];
+  const addLayer=(values:number[]|Float32Array)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6})};
+  // Expand each station into a small globe-surface disc. WebGL point sprites have
+  // implementation-dependent sizing and gl_PointCoord has proved unreliable on
+  // some Linux drivers; ordinary triangles use the same reliable path as images.
+  const addStationDisc=(values:number[],lat:number,lon:number,color:number[])=>{
+    const center=[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)];
+    const east=[Math.cos(lon),0,-Math.sin(lon)],north=[-Math.sin(lat)*Math.sin(lon),Math.cos(lat),-Math.sin(lat)*Math.cos(lon)];
+    const vertex=(angle:number)=>{const radius=.0045,x=center[0]+radius*(Math.cos(angle)*east[0]+Math.sin(angle)*north[0]),y=center[1]+radius*(Math.cos(angle)*east[1]+Math.sin(angle)*north[1]),z=center[2]+radius*(Math.cos(angle)*east[2]+Math.sin(angle)*north[2]),length=Math.hypot(x,y,z);return[x/length,y/length,z/length]};
+    for(let i=0;i<8;i++)values.push(...center,...color,...vertex(i*Math.PI/4),...color,...vertex((i+1)*Math.PI/4),...color);
+  };
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
-  void (publicOnly?fetch('/gaia/public/manifest.json',{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const site of cameraSites)sites.push(...site.world,.96,.88,.28);addLayer(sites,true);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+  void (publicOnly?fetch('/gaia/public/manifest.json',{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
-    const sites:number[]=[];for(const s of sources){if(s.latitude_deg===null||s.longitude_deg===null)continue;const lat=s.latitude_deg*Math.PI/180,lon=s.longitude_deg*Math.PI/180;sites.push(Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon),...(s.enabled?(s.calibrated?[.3,1,.7]:[1,.25,.3]):[.5,.5,.5]));}
-    addLayer(sites,true);
-    if(!publicOnly)cameraSites=sources.filter(s=>s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{label:`${s.producer} · ${s.name}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
+    const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}
+    addLayer(sites);
+    if(!publicOnly)cameraSites=sources.filter(s=>s.enabled&&s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{label:`${s.producer} · ${s.name}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
     let lastMinute=-1;
     type Asset={geometry_url:string;texture_url:string;vertex_count:number};
     type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string;source_map_url?:string}[]};
@@ -315,13 +324,13 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     for(const frame of frames){gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(frame.order)||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
     if(publicOnly)gl.disable(gl.BLEND);
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),0);gl.disableVertexAttribArray(uvAttr);
-    for(const layer of [...layers.filter(l=>!l.points),...layers.filter(l=>l.points)]){
+    for(const layer of layers){
       gl.bindBuffer(gl.ARRAY_BUFFER,layer.buffer);
       for(const [name,offset] of [['world',0],['rgb',12]] as const){
         const a=gl.getAttribLocation(imageProgram,name);
         gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,3,gl.FLOAT,false,24,offset);
       }
-      gl.drawArrays(layer.points?gl.POINTS:gl.TRIANGLES,0,layer.count);
+      gl.drawArrays(gl.TRIANGLES,0,layer.count);
     }
     if(depthTest)gl.enable(gl.DEPTH_TEST);
     if(blend)gl.enable(gl.BLEND);

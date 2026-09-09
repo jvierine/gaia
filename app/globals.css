@@ -44,3 +44,10 @@
 .timeline-dock .sun-lock:has(input:checked){background:var(--aqua);border-color:var(--aqua);color:#03120f}
 .timeline-dock .sun-lock:has(input:checked) small{color:#0a3a33}
 @media(max-width:820px){.timeline-dock{grid-template-columns:44px 1fr}.timeline-dock .sun-lock{grid-column:2}.timeline-dock>div{grid-column:1/-1}}
+
+/* Instrument name beside the Cameras-tab thumbnail links to the provider's own
+   instrument page. The URL comes from the published manifest, so a camera that is
+   not published yet simply stays plain text. */
+.camera-link{color:#72ccef;text-decoration:none}
+.camera-link:hover strong,.camera-link:focus-visible strong{text-decoration:underline}
+.camera-link strong{color:inherit}

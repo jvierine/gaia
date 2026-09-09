@@ -46,9 +46,10 @@ pub fn run(s:&AppState)->Result<()> {
             match projection::assets(s,id,Some(at)) {Ok(a)=>inputs.push((id,lat,lon,alt,a)),Err(e)=>tracing::debug!(%id,%e,"No publishable camera frame")}
         }
         if inputs.is_empty(){continue}
-        let key=format!("{:x}",Sha256::digest(format!("atlas-v2-attribution:{epoch}:{}",serde_json::to_string(&inputs)?)));
-        let name=format!("{key}.webp");let dest=assets.join(&name);
-        let source_name=format!("source-{key}.png");let source_dest=assets.join(&source_name);
+        let texture_key=format!("{:x}",Sha256::digest(format!("atlas-v1:{epoch}:{}",serde_json::to_string(&inputs)?)));
+        let source_key=format!("{:x}",Sha256::digest(format!("atlas-v2-attribution:{epoch}:{}",serde_json::to_string(&inputs)?)));
+        let name=format!("{texture_key}.webp");let dest=assets.join(&name);
+        let source_name=format!("source-{source_key}.png");let source_dest=assets.join(&source_name);
         if !dest.exists()||!source_dest.exists(){
             let mut out=image::RgbaImage::new(W,H);let mut source_pixels=image::RgbImage::new(W,H);let mut scores=vec![-2f32;(W*H)as usize];
             for (id,lat,lon,alt,a) in &inputs {

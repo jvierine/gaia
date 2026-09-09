@@ -5,6 +5,9 @@ use chrono::{TimeZone, Utc};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
+/// Keeps the mask-edge fade strictly positive so a single-contributor pixel is
+/// unchanged by it: its weight cancels in the per-pixel normalization.
+const MASK_FADE_FLOOR: f64 = 1e-6;
 const W: u32 = 4096;
 const H: u32 = 2048;
 fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -68,6 +71,65 @@ pub fn run(s: &AppState) -> Result<()> {
     std::fs::create_dir_all(&assets)?;
     let conn = db::open(&s.db_path)?;
     let cameras=conn.prepare("SELECT id,latitude_deg,longitude_deg,COALESCE(altitude_m,0) FROM sources WHERE enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=sources.id) AND latitude_deg IS NOT NULL AND longitude_deg IS NOT NULL AND EXISTS(SELECT 1 FROM calibrations WHERE source_id=sources.id) ORDER BY id")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,f64>(1)?,r.get::<_,f64>(2)?,r.get::<_,f64>(3)?)))?.collect::<Result<Vec<_>,_>>()?;
+    // Crop, obstruction outlines and the working-grid size for each camera, used by
+    // the mask-edge fade below. The mesh is rasterized on the 256px thumbnail, so the
+    // fade width is expressed in those pixels.
+    let mut mask_outlines: BTreeMap<String, ([f64; 4], Vec<Vec<[f64; 2]>>, [f64; 2])> =
+        BTreeMap::new();
+    for (id, _, _, _) in &cameras {
+        let (crop_json, mask_json): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT c.crop_json,c.mask_json FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((None, None));
+        let (raw_w, raw_h): (f64, f64) = conn
+            .query_row(
+                "SELECT width,height FROM images WHERE source_id=?1 AND width IS NOT NULL AND height IS NOT NULL ORDER BY observation_utc DESC LIMIT 1",
+                [id],
+                |r| Ok((r.get::<_, i64>(0)? as f64, r.get::<_, i64>(1)? as f64)),
+            )
+            .unwrap_or((256.0, 256.0));
+        let crop = crop_json
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|v| {
+                Some([
+                    v["left"].as_f64()?,
+                    v["top"].as_f64()?,
+                    v["right"].as_f64()?,
+                    v["bottom"].as_f64()?,
+                ])
+            })
+            .unwrap_or([0.0, 0.0, 1.0, 1.0]);
+        let polygons = mask_json
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .filter(|v| v["coordinate_system"] == "normalized_image")
+            .and_then(|v| {
+                Some(
+                    v["polygons"]
+                        .as_array()?
+                        .iter()
+                        .filter_map(|polygon| {
+                            Some(
+                                polygon
+                                    .as_array()?
+                                    .iter()
+                                    .filter_map(|p| {
+                                        Some([p[0].as_f64()?, p[1].as_f64()?])
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .filter(|p: &Vec<[f64; 2]>| p.len() >= 3)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or_default();
+        // image::thumbnail(256,256) fits inside the box and never enlarges.
+        let fit = (256.0 / raw_w).min(256.0 / raw_h).min(1.0);
+        mask_outlines.insert(id.clone(), (crop, polygons, [raw_w * fit, raw_h * fit]));
+    }
     let camera_indices: BTreeMap<String, u32> = cameras
         .iter()
         .enumerate()
@@ -129,6 +191,16 @@ pub fn run(s: &AppState) -> Result<()> {
     );
     let (taper_start_rad, taper_width_rad) =
         (taper_start_deg.to_radians(), taper_width_deg.to_radians());
+    // Soft fade inwards from the crop rectangle and obstruction outlines, measured
+    // in pixels of the working grid the projection mesh is rasterized on.
+    let mask_fade_px = std::env::var("GAIA_MASK_FADE_PX")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(10.0);
+    anyhow::ensure!(
+        mask_fade_px.is_finite() && mask_fade_px >= 0.0,
+        "GAIA_MASK_FADE_PX must be finite and non-negative"
+    );
     let mut magnetic_weight_cache: BTreeMap<String, Vec<f32>> = BTreeMap::new();
     // Five-minute history plus the latest minute. Reuse immutable completed frames.
     let mut epochs: Vec<i64> = ((end - 86400) / 300..=end / 300).map(|n| n * 300).collect();
@@ -151,14 +223,14 @@ pub fn run(s: &AppState) -> Result<()> {
         let texture_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "atlas-v4-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}:{epoch}:{}",
+                "atlas-v5-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}:{epoch}:{}",
                 serde_json::to_string(&inputs)?
             ))
         );
         let source_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "source-v4-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}:{epoch}:{}",
+                "source-v5-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}:{epoch}:{}",
                 serde_json::to_string(&inputs)?
             ))
         );
@@ -201,7 +273,7 @@ pub fn run(s: &AppState) -> Result<()> {
                     let weight_key = format!(
                         "{:x}",
                         Sha256::digest(format!(
-                            "magnetic-weight-v2:{geometry_name}:{}:{falloff_deg:.6}:{taper_start_deg:.6}:{taper_width_deg:.6}",
+                            "magnetic-weight-v3:{geometry_name}:{}:{falloff_deg:.6}:{taper_start_deg:.6}:{taper_width_deg:.6}:{mask_fade_px:.6}",
                             s.igrf_year
                         ))
                     );
@@ -237,8 +309,27 @@ pub fn run(s: &AppState) -> Result<()> {
                                     taper_start_rad,
                                     taper_width_rad,
                                 );
+                                // Soft fade in from the crop and obstruction outlines. The
+                                // floor keeps the factor strictly positive, which is what
+                                // confines the fade to overlaps: where a pixel has a single
+                                // contributor the per-pixel normalization divides its weight
+                                // out again, so a lone image is never eroded.
+                                let fade = match mask_outlines.get(*id) {
+                                    Some((crop, polygons, scale)) if mask_fade_px > 0.0 => {
+                                        let distance = crate::pixel_mask::boundary_distance_px(
+                                            [v[3] as f64, v[4] as f64],
+                                            *crop,
+                                            polygons,
+                                            *scale,
+                                        );
+                                        geometry::smooth_step(distance / mask_fade_px)
+                                            .max(MASK_FADE_FLOOR)
+                                    }
+                                    _ => 1.0,
+                                };
                                 (geometry::magnetic_axis_weight(look, field_ecef, falloff_rad)
-                                    * taper) as f32
+                                    * taper
+                                    * fade) as f32
                             })
                             .collect::<Vec<_>>();
                         let bytes = weights
@@ -382,8 +473,54 @@ pub fn run(s: &AppState) -> Result<()> {
     })?.collect::<Result<Vec<_>,_>>()?;
     let lens_models = publish_lens_models(&conn, &assets)?;
     let lens_model_documentation = json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
-    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a)","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
+    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a)","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
     let manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
     atomic(&root.join("manifest.json"), &serde_json::to_vec(&manifest)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_edge_fade_spans_ten_pixels_and_stays_positive() {
+        // Composed exactly as the weight loop does it: pixel distance to the kept
+        // region, the same smooth step used by the zenith taper, then the floor.
+        let (scale, crop, width) = ([256.0, 256.0], [0.0, 0.0, 1.0, 1.0], 10.0);
+        let fade = |u: f64| {
+            let d = crate::pixel_mask::boundary_distance_px([u, 0.5], crop, &[], scale);
+            geometry::smooth_step(d / width).max(MASK_FADE_FLOOR)
+        };
+        // On the outline the fade is at the floor, not zero: a lone contributor's
+        // weight must stay positive or the pixel would be dropped entirely.
+        assert_eq!(fade(0.0), MASK_FADE_FLOOR);
+        assert!(MASK_FADE_FLOOR > 0.0, "the floor is what confines the fade to overlaps");
+        // Half weight halfway across the ramp, full weight exactly ten pixels in.
+        assert!((fade(5.0 / 256.0) - 0.5).abs() < 1e-12);
+        assert_eq!(fade(10.0 / 256.0), 1.0);
+        assert_eq!(fade(0.5), 1.0);
+        // Monotone across the ramp.
+        let mut previous = 0.0;
+        for step in 0..=100 {
+            let value = fade(step as f64 * 0.1 / 256.0);
+            assert!(value >= previous - 1e-15);
+            previous = value;
+        }
+    }
+
+    #[test]
+    fn one_contributor_normalizes_the_fade_away() {
+        // Σ(w·rgb)/Σw with a single contributor returns rgb for any positive w,
+        // which is why a faded edge is only visible where images overlap.
+        for fade in [MASK_FADE_FLOOR, 1e-3, 0.5, 1.0] {
+            let w = (0.37 * fade) as f32;
+            assert!(w > 0.0);
+            assert!(((w * 200.0) / w - 200.0).abs() < 1e-2, "fade {fade} eroded a lone image");
+        }
+        // In an overlap the faded edge yields to its unfaded neighbour.
+        let (near, edge) = (1.0f32, MASK_FADE_FLOOR as f32);
+        let blended = (near * 200.0 + edge * 40.0) / (near + edge);
+        assert!((blended - 200.0).abs() < 1e-2);
+    }
 }

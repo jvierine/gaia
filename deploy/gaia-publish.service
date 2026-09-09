@@ -6,6 +6,7 @@ WorkingDirectory=/mnt/data/juha/gaia/code
 Environment=GAIA_MAGNETIC_FALLOFF_DEG=20
 Environment=GAIA_ZENITH_TAPER_START_DEG=75
 Environment=GAIA_ZENITH_TAPER_WIDTH_DEG=10
+Environment=GAIA_MASK_FADE_PX=10
 ExecStart=/bin/sh /mnt/data/juha/gaia/code/deploy/publish-public.sh
 Nice=10
 TimeoutStartSec=3600

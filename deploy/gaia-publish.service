@@ -7,6 +7,9 @@ Environment=GAIA_MAGNETIC_FALLOFF_DEG=20
 Environment=GAIA_ZENITH_TAPER_START_DEG=75
 Environment=GAIA_ZENITH_TAPER_WIDTH_DEG=10
 Environment=GAIA_MASK_FADE_PX=10
+Environment=GAIA_SOLAR_DARK_DEG=-12
+Environment=GAIA_SOLAR_LIGHT_DEG=0
+Environment=GAIA_SOLAR_FLOOR=0.05
 ExecStart=/bin/sh /mnt/data/juha/gaia/code/deploy/publish-public.sh
 Nice=10
 TimeoutStartSec=3600

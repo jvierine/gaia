@@ -123,9 +123,112 @@ pub fn zenith_angle(observer: [f64; 3], look: [f64; 3]) -> f64 {
     dot(norm(observer), norm(look)).clamp(-1.0, 1.0).acos()
 }
 
+/// Geocentric solar direction in the same ECEF frame as `observer_ecef`. This is
+/// the low-precision Meeus series the globe already uses to draw its terminator,
+/// so the weighting and the drawn day/night boundary agree. The crawler's
+/// `norsk_meteor::solar_altitude_deg` is deliberately not reused: its day-of-year
+/// declination and naive hour angle can be degrees out, which a 12 degree taper
+/// would feel.
+pub fn solar_direction_ecef(unix_seconds: f64) -> [f64; 3] {
+    let jd = unix_seconds / 86400.0 + 2440587.5;
+    let t = (jd - 2451545.0) / 36525.0;
+    let l0 = (280.46646 + t * (36000.76983 + t * 0.0003032)).to_radians();
+    let m = (357.52911 + t * (35999.05029 - 0.0001537 * t)).to_radians();
+    let lambda = l0
+        + ((1.914602 - 0.004817 * t - 0.000014 * t * t) * m.sin()
+            + 0.019993 * (2.0 * m).sin()
+            + 0.000289 * (3.0 * m).sin())
+        .to_radians();
+    let epsilon = (23.439291 - 0.0130042 * t).to_radians();
+    let declination = (epsilon.sin() * lambda.sin()).asin();
+    let right_ascension = (epsilon.cos() * lambda.sin()).atan2(lambda.cos());
+    let gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * t * t
+        - t * t * t / 38710000.0)
+        .to_radians();
+    let longitude = right_ascension - gmst;
+    [
+        declination.cos() * longitude.cos(),
+        declination.cos() * longitude.sin(),
+        declination.sin(),
+    ]
+}
+
+/// Solar elevation in degrees at a station: positive above the horizon. Geometric
+/// only, with no refraction or horizon dip, which a twilight weighting does not need.
+pub fn solar_elevation_deg(lat_deg: f64, lon_deg: f64, unix_seconds: f64) -> f64 {
+    let up = observer_ecef(lat_deg, lon_deg, 0.0);
+    90.0 - zenith_angle(up, solar_direction_ecef(unix_seconds)).to_degrees()
+}
+
+/// Tapers a whole image by the sun at its station: full weight while the sun is
+/// at or below `dark_deg`, easing to `floor` once it reaches `light_deg` and
+/// holding there in daylight. Uses the same smooth step as the other tapers.
+pub fn solar_taper(elevation_deg: f64, dark_deg: f64, light_deg: f64, floor: f64) -> f64 {
+    if !elevation_deg.is_finite() || light_deg <= dark_deg {
+        return floor;
+    }
+    floor + (1.0 - floor) * (1.0 - smooth_step((elevation_deg - dark_deg) / (light_deg - dark_deg)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn unix(y:i32,mo:u32,d:u32,h:u32)->f64{
+        // days from 1970-01-01 to y-mo-d, civil calendar
+        let (y2,mo2)=if mo<=2 {(y-1,mo+12)} else {(y,mo)};
+        let era=(if y2>=0 {y2} else {y2-399})/400;
+        let yoe=(y2-era*400) as i64;
+        let doy=(153*(mo2 as i64-3)+2)/5+d as i64-1;
+        let doe=yoe*365+yoe/4-yoe/100+doy;
+        let days=era as i64*146097+doe-719468;
+        days as f64*86400.0+h as f64*3600.0
+    }
+
+    #[test]
+    fn solar_direction_is_self_consistent_with_elevation(){
+        for stamp in [unix(2026,3,20,12),unix(2026,6,21,0),unix(2026,9,9,18),unix(2026,12,21,6)]{
+            let sun=solar_direction_ecef(stamp);
+            assert!((dot(sun,sun)-1.0).abs()<1e-12,"solar direction must be a unit vector");
+            let (sub_lat,sub_lon)=ecef_to_lat_lon(sun);
+            // The sun is overhead at the subsolar point and underfoot at its antipode.
+            assert!((solar_elevation_deg(sub_lat,sub_lon,stamp)-90.0).abs()<1e-6);
+            assert!((solar_elevation_deg(-sub_lat,sub_lon+180.0,stamp)+90.0).abs()<1e-6);
+            // Subsolar latitude cannot leave the tropics.
+            assert!(sub_lat.abs()<=23.5,"subsolar latitude {sub_lat} out of range");
+        }
+    }
+
+    #[test]
+    fn tromso_has_polar_night_and_midnight_sun(){
+        // Real behaviour at 69.65N: the sun never rises around the December
+        // solstice and never sets around the June solstice.
+        for hour in 0..24 {
+            let dark=solar_elevation_deg(69.65,18.96,unix(2026,12,21,hour));
+            assert!(dark<0.0,"December sun should stay down, got {dark} at {hour}h");
+            let bright=solar_elevation_deg(69.65,18.96,unix(2026,6,21,hour));
+            assert!(bright>0.0,"June sun should stay up, got {bright} at {hour}h");
+        }
+    }
+
+    #[test]
+    fn solar_taper_runs_from_one_at_minus_twelve_to_a_floor_at_zero(){
+        let taper=|el:f64| solar_taper(el,-12.0,0.0,0.05);
+        for el in [-90.0,-40.0,-12.1,-12.0]{
+            assert_eq!(taper(el),1.0,"{el} deg is full night weight");
+        }
+        for el in [0.0,0.1,15.0,60.0]{
+            assert!((taper(el)-0.05).abs()<1e-12,"{el} deg holds the daylight floor");
+        }
+        // Halfway through twilight sits halfway between the floor and one.
+        assert!((taper(-6.0)-0.525).abs()<1e-12);
+        let mut previous=1.0;
+        for step in 0..=120 {
+            let value=taper(-12.0+step as f64*0.1);
+            assert!(value<=previous+1e-15,"taper must not increase with elevation");
+            assert!((0.05..=1.0).contains(&value));
+            previous=value;
+        }
+    }
     #[test]
     fn zenith_angle_is_zero_overhead_and_right_angle_at_the_horizon() {
         let o = observer_ecef(69.0, 20.0, 0.0);

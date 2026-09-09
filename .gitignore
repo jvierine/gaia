@@ -39,4 +39,6 @@ next-env.d.ts
 /work/
 /target/
 /web-dist/
+/public-dist/
+tsconfig.tsbuildinfo
 *.sqlite3*

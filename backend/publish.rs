@@ -201,6 +201,27 @@ pub fn run(s: &AppState) -> Result<()> {
         mask_fade_px.is_finite() && mask_fade_px >= 0.0,
         "GAIA_MASK_FADE_PX must be finite and non-negative"
     );
+    // Twilight taper. A whole image is weighted by the solar elevation at its own
+    // station: full weight while the sun is at or below the dark angle, easing to a
+    // floor once it reaches the light angle. Unlike the other factors this varies
+    // with time, so it is applied per frame and never folded into the vertex cache.
+    let env_f64 = |name: &str, fallback: f64| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(fallback)
+    };
+    let sun_dark_deg = env_f64("GAIA_SOLAR_DARK_DEG", -12.0);
+    let sun_light_deg = env_f64("GAIA_SOLAR_LIGHT_DEG", 0.0);
+    let sun_floor = env_f64("GAIA_SOLAR_FLOOR", 0.05);
+    anyhow::ensure!(
+        sun_dark_deg.is_finite() && sun_light_deg.is_finite() && sun_light_deg > sun_dark_deg,
+        "GAIA_SOLAR_LIGHT_DEG must be finite and above GAIA_SOLAR_DARK_DEG"
+    );
+    anyhow::ensure!(
+        sun_floor.is_finite() && sun_floor > 0.0 && sun_floor <= 1.0,
+        "GAIA_SOLAR_FLOOR must be in (0,1]"
+    );
     let mut magnetic_weight_cache: BTreeMap<String, Vec<f32>> = BTreeMap::new();
     // Five-minute history plus the latest minute. Reuse immutable completed frames.
     let mut epochs: Vec<i64> = ((end - 86400) / 300..=end / 300).map(|n| n * 300).collect();
@@ -223,14 +244,14 @@ pub fn run(s: &AppState) -> Result<()> {
         let texture_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "atlas-v5-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}:{epoch}:{}",
+                "atlas-v6-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}:{epoch}:{}",
                 serde_json::to_string(&inputs)?
             ))
         );
         let source_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "source-v5-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}:{epoch}:{}",
+                "source-v6-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}:{epoch}:{}",
                 serde_json::to_string(&inputs)?
             ))
         );
@@ -269,6 +290,13 @@ pub fn run(s: &AppState) -> Result<()> {
                     .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
                     .collect();
                 let o = geometry::observer_ecef(**lat, **lon, **alt / 1000.);
+                // Whole-image twilight weight from the sun at this station, at this frame.
+                let sun_weight = geometry::solar_taper(
+                    geometry::solar_elevation_deg(**lat, **lon, epoch as f64),
+                    sun_dark_deg,
+                    sun_light_deg,
+                    sun_floor,
+                ) as f32;
                 if !magnetic_weight_cache.contains_key(geometry_name) {
                     let weight_key = format!(
                         "{:x}",
@@ -399,7 +427,8 @@ pub fn run(s: &AppState) -> Result<()> {
                             };
                             let weight = (0..3)
                                 .map(|k| q[k] as f32 * magnetic_weights[triangle_index * 3 + k])
-                                .sum::<f32>();
+                                .sum::<f32>()
+                                * sun_weight;
                             if weight <= 0. {
                                 continue;
                             }
@@ -473,7 +502,7 @@ pub fn run(s: &AppState) -> Result<()> {
     })?.collect::<Result<Vec<_>,_>>()?;
     let lens_models = publish_lens_models(&conn, &assets)?;
     let lens_model_documentation = json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
-    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d)","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
+    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d) * solar_taper(sun_elevation)","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"solar_taper":"F + (1-F) * (1 - psi(u)/(psi(u)+psi(1-u))) with u=(elevation-D)/(L-D); whole-image weight from the solar elevation at the camera station","solar_taper_dark_deg":sun_dark_deg,"solar_taper_light_deg":sun_light_deg,"solar_taper_floor":sun_floor,"zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
     let manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
     atomic(&root.join("manifest.json"), &serde_json::to_vec(&manifest)?)?;
     Ok(())

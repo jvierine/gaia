@@ -36,11 +36,14 @@ input.
 | Priority | Source | Region/value | Realtime candidates | Rights gate |
 |---|---|---|---:|---|
 | 1 | [UCalgary SRS](#university-of-calgary-space-remote-sensing-srs) | Alaska, Canada, continental US; excellent Arctic and subauroral spine | 23 image streams observed | Open scientific data; dataset-specific citation required |
+| 1 | [StarVisor](#starvisor-night-sky-patrol) | Exceptional Russian/Siberian and Chukotka longitude coverage | 39 public fixed-camera views; start with 6 | Copyrighted; request archival permission |
 | 1 | [BACC / TGO / FMI](#bacc-six-camera-network) | Svalbard, northern Fennoscandia, Andøya | 6 BACC quicklooks plus Skibotn | Public quicklooks; retain PI-specific credit and confirm bulk retention |
 | 1 | [IRF Kiruna](#irf-kiruna) | Northern Sweden; high-resolution fixed camera | 1 | Scientific use possible; publication/redistribution requires permission |
 | 2 | [UAF GI](#uaf-geophysical-institute-alaska) | Poker Flat and Toolik, Alaska | 2 seasonal feeds | Permission required |
 | 2 | [NIPR/PsA/PWING](#nipr-psa-and-pwing-quicklooks) | Scandinavia, Svalbard; high cadence/multiple wavelengths | 5–7 plausible | Permission required; HTTP-only endpoints |
 | 2 | [AllSkyKamera](#allskykamera-subauroral-fallback) | Dense European subauroral fallback; one Alaska station | Curate, do not crawl all cameras | Embedding with credit is documented; archive rights are camera-specific |
+| 2 | [Community directories](#community-and-commercial-discovery-directories) | Greenland, Iceland, northern US/Canada, Europe | Discovery only; resolve original providers | Mixed owner-specific rights |
+| 2 | [AllSky7](#allsky7-fireball-network) | Full-sky composite stations, chiefly subauroral Europe | Network live view at 15-minute cadence | Non-commercial reuse with owner and network credit |
 | 3 | [OMTI / ERG](#omti-and-erg-archive) | Iceland, Canada, Russia/Far East, Japan | Archive, not verified realtime | Contact PI before publication/presentation |
 | 3 | [Greenland and Iceland candidates](#greenland-and-iceland) | Important longitudinal gaps | Mostly archive/discovery | Mixed; permission required unless explicitly licensed |
 
@@ -51,7 +54,9 @@ input.
 - **Useful extreme-storm belt:** Iowa, New Hampshire, the northern US, the UK,
   Netherlands, Germany, and southern Scandinavia.
 - **Material gaps:** live Greenland above Narsarsuaq, Iceland with confirmed
-  archival rights, Jan Mayen/Bjørnøya/Hopen, and most of Siberia/Russian Far East.
+  archival rights, and Jan Mayen/Bjørnøya/Hopen. StarVisor greatly improves
+  Siberia/Russian Far East visually, though its cameras are usually fixed
+  north-facing wide-angle cameras rather than calibrated all-sky instruments.
 - Multiple pages continue serving the last winter image throughout polar day.
   HTTP 200 therefore means only “endpoint exists”; freshness must be decided from
   the instrument timestamp, source header, and station darkness.
@@ -477,6 +482,120 @@ The pages credit Don Hampton and Jason Ahrns (`dhampton@alaska.edu`,
 does not authorize archival or redisplay. Set both active sources to metadata-only
 until UAF grants permission. The [legacy optics realtime/archive page](https://optics.gi.alaska.edu/optics/realtime/)
 documents more historical sites, but should not be scraped without agreement.
+
+### StarVisor Night Sky Patrol
+
+**High-value recommendation.** [StarVisor](https://starvisor.net/) is a nonprofit
+night-sky camera aggregator that is unusually valuable to GAIA because it fills
+the otherwise severe Russian and Siberian longitude gap. The public page listed
+39 fixed cameras from roughly 45–69° N and 173° W–113° E in the 2026-09-08
+snapshot. They are generally fixed, north-facing, low-light wide-angle/IP cameras,
+not calibrated 180° all-sky instruments. That is acceptable for a GAIA context
+layer as long as `camera_geometry: fixed_wide` is recorded and the image is not
+projected as a calibrated all-sky view.
+
+StarVisor exposes stable original-image paths on
+`https://pics.starvisor.net/galleries/orig/`. Its single-camera pages refresh the
+image once per minute by adding a cache-busting query value, while the whole page
+has a one-hour refresh. Match that behavior: discover the station list no more
+than every six hours, poll only a small selected set once per 60–120 seconds
+during local darkness, and never sweep all 39 images every minute.
+
+Initial gap-filling set:
+
+| GAIA candidate | Location | Approx. coordinates | UTC offset shown | Original image URL |
+|---|---|---|---|---|
+| `starvisor-murmansk` | Murmansk | 69 N, 33 E | +3 | `https://pics.starvisor.net/galleries/orig/cap_mur.jpg` |
+| `starvisor-vorkuta` | Vorkuta | 67 N, 64 E | +3 | `https://pics.starvisor.net/galleries/orig/cap_vrk.jpg` |
+| `starvisor-aykhal` | Aykhal | 65 N, 111 E | +9 | `https://pics.starvisor.net/galleries/orig/cap_ayk2.jpg` |
+| `starvisor-provideniya` | Provideniya | 64 N, 173 W | +12 | `https://pics.starvisor.net/galleries/orig/cap_prv.jpg` |
+| `starvisor-solovetsky` | Solovetsky | 65 N, 35 E | +3 | `https://pics.starvisor.net/galleries/orig/cap_slvn.jpg` |
+| `starvisor-strezhevoy` | Strezhevoy | 61 N, 77 E | +7 | `https://pics.starvisor.net/galleries/orig/capture_str.jpg` |
+
+Second-wave subauroral stations include Berezniki (59 N, 57 E), Perm (58 N,
+56 E), Irbit (57 N, 63 E), Kamensk-Uralsky (56 N, 61 E), Yurga (55 N, 84 E),
+and Bagdarin (54 N, 113 E). Coordinates on the public page are rounded to whole
+degrees, so they are discovery coordinates, not calibration coordinates.
+
+The filenames are stable rather than timestamped. Before enabling a station,
+verify whether its overlay contains local time against the published UTC offset
+and store both the verbatim overlay and converted UTC. Otherwise use
+`gaia_received_utc`; a cache-busting query value is not an exposure timestamp.
+
+The footer says © StarVisor and no redistribution licence was located.
+[Joining instructions](https://starvisor.net/joinus/) say cameras upload interval
+snapshots by FTP and give `mail@starvisor.net` and `starvisor.ural@gmail.com` as
+contacts. Ask for a supported feed, exact coordinates/timezones, owner credit,
+retention permission, and capture timestamps. Until then:
+
+```text
+camera_geometry: fixed_wide
+poll_floor_seconds: 60
+timestamp_source: overlay_if_verified_else_gaia_received_utc
+rights_status: permission_required
+archive_status: metadata_only
+publish_status: permission_required
+```
+
+### Community and commercial discovery directories
+
+[Live Aurora Cams](https://www.liveauroracams.com/webcams/) maintains a large
+worldwide directory with provider names and UTC update-status fields. It surfaced
+several useful cameras that an institution-only search missed:
+
+| Candidate | Region/value | Geometry | Acquisition recommendation |
+|---|---|---|---|
+| Chik-Wauk Dark Sky Cam | Grand Marais/Gunflint Trail, Minnesota | fixed all-sky | One-minute page; request permission from museum/UMD partnership |
+| AuroraMAX | Yellowknife, NWT | fixed colour 180° all-sky | Six-second native feed; seek supported still/API or UCalgary route |
+| Isle Royale / Mott Island | Lake Superior, Michigan | fixed park webcams | Extreme-storm coverage; contact US National Park Service |
+| Porjus | northern Sweden | fixed wide view | Resolve Nature of Jokkmokk original source and terms |
+| Gällivare/Dundret | northern Sweden | fixed wide tourism/weather view | Resolve resort owner and stable still image |
+| Kangerlussuaq, Ilulissat, Kulusuk, Qaarsut | Greenland | fixed airport video views | Important gap; contact Greenland Airports rather than scraping YouTube |
+| Northumberland Astro | northern England | fixed streams | Extreme-storm fallback; contact owner for still frames |
+| Banff / Blue Mountains | Canada | fixed weather/resort cameras | Subauroral/extreme-storm fallback |
+
+Treat the directory as discovery metadata, not proof that a source is fresh or
+licensed. Check it at most daily and retrieve from the original owner rather than
+copying aggregator thumbnails.
+
+The [Chik-Wauk page](https://gunflinthistory.org/dark-sky-cam/) says its fixed
+camera captures aurora and Milky Way images and asks viewers to refresh about once
+a minute. It names the museum, historical society, and University of Minnesota
+Duluth/Alworth Planetarium partnership and provides `info@gunflinthistory.org`.
+
+[AuroraMAX](https://auroramax.com/live) documents a fixed 180° colour all-sky
+camera at 62°26′ N, 114°21′ W, four-second exposure, with images about every six
+seconds during dark seasons. GAIA needs only one frame per minute or two and
+should request a supported still-image route rather than reverse-engineering its
+JavaScript stream.
+
+[Aurora Hunter](https://www.aurorahunter.it/en/webcam) is another discovery index
+for Norway, Sweden, Finland, Iceland, Greenland, Alaska, and Canada.
+[Live Aurora Network](https://liveauroranetwork.com/about-us/) operates fixed HD
+video cameras at dark sites in Iceland, Norway, and Alaska. Because it is an
+app/subscription product, pursue a partnership rather than scraping its streams.
+
+[AllSkyCam.com](https://www.allskycam.com/) is a long-running community directory
+where owners publish current full-sky images. It had six active uploaders in the
+snapshot and no major Arctic coverage, but it is worth checking monthly for new
+northern stations. No blanket reuse licence was found.
+
+### AllSky7 Fireball Network
+
+[AllSky7](https://www.allsky7.net/) uses seven fixed cameras per station to cover
+the whole sky to the horizon. Its live view updates every 15 minutes. Although
+optimized for meteors, it is a strong subauroral extreme-storm network with much
+clearer reuse rules than most community camera sites.
+
+The network permits scientific analysis, distribution to research facilities and
+other non-commercial parties, and non-commercial online/media distribution. The
+owner retains copyright. Every use must name the AllSky7 Fireball Network, camera
+owner, and copyright; scientific work has a prescribed acknowledgement.
+
+Discover station status daily, sample no faster than 15 minutes, and retain exact
+owner attribution. Confirm that GAIA's persistent public archive fits the terms
+before bulk collection. Contacts: `support@allsky7.groups.io` and Mike Hankey,
+`mike.hankey@gmail.com`.
 
 ### NIPR PsA and PWING quicklooks
 

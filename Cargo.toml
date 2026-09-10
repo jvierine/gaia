@@ -12,6 +12,7 @@ path = "backend/main.rs"
 anyhow = "1.0"
 axum = { version = "0.8.9", features = ["multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
 ferromagnetic = "0.0.1-alpha.5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 regex = "1.12"

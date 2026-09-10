@@ -558,6 +558,7 @@ dependencies = [
  "axum",
  "chrono",
  "ferromagnetic",
+ "flate2",
  "image",
  "regex",
  "reqwest",

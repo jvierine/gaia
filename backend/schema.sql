@@ -50,3 +50,26 @@ CREATE INDEX IF NOT EXISTS idx_crawler_runs_source ON crawler_runs(source_id, st
 CREATE INDEX IF NOT EXISTS idx_mosaics_observation ON mosaics(observation_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_suggestions_state ON suggestions(state, created_utc DESC);
 PRAGMA optimize;
+-- Per-star brightness time series used to measure cloud thickness. One row per
+-- camera, frame, star and colour channel. Sky position and image position are
+-- both retained, along with every fitted Gaussian parameter and the background,
+-- so a measurement can be re-examined without refitting.
+CREATE TABLE IF NOT EXISTS star_photometry(
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  image_id TEXT NOT NULL REFERENCES images(id),
+  observation_utc TEXT NOT NULL,
+  star_key TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  ra_hours_j2000 REAL NOT NULL, dec_deg_j2000 REAL NOT NULL, vt_mag REAL NOT NULL,
+  azimuth_deg REAL NOT NULL, elevation_deg REAL NOT NULL,
+  predicted_x REAL NOT NULL, predicted_y REAL NOT NULL,
+  centroid_x REAL, centroid_y REAL, centroid_offset_px REAL,
+  background REAL, amplitude REAL,
+  sigma_major REAL, sigma_minor REAL, angle_deg REAL,
+  flux REAL, rms_residual REAL,
+  PRIMARY KEY(source_id,image_id,star_key,channel)
+);
+CREATE INDEX IF NOT EXISTS star_photometry_series
+  ON star_photometry(source_id,star_key,channel,observation_utc);
+CREATE INDEX IF NOT EXISTS star_photometry_frame
+  ON star_photometry(source_id,observation_utc);

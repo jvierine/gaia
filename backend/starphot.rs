@@ -596,6 +596,125 @@ pub fn cloud_weight(optical_depth: f64, floor: f64) -> f64 {
     floor + (1.0 - floor) * (-optical_depth.max(0.0)).exp()
 }
 
+/// A stable identity for a catalogue star. The WISCAT payload carries no
+/// identifier, only position and magnitude, so the key is derived from the
+/// J2000 position and is therefore reproducible across catalogue rebuilds.
+pub fn star_key(ra_hours: f64, dec_deg: f64) -> String {
+    format!("{ra_hours:.5}{dec_deg:+.5}")
+}
+
+/// One star measured in one frame, in one colour channel.
+#[derive(Debug, Clone)]
+pub struct StarMeasurement {
+    pub star_key: String,
+    pub channel: &'static str,
+    pub ra_hours: f64,
+    pub dec_deg: f64,
+    pub vt_mag: f64,
+    /// Sky position at the observation time, from the AIDA ephemeris.
+    pub azimuth_deg: f64,
+    pub elevation_deg: f64,
+    /// Where the lens model says the star should land.
+    pub predicted_x: f64,
+    pub predicted_y: f64,
+    /// The fit, present only when it converged within the acceptance radius.
+    pub fit: Option<GaussianFit>,
+    pub centroid_offset_px: Option<f64>,
+}
+
+/// The colour channels measured per star, plus the panchromatic mean. Fitting
+/// each channel separately matters because cloud extinction is wavelength
+/// dependent and the cameras differ in passband.
+pub const CHANNELS: [&str; 4] = ["r", "g", "b", "mean"];
+
+fn channel_value(pixel: &[u8], channel: usize) -> f64 {
+    match channel {
+        0 => pixel[0] as f64,
+        1 => pixel[1] as f64,
+        2 => pixel[2] as f64,
+        _ => (pixel[0] as f64 + pixel[1] as f64 + pixel[2] as f64) / 3.0,
+    }
+}
+
+/// Measure every catalogue star that this camera can see in one frame.
+///
+/// `patch_half` sets the fitting box, `max_offset_px` the acceptance radius
+/// between the fitted centroid and the predicted position, and
+/// `min_elevation_deg` excludes the horizon where obstruction and extinction
+/// dominate. A star whose fit lands outside the radius is retained with
+/// `fit: None` so the record shows it was looked for and not found, which is
+/// itself evidence of cloud.
+#[allow(clippy::too_many_arguments)]
+pub fn measure_frame(
+    image: &image::RgbImage,
+    optpar: &[f64],
+    lat_deg: f64,
+    lon_deg: f64,
+    unix_seconds: f64,
+    stars: &[Star],
+    patch_half: usize,
+    max_offset_px: f64,
+    min_elevation_deg: f64,
+) -> Vec<StarMeasurement> {
+    let (width, height) = (image.width() as f64, image.height() as f64);
+    let mut out = Vec::new();
+    let side = patch_half * 2 + 1;
+    for star in stars {
+        let (az, ze) = star_az_ze(star.ra_hours, star.dec_deg, unix_seconds, lat_deg, lon_deg);
+        let (az_deg, el_deg) = (az / DEG, 90.0 - ze / DEG);
+        if el_deg < min_elevation_deg {
+            continue;
+        }
+        let Some((px, py)) =
+            star_pixel(az_deg, el_deg, optpar, width, height, patch_half as f64)
+        else {
+            continue;
+        };
+        let (x0, y0) = (px.round() as i64 - patch_half as i64, py.round() as i64 - patch_half as i64);
+        let key = star_key(star.ra_hours, star.dec_deg);
+        for (index, channel) in CHANNELS.iter().enumerate() {
+            let mut patch = Vec::with_capacity(side * side);
+            for row in 0..side {
+                for column in 0..side {
+                    let x = (x0 + column as i64).clamp(0, image.width() as i64 - 1) as u32;
+                    let y = (y0 + row as i64).clamp(0, image.height() as i64 - 1) as u32;
+                    patch.push(channel_value(&image.get_pixel(x, y).0, index));
+                }
+            }
+            let fit = fit_gaussian(&patch, side, side);
+            // Patch coordinates back to image coordinates before comparing.
+            let (fit, offset) = match fit {
+                Some(f) => {
+                    let cx = x0 as f64 + f.centre_x;
+                    let cy = y0 as f64 + f.centre_y;
+                    let offset = ((cx - px).powi(2) + (cy - py).powi(2)).sqrt();
+                    let placed = GaussianFit { centre_x: cx, centre_y: cy, ..f };
+                    if offset <= max_offset_px {
+                        (Some(placed), Some(offset))
+                    } else {
+                        (None, Some(offset))
+                    }
+                }
+                None => (None, None),
+            };
+            out.push(StarMeasurement {
+                star_key: key.clone(),
+                channel,
+                ra_hours: star.ra_hours,
+                dec_deg: star.dec_deg,
+                vt_mag: star.vt_mag,
+                azimuth_deg: az_deg,
+                elevation_deg: el_deg,
+                predicted_x: px,
+                predicted_y: py,
+                fit,
+                centroid_offset_px: offset,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,6 +1098,102 @@ mod tests {
         let expected = std::f64::consts::TAU * 150.0 * 2.4 * 2.4;
         assert!((fit.flux - expected).abs() / expected < 0.02, "flux {}", fit.flux);
         assert!((fit.centre_x - 8.0).abs() < 0.02 && (fit.centre_y - 8.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn measure_frame_finds_planted_stars_and_flags_missing_ones() {
+        // Plant Gaussians where the real Kiruna lens model predicts, then check
+        // recovery. The candidate list is filtered by the same elevation floor
+        // measure_frame uses, so the test cannot plant a star the code excludes.
+        let optpar = KIRUNA.to_vec();
+        let (w, h) = (2832u32, 2832u32);
+        let (lat, lon, unix) = (67.84, 20.41, 1789077600.0);
+        let min_elevation = 10.0;
+        let candidates = [
+            Star { ra_hours: 2.5301944, dec_deg: 89.2641111, vt_mag: 2.02 },
+            Star { ra_hours: 18.6156, dec_deg: 38.7837, vt_mag: 0.03 },
+            Star { ra_hours: 20.6905, dec_deg: 45.2803, vt_mag: 1.25 },
+            Star { ra_hours: 5.2782, dec_deg: 45.9980, vt_mag: 0.08 },
+            Star { ra_hours: 14.2610, dec_deg: 19.1824, vt_mag: -0.05 },
+        ];
+        let mut usable = Vec::new();
+        for star in candidates {
+            let (az, ze) = star_az_ze(star.ra_hours, star.dec_deg, unix, lat, lon);
+            let (az_deg, el_deg) = (az / DEG, 90.0 - ze / DEG);
+            if el_deg < min_elevation {
+                continue;
+            }
+            if let Some((px, py)) =
+                star_pixel(az_deg, el_deg, &optpar, w as f64, h as f64, 9.0)
+            {
+                usable.push((star, px, py));
+            }
+        }
+        assert!(usable.len() >= 3, "need three usable stars, got {}", usable.len());
+        // Displace the last usable star past the acceptance radius.
+        let displaced = usable.len() - 1;
+        let mut image = image::RgbImage::from_pixel(w, h, image::Rgb([20, 18, 22]));
+        for (index, (_, px, py)) in usable.iter().enumerate() {
+            let shift = if index == displaced { 7.0 } else { 0.0 };
+            for dy in -9i64..=9 {
+                for dx in -9i64..=9 {
+                    let (x, y) = ((px + shift).round() as i64 + dx, py.round() as i64 + dy);
+                    if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
+                        continue;
+                    }
+                    let r2 = (dx * dx + dy * dy) as f64;
+                    let value = 200.0 * (-0.5 * r2 / 4.0).exp();
+                    let pixel = image.get_pixel_mut(x as u32, y as u32);
+                    for c in 0..3 {
+                        pixel.0[c] = (pixel.0[c] as f64 + value).min(255.0) as u8;
+                    }
+                }
+            }
+        }
+        let stars: Vec<Star> = usable.iter().map(|(s, _, _)| *s).collect();
+        let measured =
+            measure_frame(&image, &optpar, lat, lon, unix, &stars, 9, 3.0, min_elevation);
+        assert_eq!(
+            measured.len(),
+            usable.len() * CHANNELS.len(),
+            "one row per usable star and channel"
+        );
+        let displaced_key = star_key(usable[displaced].0.ra_hours, usable[displaced].0.dec_deg);
+        let mut found = 0;
+        for m in &measured {
+            if m.star_key == displaced_key {
+                // Looked for and not found: the record and the distance are kept,
+                // which is itself evidence about the sky.
+                assert!(m.fit.is_none(), "a displaced star must not be accepted");
+                assert!(m.centroid_offset_px.unwrap() > 3.0);
+                continue;
+            }
+            let fit = m.fit.as_ref().unwrap_or_else(|| {
+                panic!("planted star {} channel {} should be found", m.star_key, m.channel)
+            });
+            found += 1;
+            assert!(m.centroid_offset_px.unwrap() <= 3.0);
+            assert!(fit.flux > 0.0);
+            assert!((fit.background - 20.0).abs() < 12.0, "background {}", fit.background);
+            // Centroid is reported in image coordinates, not patch coordinates.
+            assert!((fit.centre_x - m.predicted_x).abs() < 3.0);
+            assert!((fit.centre_y - m.predicted_y).abs() < 3.0);
+        }
+        assert_eq!(found, (usable.len() - 1) * CHANNELS.len());
+        // Sky and image position are retained on every row, found or not.
+        assert!(measured.iter().all(|m| m.elevation_deg >= min_elevation
+            && (0.0..360.0).contains(&m.azimuth_deg)
+            && m.predicted_x.is_finite()
+            && m.predicted_y.is_finite()));
+        assert!(measured.iter().any(|m| m.channel == "mean"));
+    }
+
+    #[test]
+    fn star_keys_are_stable_and_distinct() {
+        assert_eq!(star_key(6.7524, -16.7161), star_key(6.75240, -16.71610));
+        assert_ne!(star_key(6.7524, -16.7161), star_key(6.7524, 16.7161));
+        assert!(star_key(2.5301944, 89.2641111).contains('+'));
+        assert!(star_key(6.7524, -16.7161).contains('-'));
     }
 
     #[test]

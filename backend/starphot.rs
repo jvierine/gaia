@@ -298,11 +298,26 @@ pub struct GaussianFit {
     pub amplitude: f64,
     pub centre_x: f64,
     pub centre_y: f64,
+    /// Major axis width. Always the larger of the two, with `angle_deg` naming
+    /// its direction, so an ellipse has one representation rather than two.
     pub sigma_x: f64,
+    /// Minor axis width.
     pub sigma_y: f64,
+    /// Position angle of the major axis from the image x axis, in degrees,
+    /// wrapped to [-90, 90). Meaningless for a round star; see `elongation`.
+    pub angle_deg: f64,
     /// Total intensity above background, the analytic integral of the fit.
+    /// Rotation is area preserving, so this stays 2 pi A sx sy.
     pub flux: f64,
     pub rms_residual: f64,
+}
+
+impl GaussianFit {
+    /// Ratio of major to minor width. At 1 the star is round and the angle
+    /// carries no information.
+    pub fn elongation(&self) -> f64 {
+        if self.sigma_y > 0.0 { self.sigma_x / self.sigma_y } else { f64::INFINITY }
+    }
 }
 
 /// Solve a small symmetric system by Gaussian elimination with partial pivoting.
@@ -342,9 +357,19 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     if x.iter().all(|v| v.is_finite()) { Some(x) } else { None }
 }
 
-/// Fit `background + amplitude * exp(-((x-cx)^2/2sx^2 + (y-cy)^2/2sy^2))` to a
-/// patch by Levenberg-Marquardt with an analytic Jacobian. `patch` is row-major
-/// `width * height`, and the returned centre is in patch coordinates.
+/// Fit a rotated elliptical Gaussian
+/// `background + amplitude * exp(-0.5 (u^2 + v^2))`, where `u` and `v` are the
+/// offsets along the ellipse axes divided by their widths, by
+/// Levenberg-Marquardt with an analytic Jacobian over seven parameters:
+/// background, amplitude, both centroid coordinates, both widths and the
+/// position angle. `patch` is row-major `width * height` and the returned centre
+/// is in patch coordinates.
+///
+/// The angle matters because star images are not always round: trailing during
+/// the exposure, coma and astigmatism off axis, and anisotropic binning all
+/// produce elongated images whose flux an axis-aligned fit would misestimate.
+/// The starting angle comes from the intensity-weighted second moments, so an
+/// already-elongated star does not have to be rotated into place by the solver.
 pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<GaussianFit> {
     if width < 5 || height < 5 || patch.len() != width * height {
         return None;
@@ -360,7 +385,7 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
     }
     border.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let background0 = border[border.len() / 2];
-    // Peak pixel as the starting centre.
+    // Peak pixel, then intensity-weighted second moments for the shape.
     let mut peak = (0usize, 0usize, f64::NEG_INFINITY);
     for y in 1..height - 1 {
         for x in 1..width - 1 {
@@ -371,51 +396,78 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
         }
     }
     let amplitude0 = (peak.2 - background0).max(1e-6);
-    let mut theta = [
-        background0,
-        amplitude0,
-        peak.0 as f64,
-        peak.1 as f64,
-        1.5,
-        1.5,
-    ];
-    let residuals = |t: &[f64; 6]| -> f64 {
-        let mut sum = 0.0;
+    let (mut sum, mut sx, mut sy) = (0.0, 0.0, 0.0);
+    for y in 0..height {
+        for x in 0..width {
+            let w = (patch[y * width + x] - background0).max(0.0);
+            sum += w;
+            sx += w * x as f64;
+            sy += w * y as f64;
+        }
+    }
+    let (cx0, cy0) = if sum > 0.0 {
+        (sx / sum, sy / sum)
+    } else {
+        (peak.0 as f64, peak.1 as f64)
+    };
+    let (mut mxx, mut myy, mut mxy) = (0.0, 0.0, 0.0);
+    if sum > 0.0 {
         for y in 0..height {
             for x in 0..width {
-                let model = gaussian_value(t, x as f64, y as f64);
-                let d = patch[y * width + x] - model;
-                sum += d * d;
+                let w = (patch[y * width + x] - background0).max(0.0);
+                let (dx, dy) = (x as f64 - cx0, y as f64 - cy0);
+                mxx += w * dx * dx;
+                myy += w * dy * dy;
+                mxy += w * dx * dy;
             }
         }
-        sum
+        mxx /= sum;
+        myy /= sum;
+        mxy /= sum;
+    }
+    let angle0 = 0.5 * (2.0 * mxy).atan2(mxx - myy);
+    let half = 0.5 * (mxx + myy);
+    let spread = (0.25 * (mxx - myy) * (mxx - myy) + mxy * mxy).max(0.0).sqrt();
+    let limit = (width.min(height) as f64) / 3.0;
+    let major0 = (half + spread).max(0.09).sqrt().clamp(0.4, limit);
+    let minor0 = (half - spread).max(0.09).sqrt().clamp(0.4, limit);
+    let mut theta = [background0, amplitude0, cx0, cy0, major0, minor0, angle0];
+    let residuals = |t: &[f64; 7]| -> f64 {
+        let mut total = 0.0;
+        for y in 0..height {
+            for x in 0..width {
+                let d = patch[y * width + x] - gaussian_value(t, x as f64, y as f64);
+                total += d * d;
+            }
+        }
+        total
     };
     let mut lambda = 1e-3;
     let mut cost = residuals(&theta);
-    for _ in 0..80 {
-        // Normal equations with the analytic Jacobian.
-        let mut jtj = vec![vec![0.0; 6]; 6];
-        let mut jtr = vec![0.0; 6];
+    for _ in 0..120 {
+        let mut jtj = vec![vec![0.0; 7]; 7];
+        let mut jtr = vec![0.0; 7];
         for y in 0..height {
             for x in 0..width {
-                let (fx, fy) = (x as f64, y as f64);
-                let (model, jac) = gaussian_value_and_jacobian(&theta, fx, fy);
+                let (model, jac) = gaussian_value_and_jacobian(&theta, x as f64, y as f64);
                 let residual = patch[y * width + x] - model;
-                for i in 0..6 {
+                for i in 0..7 {
                     jtr[i] += jac[i] * residual;
-                    for j in 0..6 {
+                    for j in 0..7 {
                         jtj[i][j] += jac[i] * jac[j];
                     }
                 }
             }
         }
         let mut improved = false;
-        for _ in 0..12 {
+        for _ in 0..14 {
             let mut damped = jtj.clone();
-            for i in 0..6 {
+            for i in 0..7 {
                 damped[i][i] *= 1.0 + lambda;
                 if damped[i][i].abs() < 1e-14 {
-                    damped[i][i] = lambda;
+                    // A round star leaves the angle unconstrained; damping alone
+                    // keeps the system solvable and the angle step near zero.
+                    damped[i][i] = lambda.max(1e-12);
                 }
             }
             let Some(step) = solve(damped, jtr.clone()) else {
@@ -423,7 +475,7 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
                 continue;
             };
             let mut candidate = theta;
-            for i in 0..6 {
+            for i in 0..7 {
                 candidate[i] += step[i];
             }
             candidate[4] = candidate[4].abs().clamp(0.3, width as f64);
@@ -449,40 +501,59 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
     if theta[1] <= 0.0 || !theta.iter().all(|v| v.is_finite()) {
         return None;
     }
-    let flux = std::f64::consts::TAU * theta[1] * theta[4] * theta[5];
+    // One canonical form: major axis first, angle wrapped to [-90, 90).
+    let (mut major, mut minor, mut angle) = (theta[4], theta[5], theta[6]);
+    if minor > major {
+        std::mem::swap(&mut major, &mut minor);
+        angle += std::f64::consts::FRAC_PI_2;
+    }
+    let mut angle_deg = (angle / DEG).rem_euclid(180.0);
+    if angle_deg >= 90.0 {
+        angle_deg -= 180.0;
+    }
     Some(GaussianFit {
         background: theta[0],
         amplitude: theta[1],
         centre_x: theta[2],
         centre_y: theta[3],
-        sigma_x: theta[4],
-        sigma_y: theta[5],
-        flux,
+        sigma_x: major,
+        sigma_y: minor,
+        angle_deg,
+        flux: std::f64::consts::TAU * theta[1] * major * minor,
         rms_residual: (cost / (width * height) as f64).sqrt(),
     })
 }
 
-fn gaussian_value(t: &[f64; 6], x: f64, y: f64) -> f64 {
-    let dx = (x - t[2]) / t[4];
-    let dy = (y - t[3]) / t[5];
-    t[0] + t[1] * (-0.5 * (dx * dx + dy * dy)).exp()
+/// Offsets along the ellipse axes, divided by their widths.
+fn gaussian_axes(t: &[f64; 7], x: f64, y: f64) -> (f64, f64) {
+    let (dx, dy) = (x - t[2], y - t[3]);
+    let (c, s) = (t[6].cos(), t[6].sin());
+    ((dx * c + dy * s) / t[4], (-dx * s + dy * c) / t[5])
 }
 
-fn gaussian_value_and_jacobian(t: &[f64; 6], x: f64, y: f64) -> (f64, [f64; 6]) {
-    let dx = x - t[2];
-    let dy = y - t[3];
+fn gaussian_value(t: &[f64; 7], x: f64, y: f64) -> f64 {
+    let (u, v) = gaussian_axes(t, x, y);
+    t[0] + t[1] * (-0.5 * (u * u + v * v)).exp()
+}
+
+fn gaussian_value_and_jacobian(t: &[f64; 7], x: f64, y: f64) -> (f64, [f64; 7]) {
+    let (u, v) = gaussian_axes(t, x, y);
     let (sx, sy) = (t[4], t[5]);
-    let e = (-0.5 * ((dx / sx).powi(2) + (dy / sy).powi(2))).exp();
+    let (c, s) = (t[6].cos(), t[6].sin());
+    let e = (-0.5 * (u * u + v * v)).exp();
     let peak = t[1] * e;
     (
         t[0] + peak,
         [
             1.0,
             e,
-            peak * dx / (sx * sx),
-            peak * dy / (sy * sy),
-            peak * dx * dx / (sx * sx * sx),
-            peak * dy * dy / (sy * sy * sy),
+            // d/dcx and d/dcy carry the rotation through both axes.
+            peak * (u * c / sx - v * s / sy),
+            peak * (u * s / sx + v * c / sy),
+            peak * u * u / sx,
+            peak * v * v / sy,
+            // Vanishes when the widths are equal: a round star fixes no angle.
+            peak * u * v * (sx / sy - sy / sx),
         ],
     )
 }
@@ -778,7 +849,7 @@ mod tests {
     }
 
     /// Render a noiseless star patch for fitting tests.
-    fn synth(w: usize, h: usize, t: [f64; 6]) -> Vec<f64> {
+    fn synth(w: usize, h: usize, t: [f64; 7]) -> Vec<f64> {
         (0..w * h)
             .map(|i| gaussian_value(&t, (i % w) as f64, (i / w) as f64))
             .collect()
@@ -786,7 +857,7 @@ mod tests {
 
     #[test]
     fn gaussian_fit_recovers_a_known_star() {
-        let truth = [12.0, 240.0, 8.3, 7.6, 1.8, 2.1];
+        let truth = [12.0, 240.0, 8.3, 7.6, 2.1, 1.8, 0.0];
         let patch = synth(17, 17, truth);
         let fit = fit_gaussian(&patch, 17, 17).expect("fit");
         assert!((fit.background - truth[0]).abs() < 0.05, "background {}", fit.background);
@@ -795,6 +866,8 @@ mod tests {
         assert!((fit.centre_y - truth[3]).abs() < 0.01, "cy {}", fit.centre_y);
         assert!((fit.sigma_x - truth[4]).abs() < 0.02, "sx {}", fit.sigma_x);
         assert!((fit.sigma_y - truth[5]).abs() < 0.02, "sy {}", fit.sigma_y);
+        // Axis aligned, so the recovered angle must be near zero.
+        assert!(fit.angle_deg.abs() < 2.0, "angle {}", fit.angle_deg);
         // Total intensity above background is the analytic integral.
         let expected = std::f64::consts::TAU * truth[1] * truth[4] * truth[5];
         assert!(
@@ -808,7 +881,7 @@ mod tests {
     #[test]
     fn gaussian_fit_is_stable_against_noise_and_refuses_junk() {
         // Deterministic pseudo-noise so the test cannot flake.
-        let truth = [30.0, 180.0, 9.0, 9.0, 2.0, 2.0];
+        let truth = [30.0, 180.0, 9.0, 9.0, 2.0, 2.0, 0.0];
         let mut patch = synth(19, 19, truth);
         let mut seed = 12345u64;
         for value in patch.iter_mut() {
@@ -836,13 +909,76 @@ mod tests {
     fn gaussian_fit_locates_an_offset_star_so_the_caller_can_reject_it() {
         // The 3-pixel acceptance is a caller policy; the fit must report the true
         // centre so that policy can be applied.
-        let truth = [10.0, 200.0, 13.5, 4.5, 1.6, 1.6];
+        let truth = [10.0, 200.0, 13.5, 4.5, 1.6, 1.6, 0.0];
         let patch = synth(19, 19, truth);
         let fit = fit_gaussian(&patch, 19, 19).expect("fit");
         let offset = ((fit.centre_x - 9.0).powi(2) + (fit.centre_y - 9.0).powi(2)).sqrt();
         assert!(offset > 3.0, "centroid offset {offset} should exceed the 3 px limit");
         assert!((fit.centre_x - truth[2]).abs() < 0.05);
         assert!((fit.centre_y - truth[3]).abs() < 0.05);
+    }
+
+    #[test]
+    fn gaussian_fit_recovers_a_rotated_elongated_star() {
+        // A trailed or astigmatic image: clearly elliptical and clearly rotated.
+        for truth_angle_deg in [-70.0, -35.0, -5.0, 0.0, 20.0, 52.0, 80.0] {
+            let truth = [
+                18.0,
+                300.0,
+                10.4,
+                9.7,
+                3.2,
+                1.3,
+                truth_angle_deg * DEG,
+            ];
+            let patch = synth(25, 25, truth);
+            let fit = fit_gaussian(&patch, 25, 25).expect("fit");
+            assert!((fit.sigma_x - 3.2).abs() < 0.05, "major {} at {truth_angle_deg}", fit.sigma_x);
+            assert!((fit.sigma_y - 1.3).abs() < 0.05, "minor {} at {truth_angle_deg}", fit.sigma_y);
+            assert!((fit.centre_x - 10.4).abs() < 0.02 && (fit.centre_y - 9.7).abs() < 0.02);
+            // Compare angles modulo 180, since an ellipse has no head or tail.
+            let delta = (fit.angle_deg - truth_angle_deg + 90.0).rem_euclid(180.0) - 90.0;
+            assert!(
+                delta.abs() < 1.0,
+                "angle {} vs truth {truth_angle_deg}",
+                fit.angle_deg
+            );
+            // Canonical form: major first, angle in [-90, 90).
+            assert!(fit.sigma_x >= fit.sigma_y);
+            assert!(fit.angle_deg >= -90.0 && fit.angle_deg < 90.0);
+            assert!((fit.elongation() - 3.2 / 1.3).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn rotation_does_not_change_the_flux() {
+        // Rotation is area preserving, so the integral stays 2 pi A sx sy. An
+        // axis-aligned fit would instead misestimate an elongated rotated star.
+        let expected = std::f64::consts::TAU * 260.0 * 3.0 * 1.2;
+        for angle_deg in [0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0, 135.0] {
+            let truth = [9.0, 260.0, 12.0, 12.0, 3.0, 1.2, angle_deg * DEG];
+            let patch = synth(27, 27, truth);
+            let fit = fit_gaussian(&patch, 27, 27).expect("fit");
+            assert!(
+                (fit.flux - expected).abs() / expected < 0.02,
+                "flux {} at {angle_deg} deg vs analytic {expected}",
+                fit.flux
+            );
+        }
+    }
+
+    #[test]
+    fn a_round_star_still_fits_though_its_angle_is_meaningless() {
+        // With equal widths the angle Jacobian vanishes; the solve must stay
+        // stable and the flux must still be right.
+        let truth = [22.0, 150.0, 8.0, 8.0, 2.4, 2.4, 0.0];
+        let patch = synth(21, 21, truth);
+        let fit = fit_gaussian(&patch, 21, 21).expect("round fit");
+        assert!((fit.elongation() - 1.0).abs() < 0.05, "elongation {}", fit.elongation());
+        assert!(fit.angle_deg.is_finite());
+        let expected = std::f64::consts::TAU * 150.0 * 2.4 * 2.4;
+        assert!((fit.flux - expected).abs() / expected < 0.02, "flux {}", fit.flux);
+        assert!((fit.centre_x - 8.0).abs() < 0.02 && (fit.centre_y - 8.0).abs() < 0.02);
     }
 
     #[test]

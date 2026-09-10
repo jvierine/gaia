@@ -105,4 +105,30 @@ unique temporary files and atomic rename. Blending equations, source selection,
 GAIA_PUBLISH_ALL, and chronological manifest ordering are unchanged.
 The installed j gaia-publish.service sets CPUQuota=1600%, MemoryMax=12G and
 GAIA_PREPROCESS_WORKERS=16. The existing archive rebuild was NOT interrupted;
-its next publisher invocation loads the new executable.
+its next publisher invocation loads the new executable. The archive phase was
+observed using about 13.7 CPU cores and completed generation with the new pool.
+
+## Verified results (2026-09-10 UTC)
+
+- The full archive rebuild and atomic public delivery finished successfully
+  at approximately 16:09 UTC (service Result=success, exit 0). Both hosts serve
+  `/gaia/public/archive-manifest.json` with 2,664 timestamps, and the normal
+  user publication timer is active again. Open `/gaia/?archive=1` for this record.
+- Reliability changes are pushed in `99de622` and `eaef0bf`; worker changes and
+  cache concurrency regression coverage are in `8a44e68` and `8c38347`.
+- Rust tests: 26 passed, one optional upstream test ignored. Both frontend
+  builds succeeded. Public and admin live browser checks showed rendered
+  composites, working Sun-up vertical tilt, and zero reported WebGL errors.
+- The 16:03 verified live publication had 1,432 composites and no missing files
+  among 2,908 referenced assets. The full rebuild generated 2,664 timestamps
+  from retained calibrated observations, including sparse older records back
+  to 2026-04-13; this is not continuous coverage between those dates.
+- Actual bgu001 access was checked: he can read this handoff, write the shared
+  publication lock, and use his own key/account to write both the public GUI
+  and generated-asset directories on juha.no.
+- HTTP checks verified successful manifest delivery with gzip, missing assets
+  returning 404 with no-store, and the public admin API returning 403.
+- Remaining limitations: uncalibrated raw images are retained but cannot enter
+  the globe until calibrated; missing source observations cannot be invented.
+  The local serving cache still needs reference-aware garbage collection;
+  do not delete assets by age alone. Monitor `/mnt/gaia-public` disk capacity.

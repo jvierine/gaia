@@ -130,6 +130,62 @@ pub fn star_az_ze(
     (azimuth, zenith)
 }
 
+/// Local east/north/up direction rotated into the camera frame, the row-vector
+/// product `sky . R` that `wisc_lens.camera_frame_vector` computes. `p` is the
+/// optpar with the leading model number already stripped.
+pub fn camera_frame_vector(az_deg: f64, el_deg: f64, p: &[f64]) -> [f64; 3] {
+    let az = az_deg * DEG;
+    let ze = (90.0 - el_deg) * DEG;
+    let sky = [ze.sin() * az.sin(), ze.sin() * az.cos(), ze.cos()];
+    let rot = camera_rotation(p[2], p[3], p[4]);
+    [
+        sky[0] * rot[0][0] + sky[1] * rot[1][0] + sky[2] * rot[2][0],
+        sky[0] * rot[0][1] + sky[1] * rot[1][1] + sky[2] * rot[2][1],
+        sky[0] * rot[0][2] + sky[1] * rot[1][2] + sky[2] * rot[2][2],
+    ]
+}
+
+/// Rectilinear models project through `s1/s3`, so they only see the forward
+/// hemisphere and diverge as a direction approaches their focal plane. The
+/// fisheye models map `theta = atan2(radial, s3)` and legitimately image
+/// directions with `s3 <= 0`, which must not be discarded.
+fn is_rectilinear(model: i32) -> bool {
+    model == 1 || model == BROWN_CONRADY_OPTMOD
+}
+
+/// Pixel of a star that this camera can actually measure, or None. The archive
+/// holds six different lens models, from all-sky fisheyes that cover the whole
+/// sky to a narrow rectilinear lens covering under a third of it, so the field
+/// test has to come from the camera's own model rather than be assumed. `margin`
+/// is the room a fitting patch needs inside the frame.
+pub fn star_pixel(
+    az_deg: f64,
+    el_deg: f64,
+    optpar: &[f64],
+    width: f64,
+    height: f64,
+    margin: f64,
+) -> Option<(f64, f64)> {
+    if optpar.len() < 9 {
+        return None;
+    }
+    let model = optpar[0] as i32;
+    if is_rectilinear(model) {
+        // Behind or on the focal plane a rectilinear projection is meaningless;
+        // returning it would hand back coordinates of order 1e10.
+        let s3 = camera_frame_vector(az_deg, el_deg, &optpar[1..])[2];
+        if !(s3 > 1e-6) {
+            return None;
+        }
+    }
+    let (x, y) = az_el_to_pixel(az_deg, el_deg, optpar, width, height)?;
+    let inside = x >= margin
+        && y >= margin
+        && x <= width - 1.0 - margin
+        && y <= height - 1.0 - margin;
+    if inside { Some((x, y)) } else { None }
+}
+
 /// Project azimuth/elevation in degrees to 0-based pixel coordinates of the
 /// original image, using the camera's AIDA/WISC lens model. `optpar` carries the
 /// model number in element zero, as stored in the calibration HDF5.
@@ -145,15 +201,7 @@ pub fn az_el_to_pixel(
     }
     let model = optpar[0] as i32;
     let p = &optpar[1..];
-    // Local east/north/up direction, then into the camera frame.
-    let az = az_deg * DEG;
-    let ze = (90.0 - el_deg) * DEG;
-    let sky = [ze.sin() * az.sin(), ze.sin() * az.cos(), ze.cos()];
-    let rot = camera_rotation(p[2], p[3], p[4]);
-    // camera_frame_vector multiplies the row vector by the rotation: s_j = sum_i sky_i R_ij.
-    let s1 = sky[0] * rot[0][0] + sky[1] * rot[1][0] + sky[2] * rot[2][0];
-    let s2 = sky[0] * rot[0][1] + sky[1] * rot[1][1] + sky[2] * rot[2][1];
-    let s3 = sky[0] * rot[0][2] + sky[1] * rot[1][2] + sky[2] * rot[2][2];
+    let [s1, s2, s3] = camera_frame_vector(az_deg, el_deg, p);
     let radial = s1.hypot(s2);
     let (f1, f2, du, dv, alpha) = (p[0], p[1], p[5], p[6], p[7]);
     let (u_norm, v_norm) = if radial <= 1e-12 {
@@ -639,6 +687,94 @@ mod tests {
         let mut unknown = KIRUNA;
         unknown[0] = 99.0;
         assert!(az_el_to_pixel(0.0, 45.0, &unknown, w, h).is_none());
+    }
+
+    /// One real archived calibration per lens model actually in use, with golden
+    /// pixel positions generated from wisc_lens.py. The archive holds optmod 2,
+    /// 3, 4, 6, 12 and Brown-Conrady 20, so nothing may assume a single model.
+    #[allow(clippy::type_complexity)]
+    fn real_models() -> Vec<(&'static str, Vec<f64>, f64, f64, Vec<(f64, f64, f64, f64)>)> {
+        vec![
+            ("optmod 2 irf-kiruna-alis", vec![2.0,0.7068216520250072,0.7070094774383674,-1.5099938871193461,-1.288201852920821,-170.19172827706473,0.007550383264794,-0.00418607265861641,0.47912975681992587], 2832.0, 2832.0,
+             vec![(0.0,5.0,1208.1293507590,100.3540532616),(140.0,20.0,868.4994713983,2352.3628253871),(280.0,35.0,2248.7508276463,1092.3441571193),(60.0,55.0,866.7666930445,1188.2963405433),(200.0,70.0,1574.3312327532,1675.3506049381)]),
+            ("optmod 3 ucalgary-smileasi_pfrr", vec![3.0,-0.2927734251609883,0.29277342529462974,0.39928394244543053,1.469875411915926,188.00220882691005,0.00488281064159167,0.0019531271725367,0.9999999991977904], 512.0, 512.0,
+             vec![(0.0,5.0,287.7903703882,39.5735160170),(140.0,20.0,354.5204876389,414.0169181857),(280.0,35.0,119.4762874209,213.9360812184),(60.0,55.0,340.7081793976,225.0432211135),(200.0,70.0,231.3465227808,305.8530340165)]),
+            ("optmod 4 ucalgary-smileasi_gill", vec![4.0,-0.2927734252507357,0.29277342541599244,4.48477356487659,-3.4591008800656313,-175.5039014342125,0.00878906320826154,-0.00756835917505016,1.000000001573116], 512.0, 512.0,
+             vec![(0.0,5.0,276.0716715797,20.2480407232),(140.0,20.0,356.5455229967,389.0910058630),(280.0,35.0,108.4718439133,207.8421335669),(60.0,55.0,331.8890106161,203.0510327405),(200.0,70.0,227.3931137260,289.1632329920)]),
+            ("optmod 6 ucalgary-rego_gill", vec![6.0,-0.6172272925103574,-0.617222824368368,-0.1168252781882293,-0.9592419871126202,0.7506821914958062,0.01336127470522225,-0.00051179405820558,1.0], 256.0, 256.0,
+             vec![(0.0,5.0,128.9899826615,19.1576700943),(140.0,20.0,73.2332189628,196.2162922483),(280.0,35.0,202.0039652904,112.4009882182),(60.0,55.0,88.7428547251,102.4838647728),(200.0,70.0,139.9581141169,151.2288247804)]),
+            ("optmod 12 ucalgary-smileasi_fsmi", vec![12.0,-0.2927734250138068,0.29277342555496505,1.7275466741913352,-0.6447136811292984,147.01600398809163,0.00830078169684825,-0.00048827916267577,0.0], 512.0, 512.0,
+             vec![(0.0,5.0,136.7682971632,67.1139121949),(140.0,20.0,430.0520136606,308.1236237311),(280.0,35.0,122.1941974308,312.2766149537),(60.0,55.0,296.5394777910,174.4162770068),(200.0,70.0,266.5000717120,306.7454354179)]),
+            ("optmod 20 starvisor-bagdarin", vec![20.0,0.6194983949956074,1.0995315567474164,-17.782510224065245,57.41456874089842,17.661231702934742,0.02370202736662068,0.00878559708063632,-0.4004940010351374,0.16025130705733037,-0.03120627655512529,-0.00023586181440057,2.509839747437e-05], 3840.0, 2160.0,
+             vec![(0.0,5.0,2414.1238806459,2152.8467575460),(310.0,15.0,508.0795724172,1412.1870352804),(340.0,25.0,1661.2828218212,1308.3301436310),(0.0,40.0,2382.3279630361,721.2113972910),(30.0,50.0,3092.5236236882,160.8146407287)]),
+        ]
+    }
+
+    #[test]
+    fn every_lens_model_in_the_archive_projects_to_its_reference() {
+        for (name, optpar, w, h, cases) in real_models() {
+            for (az, el, x, y) in cases {
+                let (gx, gy) = az_el_to_pixel(az, el, &optpar, w, h)
+                    .unwrap_or_else(|| panic!("{name}: no projection at az {az} el {el}"));
+                assert!((gx - x).abs() < 1e-6, "{name}: x {gx} vs reference {x}");
+                assert!((gy - y).abs() < 1e-6, "{name}: y {gy} vs reference {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_field_test_comes_from_each_camera_own_model() {
+        let models = real_models();
+        // The all-sky fisheyes cover the whole sky above 5 degrees. Optmod 4 in
+        // particular images six directions with s3 <= 0, so a blanket
+        // forward-hemisphere test would wrongly discard real pixels.
+        for (name, optpar, w, h, _) in models.iter().filter(|m| !m.0.contains("optmod 20")) {
+            let mut accepted = 0;
+            let mut behind = 0;
+            for el in (5..90).step_by(5) {
+                for az in (0..360).step_by(10) {
+                    if star_pixel(az as f64, el as f64, optpar, *w, *h, 0.0).is_some() {
+                        accepted += 1;
+                    }
+                    if camera_frame_vector(az as f64, el as f64, &optpar[1..])[2] <= 0.0 {
+                        behind += 1;
+                    }
+                }
+            }
+            assert_eq!(accepted, 612, "{name}: an all-sky lens should see the whole sky");
+            if name.contains("optmod 4") {
+                assert!(behind > 0, "{name}: expected in-field directions with s3 <= 0");
+            }
+        }
+        // The rectilinear camera sees under a third of the sky, and the
+        // directions it cannot see must be refused, not returned as huge numbers.
+        let (_, optpar, w, h, _) = models.iter().find(|m| m.0.contains("optmod 20")).unwrap();
+        let mut accepted = 0;
+        for el in (5..90).step_by(5) {
+            for az in (0..360).step_by(10) {
+                if star_pixel(az as f64, el as f64, optpar, *w, *h, 0.0).is_some() {
+                    accepted += 1;
+                }
+            }
+        }
+        assert!((150..=200).contains(&accepted), "rectilinear coverage {accepted}/612");
+        // These two diverge to 1e8 and 1e10 pixels in the raw projection.
+        for (az, el) in [(120.0, 40.0), (250.0, 20.0)] {
+            let raw = az_el_to_pixel(az, el, optpar, *w, *h).unwrap();
+            assert!(raw.0.abs() > 1e6 || raw.1.abs() > 1e6, "expected divergence at {az},{el}");
+            assert!(
+                star_pixel(az, el, optpar, *w, *h, 0.0).is_none(),
+                "a direction outside the rectilinear field must be refused"
+            );
+        }
+        // The margin keeps room for a fitting patch inside the frame.
+        let kiruna = &models[0];
+        let centre = star_pixel(0.0, 89.0, &kiruna.1, kiruna.2, kiruna.3, 9.0);
+        assert!(centre.is_some(), "a star near zenith has room for its patch");
+        assert!(
+            star_pixel(0.0, 5.0, &kiruna.1, kiruna.2, kiruna.3, 120.0).is_none(),
+            "a star too close to the frame edge for its patch must be refused"
+        );
     }
 
     /// Render a noiseless star patch for fitting tests.

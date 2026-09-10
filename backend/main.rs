@@ -720,6 +720,180 @@ async fn set_selected_calibration(
     ))
 }
 
+#[derive(Deserialize)]
+struct StarsQuery {
+    channel: Option<String>,
+    hours: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct StarSeriesQuery {
+    star: String,
+    channel: Option<String>,
+    hours: Option<f64>,
+}
+
+/// Every star measured for one camera in a window, with its median image
+/// position and how much its brightness varied. This is one request because the
+/// scatter plot needs position and variation together.
+async fn source_stars(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<StarsQuery>,
+) -> ApiResult<Json<Value>> {
+    let channel = query.channel.unwrap_or_else(|| "mean".into());
+    if !starphot::CHANNELS.contains(&channel.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
+    }
+    let hours = query.hours.unwrap_or(24.0).clamp(0.1, 24.0 * 14.0);
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let mut statement = conn
+        .prepare(
+            "SELECT star_key,vt_mag,ra_hours_j2000,dec_deg_j2000,predicted_x,predicted_y,
+                    elevation_deg,flux,background,observation_utc
+             FROM star_photometry
+             WHERE source_id=?1 AND channel=?2
+               AND julianday(observation_utc) >= julianday('now', ?3)
+             ORDER BY star_key,observation_utc",
+        )
+        .map_err(internal)?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![id, channel, format!("-{hours} hours")],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, f64>(3)?,
+                    r.get::<_, f64>(4)?,
+                    r.get::<_, f64>(5)?,
+                    r.get::<_, f64>(6)?,
+                    r.get::<_, Option<f64>>(7)?,
+                    r.get::<_, Option<f64>>(8)?,
+                ))
+            },
+        )
+        .map_err(internal)?;
+    #[derive(Default)]
+    struct Aggregate {
+        vt_mag: f64,
+        ra: f64,
+        dec: f64,
+        x: Vec<f64>,
+        y: Vec<f64>,
+        elevation: Vec<f64>,
+        flux: Vec<f64>,
+        background: Vec<f64>,
+        frames: usize,
+        found: usize,
+    }
+    let mut by_star: std::collections::BTreeMap<String, Aggregate> =
+        std::collections::BTreeMap::new();
+    for row in rows.filter_map(Result::ok) {
+        let (key, mag, ra, dec, x, y, elevation, flux, background) = row;
+        let entry = by_star.entry(key).or_default();
+        entry.vt_mag = mag;
+        entry.ra = ra;
+        entry.dec = dec;
+        entry.x.push(x);
+        entry.y.push(y);
+        entry.elevation.push(elevation);
+        entry.frames += 1;
+        if let Some(f) = flux {
+            entry.flux.push(f);
+            entry.found += 1;
+        }
+        if let Some(b) = background {
+            entry.background.push(b);
+        }
+    }
+    let median = |values: &[f64]| starphot::percentile(values, 0.5);
+    let stars: Vec<Value> = by_star
+        .into_iter()
+        .map(|(key, a)| {
+            json!({
+                "star_key": key,
+                "vt_mag": a.vt_mag,
+                "ra_hours_j2000": a.ra,
+                "dec_deg_j2000": a.dec,
+                "image_x": median(&a.x),
+                "image_y": median(&a.y),
+                "elevation_deg": median(&a.elevation),
+                "frames": a.frames,
+                "found": a.found,
+                "median_flux": median(&a.flux),
+                "clear_flux": starphot::percentile(&a.flux, 0.9),
+                "median_background": median(&a.background),
+                "variation": starphot::brightness_variation(&a.flux),
+            })
+        })
+        .collect();
+    Ok(Json(json!({"source_id":id,"channel":channel,"hours":hours,"stars":stars})))
+}
+
+/// The brightness and background time series of one star, for plotting.
+async fn source_star_series(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<StarSeriesQuery>,
+) -> ApiResult<Json<Value>> {
+    let star = query.star;
+    let channel = query.channel.unwrap_or_else(|| "mean".into());
+    if !starphot::CHANNELS.contains(&channel.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
+    }
+    let hours = query.hours.unwrap_or(24.0).clamp(0.1, 24.0 * 14.0);
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let mut statement = conn
+        .prepare(
+            "SELECT observation_utc,flux,background,amplitude,sigma_major,sigma_minor,
+                    angle_deg,centroid_offset_px,elevation_deg,azimuth_deg,
+                    predicted_x,predicted_y,centroid_x,centroid_y,rms_residual
+             FROM star_photometry
+             WHERE source_id=?1 AND star_key=?2 AND channel=?3
+               AND julianday(observation_utc) >= julianday('now', ?4)
+             ORDER BY observation_utc",
+        )
+        .map_err(internal)?;
+    let samples: Vec<Value> = statement
+        .query_map(
+            rusqlite::params![id, star, channel, format!("-{hours} hours")],
+            |r| {
+                Ok(json!({
+                    "at": r.get::<_,String>(0)?,
+                    "flux": r.get::<_,Option<f64>>(1)?,
+                    "background": r.get::<_,Option<f64>>(2)?,
+                    "amplitude": r.get::<_,Option<f64>>(3)?,
+                    "sigma_major": r.get::<_,Option<f64>>(4)?,
+                    "sigma_minor": r.get::<_,Option<f64>>(5)?,
+                    "angle_deg": r.get::<_,Option<f64>>(6)?,
+                    "centroid_offset_px": r.get::<_,Option<f64>>(7)?,
+                    "elevation_deg": r.get::<_,f64>(8)?,
+                    "azimuth_deg": r.get::<_,f64>(9)?,
+                    "predicted_x": r.get::<_,f64>(10)?,
+                    "predicted_y": r.get::<_,f64>(11)?,
+                    "centroid_x": r.get::<_,Option<f64>>(12)?,
+                    "centroid_y": r.get::<_,Option<f64>>(13)?,
+                    "rms_residual": r.get::<_,Option<f64>>(14)?,
+                }))
+            },
+        )
+        .map_err(internal)?
+        .filter_map(Result::ok)
+        .collect();
+    let fluxes: Vec<f64> = samples
+        .iter()
+        .filter_map(|v| v["flux"].as_f64())
+        .collect();
+    Ok(Json(json!({
+        "source_id": id, "star_key": star, "channel": channel, "hours": hours,
+        "clear_flux": starphot::percentile(&fluxes, 0.9),
+        "variation": starphot::brightness_variation(&fluxes),
+        "samples": samples,
+    })))
+}
+
 async fn ingest(State(s): State<AppState>, mut mp: Multipart) -> ApiResult<impl IntoResponse> {
     let mut source_id = None;
     let mut observed = None;
@@ -846,6 +1020,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/images/{id}/texture", get(image_texture))
         .route("/api/images/{id}/original", get(original_image))
         .route("/api/calibrations", post(calibration))
+        .route("/api/sources/{id}/stars", get(source_stars))
+        .route("/api/sources/{id}/stars/series", get(source_star_series))
         .route(
             "/api/sources/{id}/calibrations",
             get(source_calibrations).post(set_selected_calibration),

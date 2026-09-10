@@ -137,3 +137,35 @@
    old calibration is kept, so this is a quieter action than a first calibration. */
 .calibration-state a.recalibrate{color:#6f8595}
 .calibration-state a.recalibrate:hover,.calibration-state a.recalibrate:focus-visible{color:var(--aqua);text-decoration:underline}
+
+/* Star photometry: brightness and background series, and a frame scatter of the
+   measured star positions coloured by how much each star varied. */
+.star-photometry{position:relative;width:min(1080px,97vw);max-height:94vh;overflow:auto;padding:26px;border:1px solid #29404d;background:#071521}
+.star-photometry .close{position:absolute;right:14px;top:14px;border:0;background:none;cursor:pointer}
+.star-photometry h2{margin:8px 0}
+.star-photometry>p{color:var(--muted);line-height:1.55;max-width:82ch}
+.star-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0 6px}
+.star-controls button{padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:#0b1c29;color:#c8d6dc;font-size:11px;cursor:pointer}
+.star-controls button:hover{border-color:var(--aqua)}
+.star-controls button[aria-pressed=true]{border-color:var(--aqua);background:var(--aqua);color:#03120f;font-weight:700}
+.star-controls small{margin-left:auto;color:var(--muted);font-size:11px}
+.star-panels{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:18px;margin-top:10px}
+.star-series{display:grid;gap:12px;min-width:0}
+.star-plot-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:4px}
+.star-plot-head strong{color:#dceef0;font-weight:500;font-size:12px}
+.star-plot-head small{color:var(--muted);font-size:10px;font-family:monospace}
+.star-plot svg{width:100%;height:118px;display:block;border:1px solid var(--line)}
+.star-plot-bg{fill:#050f18}
+.star-grid{stroke:#1b2c3b;stroke-width:1}
+.star-legend{display:flex;flex-wrap:wrap;gap:14px;color:#c8d6dc;font-size:11px}
+.star-legend span{display:flex;align-items:center;gap:6px}
+.star-legend i{width:11px;height:3px;border-radius:2px;flex:none}
+.star-legend small{color:var(--muted);font-size:10px}
+.star-scatter svg{width:100%;height:auto;display:block;border:1px solid var(--line)}
+.star-scatter g{cursor:pointer}
+.star-scatter g:hover circle{stroke:#fff;stroke-width:1.2}
+.star-ramp{display:flex;align-items:center;gap:3px;margin:8px 0 4px}
+.star-ramp i{width:26px;height:9px;flex:none}
+.star-ramp small{color:var(--muted);font-size:10px}
+.star-hint{display:block;color:var(--muted);font-size:10px;line-height:1.45}
+@media(max-width:900px){.star-panels{grid-template-columns:minmax(0,1fr)}}

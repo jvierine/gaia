@@ -12,6 +12,11 @@ type Calibration = {id:string;created_utc:string;valid_from_utc:string|null;vali
 // Playback step interval is PLAYBACK_STEP_MS divided by the chosen speed.
 const PLAYBACK_STEP_MS = 150;
 const SPEEDS = [0.25, 0.5, 1, 2, 4] as const;
+type StarSummary = {star_key:string;vt_mag:number;ra_hours_j2000:number;dec_deg_j2000:number;image_x:number|null;image_y:number|null;elevation_deg:number|null;frames:number;found:number;median_flux:number|null;clear_flux:number|null;median_background:number|null;variation:number|null};
+type StarSample = {at:string;flux:number|null;background:number|null;sigma_major:number|null;sigma_minor:number|null;angle_deg:number|null;centroid_offset_px:number|null;elevation_deg:number};
+const STAR_CHANNELS = ['mean','r','g','b'] as const;
+/// Steady stars read cool, strongly varying ones warm.
+const variationColour = (v:number|null) => v==null?'#5d7080':`hsl(${Math.round(190-190*Math.min(1,Math.max(0,v)))} 78% 55%)`;
 type SortKey = 'name' | 'latitude_deg' | 'longitude_deg' | 'calibrated';
 const sortOptions:[SortKey,string][] = [['name','Name'],['latitude_deg','Latitude'],['longitude_deg','Longitude'],['calibrated','Calibration']];
 
@@ -94,6 +99,112 @@ function Credits(){
   return <section aria-label="Data provider credits"><h3>Data provider credits</h3>{error?<p>Could not load provider credits. Please reopen this page to retry.</p>:providers.length?providers.map((p,i)=><article key={i}><h4>{p.website&&/^https?:\/\//.test(p.website)?<a href={p.website} target="_blank" rel="noopener noreferrer">{p.name} ↗</a>:p.name}</h4><p>{p.acknowledgement}</p><p>{p.copyright}</p></article>):<p>Loading credits…</p>}</section>;
 }
 
+/// Per-star brightness and background over time, and where those stars sit in
+/// the frame. Cloud shows up as a star dimming, so these are the raw inputs to
+/// the cloud-thickness estimate rather than a derived product.
+function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
+  const [channel,setChannel]=useState<string>('mean');
+  const [hours,setHours]=useState(24);
+  const [stars,setStars]=useState<StarSummary[]>([]);
+  const [selected,setSelected]=useState<string[]>([]);
+  const [series,setSeries]=useState<Record<string,StarSample[]>>({});
+  const [loading,setLoading]=useState(true),[error,setError]=useState('');
+  useEffect(()=>{
+    const controller=new AbortController();setLoading(true);setError('');
+    void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars?channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
+      .then(async r=>{if(!r.ok)throw new Error('Could not load star photometry.');return await r.json() as {stars:StarSummary[]}})
+      .then(body=>{const rows=body.stars.filter(x=>x.image_x!=null&&x.image_y!=null);setStars(rows);
+        setSelected(prev=>{const keep=prev.filter(k=>rows.some(r=>r.star_key===k));
+          if(keep.length)return keep;
+          return [...rows].sort((a,b)=>(b.found)-(a.found)).slice(0,3).map(r=>r.star_key)});})
+      .catch(e=>{if(!controller.signal.aborted)setError(String(e.message||e))})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false)});
+    return()=>controller.abort();
+  },[camera.id,channel,hours]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    for(const key of selected){
+      if(series[`${channel}:${key}`])continue;
+      void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/series?star=${encodeURIComponent(key)}&channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
+        .then(async r=>r.ok?await r.json() as {samples:StarSample[]}:{samples:[]})
+        .then(body=>setSeries(prev=>({...prev,[`${channel}:${key}`]:body.samples})))
+        .catch(()=>{});
+    }
+    return()=>controller.abort();
+  },[selected,channel,hours,camera.id,series]);
+  const toggle=(key:string)=>setSelected(prev=>prev.includes(key)?prev.filter(k=>k!==key):[...prev,key]);
+  const palette=['#56f0c5','#f3b647','#72ccef','#ff8fa3','#baff78','#c9a0ff'];
+  const picked=selected.map((k,i)=>({key:k,colour:palette[i%palette.length],samples:series[`${channel}:${k}`]||[]}));
+  const times=picked.flatMap(p=>p.samples.map(x=>Date.parse(x.at))).filter(Number.isFinite);
+  const t0=times.length?Math.min(...times):0,t1=times.length?Math.max(...times):1;
+  const band=(get:(x:StarSample)=>number|null)=>{
+    const vals=picked.flatMap(p=>p.samples.map(get)).filter((v):v is number=>v!=null&&Number.isFinite(v));
+    if(!vals.length)return[0,1];const lo=Math.min(...vals),hi=Math.max(...vals);
+    return hi>lo?[lo,hi]:[lo-1,hi+1];};
+  const path=(samples:StarSample[],get:(x:StarSample)=>number|null,lo:number,hi:number,w:number,h:number)=>{
+    let d='',open=false;
+    for(const sample of samples){const v=get(sample);const t=Date.parse(sample.at);
+      if(v==null||!Number.isFinite(v)||!Number.isFinite(t)){open=false;continue}
+      const x=t1>t0?(t-t0)/(t1-t0)*w:w/2, y=h-(v-lo)/(hi-lo)*h;
+      d+=`${open?'L':'M'}${x.toFixed(1)} ${y.toFixed(1)} `;open=true;}
+    return d.trim();};
+  const plot=(label:string,get:(x:StarSample)=>number|null,unit:string)=>{
+    const [lo,hi]=band(get);const w=560,h=118;
+    return <div className="star-plot"><div className="star-plot-head"><strong>{label}</strong><small>{lo.toPrecision(3)} to {hi.toPrecision(3)} {unit}</small></div>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={label}>
+        <rect x="0" y="0" width={w} height={h} className="star-plot-bg"/>
+        {[0.25,0.5,0.75].map(f=><line key={f} x1="0" x2={w} y1={h*f} y2={h*f} className="star-grid"/>)}
+        {picked.map(p=><path key={p.key} d={path(p.samples,get,lo,hi,w,h)} fill="none" stroke={p.colour} strokeWidth="1.4"/>)}
+      </svg></div>;};
+  const extent=(pick:(r:StarSummary)=>number)=>{
+    const vals=stars.map(pick).filter(Number.isFinite);
+    if(!vals.length)return[0,1];const lo=Math.min(...vals),hi=Math.max(...vals);
+    const pad=Math.max(8,(hi-lo)*0.06);return[lo-pad,hi+pad];};
+  const [xlo,xhi]=extent(r=>r.image_x as number),[ylo,yhi]=extent(r=>r.image_y as number);
+  const S=330;
+  return <div className="modal-backdrop"><div className="star-photometry"><button className="close" onClick={onClose} aria-label="Close"><X/></button>
+    <span className="eyebrow">STAR PHOTOMETRY</span><h2>{camera.name}</h2>
+    <p>Brightness of catalogue stars brighter than magnitude 4, fitted with a rotated two-dimensional Gaussian in each colour channel. A star dimming against its own clear-sky level is cloud along that line of sight.</p>
+    <div className="star-controls">
+      <span className="eyebrow">CHANNEL</span>
+      {STAR_CHANNELS.map(c=><button key={c} type="button" aria-pressed={channel===c} onClick={()=>setChannel(c)}>{c==='mean'?'mean':c.toUpperCase()}</button>)}
+      <span className="eyebrow">WINDOW</span>
+      {[6,24,72].map(v=><button key={v} type="button" aria-pressed={hours===v} onClick={()=>setHours(v)}>{v} h</button>)}
+      <small role="status">{loading?'Loading\u2026':`${stars.length} stars, ${selected.length} selected`}</small>
+    </div>
+    {error&&<p role="alert">{error}</p>}
+    {!loading&&!error&&stars.length===0&&<div className="history-empty">No star photometry recorded for this camera yet.</div>}
+    {stars.length>0&&<div className="star-panels">
+      <div className="star-series">
+        {plot('Total intensity above background',x=>x.flux,'counts')}
+        {plot('Fitted image background',x=>x.background,'counts')}
+        <div className="star-legend">{picked.map(p=>{const row=stars.find(r=>r.star_key===p.key);
+          return <span key={p.key}><i style={{background:p.colour}}/>{row?`V ${row.vt_mag.toFixed(2)} at ${row.elevation_deg?.toFixed(0)}\u00b0 el`:p.key}<small>{p.samples.length} pts</small></span>})}
+          {picked.length===0&&<small>Select stars in the scatter to plot them.</small>}</div>
+      </div>
+      <div className="star-scatter">
+        <div className="star-plot-head"><strong>Star positions in the frame</strong><small>colour is brightness variation</small></div>
+        <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label="Star image positions coloured by brightness variation">
+          <rect x="0" y="0" width={S} height={S} className="star-plot-bg"/>
+          {stars.map(r=>{const x=((r.image_x as number)-xlo)/(xhi-xlo)*S, y=((r.image_y as number)-ylo)/(yhi-ylo)*S;
+            const on=selected.includes(r.star_key);
+            return <g key={r.star_key} className={on?'chosen':''} onClick={()=>toggle(r.star_key)}>
+              <circle cx={x} cy={y} r={Math.max(2.4,6.2-r.vt_mag*1.1)} fill={variationColour(r.variation)}
+                stroke={on?'#fff':'none'} strokeWidth={on?1.6:0}>
+              </circle><title>{`V ${r.vt_mag.toFixed(2)}  elevation ${r.elevation_deg?.toFixed(1)}\u00b0
+found in ${r.found} of ${r.frames} frames
+variation ${r.variation==null?'n/a':r.variation.toFixed(2)}
+clear-sky flux ${r.clear_flux==null?'n/a':r.clear_flux.toPrecision(4)}`}</title></g>})}
+        </svg>
+        <div className="star-ramp"><small>steady</small>
+          {[0,0.2,0.4,0.6,0.8,1].map(v=><i key={v} style={{background:variationColour(v)}}/>)}
+          <small>obscured</small></div>
+        <small className="star-hint">Click a star to add or remove it from the plots. Marker size follows catalogue magnitude.</small>
+      </div>
+    </div>}
+  </div></div>;
+}
+
 const stamp=(value:string|null)=>value?new Date(value).toISOString().replace('T',' ').slice(0,16)+' UTC':null;
 
 /// Compare the calibrations held for one camera and choose which one maps it.
@@ -154,7 +265,7 @@ export default function Home() {
   const[historyMinutes,setHistoryMinutes]=useState<number[]>([]);
   useEffect(()=>{const load=()=>void fetch('/gaia/api/history',{cache:'no-store'}).then(r=>r.json()).then((times:string[])=>setHistoryMinutes([...new Set(times.filter(t=>Date.parse(t)<=liveCutoff()).map(t=>Math.max(0,Math.min(1440,Math.ceil((Date.parse(t)+60000-historyEnd.current)/60000)+1440))))].sort((a,b)=>a-b))).catch(console.warn);load();const timer=setInterval(load,60000);return()=>clearInterval(timer)},[]);
   const[framesLoading,setFramesLoading]=useState(false);
-  const [view, setView] = useState<ViewName>('globe'); const [playing, setPlaying] = useState(false); const [sunLock,setSunLock]=useState(false); const [speed,setSpeed]=useState(1); const zoomRef=useRef<((action:'in'|'out'|'reset')=>void)|null>(null); const [instrumentSites,setInstrumentSites]=useState<Record<string,string>>({}); const [sortKey,setSortKey]=useState<SortKey>('name'); const[calibratingCamera,setCalibratingCamera]=useState<Camera|null>(null); const [sortDesc,setSortDesc]=useState(false); const [timeMinutes,setTimeMinutes]=useState(1440);const [suggesting,setSuggesting]=useState(false);const [sent,setSent]=useState(false);const[editingCamera,setEditingCamera]=useState<Camera|null>(null);const[maskingCamera,setMaskingCamera]=useState<Camera|null>(null);const[browsingCamera,setBrowsingCamera]=useState<Camera|null>(null);const[cameras,setCameras]=useState<Camera[]>(fallbackCameras);
+  const [view, setView] = useState<ViewName>('globe'); const [playing, setPlaying] = useState(false); const [sunLock,setSunLock]=useState(false); const [speed,setSpeed]=useState(1); const zoomRef=useRef<((action:'in'|'out'|'reset')=>void)|null>(null); const [instrumentSites,setInstrumentSites]=useState<Record<string,string>>({}); const [sortKey,setSortKey]=useState<SortKey>('name'); const[photometryCamera,setPhotometryCamera]=useState<Camera|null>(null); const[calibratingCamera,setCalibratingCamera]=useState<Camera|null>(null); const [sortDesc,setSortDesc]=useState(false); const [timeMinutes,setTimeMinutes]=useState(1440);const [suggesting,setSuggesting]=useState(false);const [sent,setSent]=useState(false);const[editingCamera,setEditingCamera]=useState<Camera|null>(null);const[maskingCamera,setMaskingCamera]=useState<Camera|null>(null);const[browsingCamera,setBrowsingCamera]=useState<Camera|null>(null);const[cameras,setCameras]=useState<Camera[]>(fallbackCameras);
   useEffect(()=>{void fetch('/gaia/public/manifest.json',{cache:'no-store'}).then(async r=>{if(!r.ok)throw new Error();return await r.json() as {cameras?:{source_id:string;website_url:string|null}[]}}).then(manifest=>setInstrumentSites(Object.fromEntries((manifest.cameras||[]).filter(c=>c.website_url).map(c=>[c.source_id,c.website_url as string])))).catch(()=>{})},[]);
   useEffect(()=>{void fetch('/gaia/api/sources',{cache:'no-store'}).then(async r=>{if(!r.ok)throw new Error();return await r.json() as Camera[]}).then(rows=>{if(rows.length)setCameras(rows)}).catch(()=>{})},[]);
   useEffect(()=>{if(!playing||framesLoading||view!=='globe')return;const timer=window.setTimeout(()=>setTimeMinutes(v=>historyMinutes.find(m=>m>v)??historyMinutes[0]??1440),Math.max(20,Math.round(PLAYBACK_STEP_MS/speed)));return()=>window.clearTimeout(timer)},[playing,framesLoading,timeMinutes,view,historyMinutes,speed]);
@@ -195,7 +306,7 @@ export default function Home() {
       <section className="viewer">
         {view === 'globe' && <Globe onLoading={setFramesLoading} epochMillis={selectedEpoch} live={timeMinutes===1440} onCredits={()=>setView('about')} sunLock={sunLock} zoomRef={zoomRef}/>}
         {view === 'globe' && <div className="timeline-dock"><button onClick={()=>{if(!playing&&timeMinutes===1440&&historyMinutes.length)setTimeMinutes(historyMinutes[0]);setPlaying(!playing)}} aria-label={playing?'Pause 24 hour playback':'Play last 24 hours'}>{playing?'Ⅱ':'▶'}</button><div className="speed-control" role="group" aria-label="Playback speed"><button type="button" aria-label="Slow the animation down" title="Slow down" disabled={speed<=SPEEDS[0]} onClick={()=>setSpeed(v=>SPEEDS[Math.max(0,SPEEDS.indexOf(v as typeof SPEEDS[number])-1)])}>&minus;</button><span aria-live="polite">{speed<1?speed:speed.toFixed(0)}&times;</span><button type="button" aria-label="Speed the animation up" title="Speed up" disabled={speed>=SPEEDS[SPEEDS.length-1]} onClick={()=>setSpeed(v=>SPEEDS[Math.min(SPEEDS.length-1,SPEEDS.indexOf(v as typeof SPEEDS[number])+1)])}>+</button></div><label className="sun-lock" title="Hold the sun upwards; drag vertically to change the viewing tilt"><input type="checkbox" checked={sunLock} onChange={event=>setSunLock(event.target.checked)}/><span><strong>Sun up</strong><small>rotate vs. sun–earth line</small></span></label><div><div className="timeline-label"><strong>LAST 24 HOURS</strong><time>{new Date(selectedEpoch).toISOString().replace('T',' ').slice(0,19)} UTC {framesLoading?'· loading':''}</time></div><input type="range" min="0" max="1440" step="1" value={timeMinutes} onChange={e=>{setTimeMinutes(Number(e.target.value));setPlaying(false)}}/><div className="timeline-ticks"><span>−24 h</span><span>−18 h</span><span>−12 h</span><span>−6 h</span><span>now −{LIVE_DELAY_MINUTES} min</span></div></div></div>}
-        {view === 'cameras' && <div className="route-panel"><div className="route-heading"><Satellite/><div><span className="eyebrow">CAMERA REGISTRY</span><h2>{cameras.length} image sources</h2></div></div><p className="panel-intro">Red cameras can be ingested and credited, but cannot enter the 100 km mosaic until their lens model is fitted.</p><div className="camera-sort" role="group" aria-label="Sort camera stations"><span className="eyebrow">SORT BY</span>{sortOptions.map(([key,label])=><button key={key} type="button" aria-pressed={sortKey===key} onClick={()=>{if(sortKey===key){setSortDesc(!sortDesc)}else{setSortKey(key);setSortDesc(false)}}} title={sortKey===key?`Reverse the ${label.toLowerCase()} order`:`Sort by ${label.toLowerCase()}`}>{label}{sortKey===key?(sortDesc?' \u25bc':' \u25b2'):''}</button>)}<small role="status">{sortHint}{(sortKey==='latitude_deg'||sortKey==='longitude_deg')&&unlocated>0?` \u00b7 ${unlocated} without a location last`:''}</small></div><div className="camera-list">{sortedCameras.map(camera=><article key={camera.id} className={camera.enabled?'':'camera-disabled'}><div className="camera-identity"><div className="camera-thumbnail"><span>NO FRAME</span><img loading="lazy" src={`/gaia/api/sources/${camera.id}/latest`} alt={`Current ${camera.name} frame`} onLoad={e=>e.currentTarget.classList.add('loaded')}/></div><div>{instrumentSites[camera.id]?<a className="camera-link" href={instrumentSites[camera.id]} target="_blank" rel="noreferrer noopener" title={`Open the ${camera.name} instrument page`}><strong>{camera.name}</strong> ↗</a>:<strong>{camera.name}</strong>}<small>{camera.producer}</small></div></div><div className="camera-meta"><span>{camera.latitude_deg==null||camera.longitude_deg==null?'Location needed':`${Math.abs(camera.latitude_deg).toFixed(2)}°${camera.latitude_deg>=0?'N':'S'} · ${Math.abs(camera.longitude_deg).toFixed(2)}°${camera.longitude_deg>=0?'E':'W'}`}</span><small>{camera.timestamp_mode==='archive'?'Archive timestamp':'Download timestamp'} · {camera.images_24h} images / 24 h</small><div><button type="button" onClick={()=>setBrowsingCamera(camera)}>Browse history</button><button type="button" onClick={()=>setCalibratingCamera(camera)}>Calibrations</button><button type="button" onClick={()=>setEditingCamera(camera)}>Adjust location</button><button type="button" onClick={()=>setMaskingCamera(camera)}>Edit crop &amp; mask</button><button type="button" onClick={()=>void toggleCamera(camera)}>{camera.enabled?'Pause camera':'Resume camera'}</button><button className="danger" type="button" onClick={()=>void removeCamera(camera)}>Remove camera</button></div></div><div className={`calibration-state ${camera.calibrated?'calibrated':''}`}><b>{camera.enabled?(camera.calibrated?'CALIBRATED':'NOT CALIBRATED'):'PAUSED'}</b>{camera.enabled&&<a className={camera.calibrated?'recalibrate':undefined} href={`/aida/?gaia=1&source_id=${encodeURIComponent(camera.id)}`} target="_blank" rel="noreferrer noopener" title={camera.calibrated?'Fit a new lens model from the latest frame; the current calibration is kept':'Fit a lens model from the latest frame'}>{camera.calibrated?'Recalibrate latest in AIDA ↗':'Calibrate latest in AIDA ↗'}</a>}</div></article>)}</div></div>}
+        {view === 'cameras' && <div className="route-panel"><div className="route-heading"><Satellite/><div><span className="eyebrow">CAMERA REGISTRY</span><h2>{cameras.length} image sources</h2></div></div><p className="panel-intro">Red cameras can be ingested and credited, but cannot enter the 100 km mosaic until their lens model is fitted.</p><div className="camera-sort" role="group" aria-label="Sort camera stations"><span className="eyebrow">SORT BY</span>{sortOptions.map(([key,label])=><button key={key} type="button" aria-pressed={sortKey===key} onClick={()=>{if(sortKey===key){setSortDesc(!sortDesc)}else{setSortKey(key);setSortDesc(false)}}} title={sortKey===key?`Reverse the ${label.toLowerCase()} order`:`Sort by ${label.toLowerCase()}`}>{label}{sortKey===key?(sortDesc?' \u25bc':' \u25b2'):''}</button>)}<small role="status">{sortHint}{(sortKey==='latitude_deg'||sortKey==='longitude_deg')&&unlocated>0?` \u00b7 ${unlocated} without a location last`:''}</small></div><div className="camera-list">{sortedCameras.map(camera=><article key={camera.id} className={camera.enabled?'':'camera-disabled'}><div className="camera-identity"><div className="camera-thumbnail"><span>NO FRAME</span><img loading="lazy" src={`/gaia/api/sources/${camera.id}/latest`} alt={`Current ${camera.name} frame`} onLoad={e=>e.currentTarget.classList.add('loaded')}/></div><div>{instrumentSites[camera.id]?<a className="camera-link" href={instrumentSites[camera.id]} target="_blank" rel="noreferrer noopener" title={`Open the ${camera.name} instrument page`}><strong>{camera.name}</strong> ↗</a>:<strong>{camera.name}</strong>}<small>{camera.producer}</small></div></div><div className="camera-meta"><span>{camera.latitude_deg==null||camera.longitude_deg==null?'Location needed':`${Math.abs(camera.latitude_deg).toFixed(2)}°${camera.latitude_deg>=0?'N':'S'} · ${Math.abs(camera.longitude_deg).toFixed(2)}°${camera.longitude_deg>=0?'E':'W'}`}</span><small>{camera.timestamp_mode==='archive'?'Archive timestamp':'Download timestamp'} · {camera.images_24h} images / 24 h</small><div><button type="button" onClick={()=>setBrowsingCamera(camera)}>Browse history</button><button type="button" onClick={()=>setCalibratingCamera(camera)}>Calibrations</button><button type="button" onClick={()=>setPhotometryCamera(camera)}>Star photometry</button><button type="button" onClick={()=>setEditingCamera(camera)}>Adjust location</button><button type="button" onClick={()=>setMaskingCamera(camera)}>Edit crop &amp; mask</button><button type="button" onClick={()=>void toggleCamera(camera)}>{camera.enabled?'Pause camera':'Resume camera'}</button><button className="danger" type="button" onClick={()=>void removeCamera(camera)}>Remove camera</button></div></div><div className={`calibration-state ${camera.calibrated?'calibrated':''}`}><b>{camera.enabled?(camera.calibrated?'CALIBRATED':'NOT CALIBRATED'):'PAUSED'}</b>{camera.enabled&&<a className={camera.calibrated?'recalibrate':undefined} href={`/aida/?gaia=1&source_id=${encodeURIComponent(camera.id)}`} target="_blank" rel="noreferrer noopener" title={camera.calibrated?'Fit a new lens model from the latest frame; the current calibration is kept':'Fit a lens model from the latest frame'}>{camera.calibrated?'Recalibrate latest in AIDA ↗':'Calibrate latest in AIDA ↗'}</a>}</div></article>)}</div></div>}
         {view === 'status' && <div className="route-panel"><div className="route-heading"><Activity/><div><span className="eyebrow">INGESTION PIPELINE</span><h2>Data flow status</h2></div></div><div className="pipeline">{['Acquire','Calibrate','Mask','Project','Tessellate'].map((x,i)=><div key={x}><span className={i===0?'running':''}>{i===0?'↻':'·'}</span><strong>{x}</strong><small>{i===0?'polling sources':'framework ready'}</small></div>)}</div><div className="source-list">{cameras.map(camera=><article key={camera.id}><span className={`source-state ${camera.state}`}/><div><strong>{camera.name}</strong><small>{camera.producer}</small></div><div><b>{camera.timestamp_mode==='archive'?'Archive time':'Download time'}</b><small>{camera.message||`${camera.images_24h} images in 24 h`}</small></div></article>)}</div></div>}
         {view === 'calibrate' && <div className="route-panel narrow"><div className="route-heading"><Aperture/><div><span className="eyebrow">ADD COVERAGE</span><h2>Contribute an imager</h2></div></div><p>Every image retains the producer’s name, institution, copyright and requested acknowledgement. Fixed cameras normally reuse a seasonal calibration; phone images are calibrated individually.</p><div className="choice-grid"><article><span>01</span><h3>Calibrate the image</h3><p>Use AIDA/WISC to match stars and fit the lens. GAIA accepts its native calibration HDF5.</p><a href="/aida/?gaia=1" target="_blank">Open AIDA calibrator ↗</a></article><article><span>02</span><h3>Register a source</h3><p>Add a crawler JSON entry with cadence, timestamp policy, station location, producer and copyright.</p><a href="https://github.com/jvierine/gaia#adding-an-image-source" target="_blank">Read the source guide ↗</a></article></div></div>}
         {view === 'about' && <div className="route-panel narrow"><div className="route-heading"><CircleHelp/><div><span className="eyebrow">OPEN SCIENCE INFRASTRUCTURE</span><h2>About the data center &amp; credits</h2></div></div><p>GAIA maps calibrated auroral images onto a 100 km emission shell.</p><h3>Authors</h3><p>Juha Vierinen and Björn Gustavsson · UiT The Arctic University of Norway</p><img className="about-uit" src="uit-logo-white.png" alt="UiT The Arctic University of Norway"/><p>Image copyrights remain with their producers. GAIA does not transfer ownership or replace the producer’s terms.</p><h3>Suggest an improvement</h3><p>Report a bad image, missing source, calibration issue or viewer idea. Suggestions are stored for manual review; they do not change GAIA automatically.</p><button className="suggest-link" onClick={()=>{setSuggesting(true);setSent(false)}}><Lightbulb size={14}/> Suggest an improvement</button><Credits/></div>}
@@ -203,6 +314,7 @@ export default function Home() {
       </section>
     </section>
     {suggesting&&<div className="modal-backdrop" role="presentation"><form className="suggestion-box" onSubmit={submitSuggestion}><button type="button" className="close" onClick={()=>setSuggesting(false)} aria-label="Close"><X/></button>{sent?<div className="sent"><Send/><h2>Suggestion received</h2><p>Thank you. The GAIA team will review it before deciding what to send to Codex.</p></div>:<><span className="eyebrow">HUMAN-REVIEWED INPUT</span><h2>Suggest an improvement</h2><p>Report a bad image, missing source, calibration issue or viewer idea. Suggestions are stored for manual review; they do not change GAIA automatically.</p><label>Your suggestion<textarea name="suggestion" minLength={4} maxLength={8000} required placeholder="What should we improve?"/></label><div className="form-row"><label>Name <span>optional</span><input name="name"/></label><label>Contact <span>optional</span><input name="contact"/></label></div><button className="send-button" type="submit"><Send size={15}/> Send suggestion</button></>}</form></div>}
+    {photometryCamera&&<StarPhotometry camera={photometryCamera} onClose={()=>setPhotometryCamera(null)}/>}
     {calibratingCamera&&<CalibrationPicker camera={calibratingCamera} onClose={()=>setCalibratingCamera(null)}/>}
     {editingCamera&&<LocationEditor camera={editingCamera} onClose={()=>setEditingCamera(null)} onSaved={saved=>setCameras(rows=>rows.map(row=>row.id===saved.id?saved:row))}/>} 
     {maskingCamera&&<MaskEditor camera={maskingCamera} onClose={()=>setMaskingCamera(null)}/>} 

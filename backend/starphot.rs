@@ -596,6 +596,74 @@ pub fn cloud_weight(optical_depth: f64, floor: f64) -> f64 {
     floor + (1.0 - floor) * (-optical_depth.max(0.0)).exp()
 }
 
+/// Write one frame's measurements. Re-measuring a frame replaces its rows, so
+/// the pass is idempotent and can be re-run after a calibration change.
+pub fn record_frame(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    image_id: &str,
+    observation_utc: &str,
+    measurements: &[StarMeasurement],
+) -> Result<usize> {
+    let mut statement = conn.prepare(
+        "INSERT INTO star_photometry(source_id,image_id,observation_utc,star_key,channel,
+            ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,
+            predicted_x,predicted_y,centroid_x,centroid_y,centroid_offset_px,
+            background,amplitude,sigma_major,sigma_minor,angle_deg,flux,rms_residual)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
+         ON CONFLICT(source_id,image_id,star_key,channel) DO UPDATE SET
+            observation_utc=excluded.observation_utc,azimuth_deg=excluded.azimuth_deg,
+            elevation_deg=excluded.elevation_deg,predicted_x=excluded.predicted_x,
+            predicted_y=excluded.predicted_y,centroid_x=excluded.centroid_x,
+            centroid_y=excluded.centroid_y,centroid_offset_px=excluded.centroid_offset_px,
+            background=excluded.background,amplitude=excluded.amplitude,
+            sigma_major=excluded.sigma_major,sigma_minor=excluded.sigma_minor,
+            angle_deg=excluded.angle_deg,flux=excluded.flux,rms_residual=excluded.rms_residual",
+    )?;
+    let mut written = 0;
+    for m in measurements {
+        let fit = m.fit.as_ref();
+        statement.execute(rusqlite::params![
+            source_id,
+            image_id,
+            observation_utc,
+            m.star_key,
+            m.channel,
+            m.ra_hours,
+            m.dec_deg,
+            m.vt_mag,
+            m.azimuth_deg,
+            m.elevation_deg,
+            m.predicted_x,
+            m.predicted_y,
+            fit.map(|f| f.centre_x),
+            fit.map(|f| f.centre_y),
+            m.centroid_offset_px,
+            fit.map(|f| f.background),
+            fit.map(|f| f.amplitude),
+            fit.map(|f| f.sigma_x),
+            fit.map(|f| f.sigma_y),
+            fit.map(|f| f.angle_deg),
+            fit.map(|f| f.flux),
+            fit.map(|f| f.rms_residual),
+        ])?;
+        written += 1;
+    }
+    Ok(written)
+}
+
+/// How much a star's brightness has varied over its series: 0 when steady, and
+/// approaching 1 when it is sometimes almost extinguished. Uses percentiles
+/// rather than the extremes so one bad frame cannot dominate the colour scale.
+pub fn brightness_variation(fluxes: &[f64]) -> Option<f64> {
+    let high = percentile(fluxes, 0.9)?;
+    let low = percentile(fluxes, 0.1)?;
+    if high <= 0.0 {
+        return None;
+    }
+    Some((1.0 - (low / high)).clamp(0.0, 1.0))
+}
+
 /// A stable identity for a catalogue star. The WISCAT payload carries no
 /// identifier, only position and magnitude, so the key is derived from the
 /// J2000 position and is therefore reproducible across catalogue rebuilds.
@@ -1186,6 +1254,118 @@ mod tests {
             && m.predicted_x.is_finite()
             && m.predicted_y.is_finite()));
         assert!(measured.iter().any(|m| m.channel == "mean"));
+    }
+
+    #[test]
+    fn recorded_rows_keep_every_parameter_and_re_measuring_replaces_them() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // This exercises the photometry table's own shape, so the parent source
+        // and image rows are not created and the references are not enforced.
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        let fit = GaussianFit {
+            background: 31.5,
+            amplitude: 210.0,
+            centre_x: 1402.25,
+            centre_y: 1380.75,
+            sigma_x: 2.6,
+            sigma_y: 1.9,
+            angle_deg: -42.5,
+            flux: 6520.0,
+            rms_residual: 2.1,
+        };
+        let found = StarMeasurement {
+            star_key: star_key(2.5301944, 89.2641111),
+            channel: "g",
+            ra_hours: 2.5301944,
+            dec_deg: 89.2641111,
+            vt_mag: 2.02,
+            azimuth_deg: 1.536,
+            elevation_deg: 68.08,
+            predicted_x: 1402.0,
+            predicted_y: 1381.0,
+            fit: Some(fit),
+            centroid_offset_px: Some(0.35),
+        };
+        let missing = StarMeasurement {
+            star_key: star_key(18.6156, 38.7837),
+            channel: "g",
+            fit: None,
+            centroid_offset_px: Some(9.4),
+            ..found.clone()
+        };
+        let written =
+            record_frame(&conn, "cam", "img-1", "2026-09-10T22:00:00+00:00", &[found.clone(), missing])
+                .unwrap();
+        assert_eq!(written, 2);
+        // Everything the plots and the cloud estimate need comes back intact.
+        let (bg, amp, major, minor, angle, flux, rms, cx, cy, px, py, off, az, el): (
+            f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64,
+        ) = conn
+            .query_row(
+                "SELECT background,amplitude,sigma_major,sigma_minor,angle_deg,flux,rms_residual,
+                        centroid_x,centroid_y,predicted_x,predicted_y,centroid_offset_px,
+                        azimuth_deg,elevation_deg
+                 FROM star_photometry WHERE star_key=?1 AND channel='g'",
+                [&found.star_key],
+                |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?,
+                        r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?,
+                        r.get(12)?, r.get(13)?))
+                },
+            )
+            .unwrap();
+        assert!((bg - 31.5).abs() < 1e-9, "background must be stored");
+        assert!((amp - 210.0).abs() < 1e-9);
+        assert!((major - 2.6).abs() < 1e-9 && (minor - 1.9).abs() < 1e-9);
+        assert!((angle - -42.5).abs() < 1e-9, "the position angle must be stored");
+        assert!((flux - 6520.0).abs() < 1e-9 && (rms - 2.1).abs() < 1e-9);
+        // Both image positions, predicted and fitted, plus their separation.
+        assert!((cx - 1402.25).abs() < 1e-9 && (cy - 1380.75).abs() < 1e-9);
+        assert!((px - 1402.0).abs() < 1e-9 && (py - 1381.0).abs() < 1e-9);
+        assert!((off - 0.35).abs() < 1e-9);
+        // And the sky position.
+        assert!((az - 1.536).abs() < 1e-9 && (el - 68.08).abs() < 1e-9);
+        // A star that was not found is still on record, with a null fit.
+        let (nulls, offset): (i64, f64) = conn
+            .query_row(
+                "SELECT flux IS NULL, centroid_offset_px FROM star_photometry WHERE star_key=?1",
+                [star_key(18.6156, 38.7837)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(nulls, 1, "an unfound star keeps a row with no flux");
+        assert!(offset > 3.0);
+        // Re-measuring the same frame replaces rather than duplicates.
+        let mut improved = found.clone();
+        improved.fit = Some(GaussianFit { flux: 7000.0, ..fit });
+        record_frame(&conn, "cam", "img-1", "2026-09-10T22:00:00+00:00", &[improved]).unwrap();
+        let (count, newest): (i64, f64) = conn
+            .query_row(
+                "SELECT count(*), max(flux) FROM star_photometry WHERE star_key=?1 AND channel='g'",
+                [&found.star_key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "re-measuring must not duplicate the row");
+        assert!((newest - 7000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn brightness_variation_separates_steady_stars_from_obscured_ones() {
+        // A star of constant brightness has no variation.
+        assert!(brightness_variation(&[100.0; 20]).unwrap() < 1e-12);
+        // One that is sometimes almost extinguished approaches 1.
+        let mut intermittent: Vec<f64> = vec![100.0; 10];
+        intermittent.extend(vec![1.0; 10]);
+        let v = brightness_variation(&intermittent).unwrap();
+        assert!(v > 0.9, "intermittent star variation {v}");
+        // Percentiles, not extremes: a single dropout barely moves it.
+        let mut one_bad = vec![100.0; 40];
+        one_bad[7] = 0.5;
+        assert!(brightness_variation(&one_bad).unwrap() < 0.05);
+        assert!(brightness_variation(&[]).is_none());
+        assert!(brightness_variation(&[0.0, 0.0]).is_none());
     }
 
     #[test]

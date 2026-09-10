@@ -1,0 +1,25 @@
+[
+  {
+    "id": "thaao-thule-allsky",
+    "name": "THAAO Thule all-sky (delayed daily preview)",
+    "kind": "html_index",
+    "url": "https://www.thuleatmos-it.it/data/skythule/index.php",
+    "timestamp_mode": "archive",
+    "timestamp_regex": "THULE_IMAGE_(?<timestamp>[0-9]{8}_[0-9]{4})\\.jpg",
+    "timestamp_format": "%Y%m%d_%H%M",
+    "image_link_regex": "THULE_IMAGE_[0-9]{8}_[0-9]{4}\\.jpg$",
+    "interval_seconds": 21600,
+    "latitude_deg": 76.5,
+    "longitude_deg": -68.8,
+    "altitude_m": 225,
+    "enabled": true,
+    "producer": {
+      "name": "THAAO / ENEA / INGV",
+      "institution": "ENEA and Istituto Nazionale di Geofisica e Vulcanologia",
+      "website": "https://www.thuleatmos-it.it/dataaccess/allskycamera/index.php",
+      "acknowledgement": "Images courtesy of the Thule High Arctic Atmospheric Observatory, ENEA, INGV and participating investigators. Meloni D., Di Sarra A., Muscari G., Di Iorio T., Pace G., Cali Quaglia F., Ciardini V., Tosco M., Bagiacchi P., Cannataro G., Iaccarino A. (2026). All-Sky Camera Images at the Thule High Arctic Atmospheric Observatory (THAAO_SKYCAM). https://doi.org/10.13127/thaao/skycam. Consult PI Daniela Meloni before scientific publication as requested by the provider.",
+      "copyright": "Copyright retained by ENEA, INGV and the originating data producers.",
+      "license": "CC-BY-4.0; https://creativecommons.org/licenses/by/4.0/"
+    }
+  }
+]

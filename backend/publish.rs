@@ -542,6 +542,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn concurrent_atomic_cache_writers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.bin");
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..8 { atomic(path, &[42u8; 1024]).unwrap(); }
+                });
+            }
+        });
+        assert_eq!(std::fs::read(path).unwrap(), vec![42u8; 1024]);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn mask_edge_fade_spans_ten_pixels_and_stays_positive() {
         // Composed exactly as the weight loop does it: pixel distance to the kept
         // region, the same smooth step used by the zenith taper, then the floor.

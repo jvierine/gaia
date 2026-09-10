@@ -25,14 +25,27 @@ remote() { $RSYNC_RSH "$public_target" "$@"; }
 revision=$(sqlite3 -cmd '.timeout 10000' "$GAIA_DB_PATH" 'SELECT requested FROM calibration_rebuild WHERE id=1;')
 completed=$(sqlite3 -cmd '.timeout 10000' "$GAIA_DB_PATH" 'SELECT completed FROM calibration_rebuild WHERE id=1;')
 stages=86400
-if test "$manifest_name" = manifest.json && test "$revision" != "$completed"; then stages='1200 3600 21600 86400'; fi
+if test "$manifest_name" = manifest.json && test "$revision" != "$completed"; then stages='1200 86400'; fi
 snapshot=$(mktemp -d /mnt/data/juha/gaia/.publication.XXXXXX)
-trap 'rm -f "$snapshot/manifest.json" "$snapshot/assets.txt"; rmdir "$snapshot"' EXIT
+render_pid=''
+trap 'if test -n "$render_pid"; then wait "$render_pid" || true; fi; rm -f "$snapshot/manifest.json" "$snapshot/assets.txt"; rmdir "$snapshot"' EXIT
 for lookback in $stages; do
 export GAIA_PUBLISH_LOOKBACK_SECONDS="$lookback"
 echo "GAIA calibration rebuild revision=$revision lookback_seconds=$lookback (newest first)"
-/mnt/data/juha/gaia-build/release/gaia-server --publish
+if test -n "$render_pid"; then
+    wait "$render_pid"
+    render_pid=''
+else
+    /mnt/data/juha/gaia-build/release/gaia-server --publish
+fi
 cp "/mnt/data/juha/gaia/public/$manifest_name" "$snapshot/manifest.json"
+# Start the entire newest-first 24-hour render BEFORE network delivery. There
+# remains exactly one renderer (at most 16 workers) and one uploader under flock.
+if test "$lookback" = 1200; then
+    echo "Rendering full 24-hour history concurrently with preview upload"
+    GAIA_PUBLISH_LOOKBACK_SECONDS=86400 /mnt/data/juha/gaia-build/release/gaia-server --publish &
+    render_pid=$!
+fi
 node -e 'const fs=require("fs"),p=require("path");const m=JSON.parse(fs.readFileSync(process.argv[1]));const urls=[m.geometry_url,m.igrf_url,...m.images.flatMap(x=>[x.texture_url,x.source_map_url]),...m.lens_models.flatMap(x=>x.models.map(y=>y.url))].filter(Boolean);const names=[...new Set(urls.map(x=>p.basename(x)))];for(const name of names){if(!fs.statSync(p.join(process.argv[2],name)).size)throw new Error("Empty asset: "+name)}process.stdout.write(names.join("\n")+"\n")' "$snapshot/manifest.json" /mnt/data/juha/gaia/public/assets > "$snapshot/assets.txt"
 # Local disk avoids SMB metadata latency. Files are renamed after transfer;
 # only a verified snapshot can become the public manifest. Retain old assets.

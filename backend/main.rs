@@ -1,6 +1,7 @@
 mod archive;
 mod crawler;
 mod db;
+mod equalize;
 mod geometry;
 mod igrf_grid;
 mod image_time;

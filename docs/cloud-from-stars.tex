@@ -1,0 +1,382 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{microtype}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.16}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds}
+\usepackage[colorlinks,linkcolor=blue!45!black]{hyperref}
+
+\definecolor{done}{RGB}{20,140,110}
+\definecolor{todo}{RGB}{200,90,20}
+\definecolor{cam}{RGB}{20,110,180}
+\definecolor{soft}{RGB}{130,145,155}
+
+\title{\bfseries Cloud coverage from stellar intensity time series\\[2mm]
+\large Status of the GAIA implementation, and what remains}
+\author{Memo --- GAIA Data Center}
+\date{10 September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+Cloud attenuates starlight, so the brightness of a known star measures the
+optical depth along that line of sight. This memo records what is implemented
+and verified in GAIA, what is stored, and what remains. The estimation chain is
+complete and pinned against the AIDA reference implementations to
+\SI{1e-6}{\degree} in the ephemeris and \SI{1e-6}{px} in the projection, for all
+six lens models in live use. Storage and both diagnostic plots exist. Three
+things do not: nothing yet writes measurements, the cloud weight is not applied
+to the composite, and the Voronoi cloud-cover output is not built. One
+methodological issue is unresolved and is the main risk to the numbers:
+atmospheric extinction varies with elevation, and a star's clear-sky reference
+taken over a whole night mixes elevations, which alone can imitate an optical
+depth of \num{0.35}.
+\end{abstract}
+
+\section{The measurement chain}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=2.2mm,
+  d/.style={draw=done,fill=done!10,rounded corners=1pt,align=center,font=\scriptsize,
+            minimum height=13mm,text width=19mm,inner sep=2pt},
+  t/.style={d,draw=todo,fill=todo!10},
+  a/.style={-{Stealth[length=2.2mm]},soft}]
+ \node[d] (cat) {catalogue\\ \textbf{512 stars}\\ $V_T<4$};
+ \node[d,right=of cat] (eph) {ephemeris\\ precess +\\ az/el};
+ \node[d,right=of eph] (proj) {lens model\\ az/el $\to$\\ pixel};
+ \node[d,right=of proj] (fit) {rotated 2-D\\ Gaussian\\ per channel};
+ \node[d,right=of fit] (store) {store row\\ per star,\\ frame, channel};
+ \node[t,right=of store] (tau) {$\tau$ from\\ own $p_{90}$};
+ \node[t,right=of tau] (out) {weight +\\ Voronoi\\ map};
+ \draw[a] (cat)--(eph); \draw[a] (eph)--(proj); \draw[a] (proj)--(fit);
+ \draw[a] (fit)--(store); \draw[a] (store)--(tau); \draw[a] (tau)--(out);
+ \node[below=5mm of proj,font=\scriptsize,soft,text width=42mm,align=center]
+   {verified against AIDA to \SI{1e-6}{\degree} and \SI{1e-6}{px}};
+ \node[below=5mm of tau,font=\scriptsize,todo,text width=40mm,align=center]
+   {not yet written, not yet applied};
+\end{tikzpicture}
+\caption{Green stages are implemented and tested; orange stages are not built.
+The chain runs entirely from the camera's own calibration, so it needs no
+additional instrumentation.}
+\label{fig:chain}
+\end{figure}
+
+\section{What is implemented and verified}
+
+All of the following lives in \texttt{backend/starphot.rs} and is covered by the
+Rust test suite (53 tests at the time of writing).
+
+\paragraph{Catalogue.} The AIDA \texttt{WISCAT1} payload is read directly:
+\num{42072} stars, of which \textbf{512} are brighter than $V_T=4$, the
+brightest at $V_T=-1.09$. Damaged or truncated payloads are refused rather than
+misread.
+
+\paragraph{Ephemeris.} Deliberate ports of the AIDA tool's
+\texttt{precessJ2000ToDate} and \texttt{starAzZe}, so a star lands where the
+calibration GUI puts it. Table~\ref{tab:verify} shows the agreement. An
+independent physical check confirms Polaris tracks the observer latitude all day
+to within the $\arcsin(\sin p/\cos\varphi)$ azimuth swing implied by its
+\SI{0.74}{\degree} polar distance; a first attempt used a fixed
+\SI{3}{\degree} bound and was wrong at \SI{78}{\degree}N.
+
+\paragraph{Forward projection.} A port of \texttt{wisc\_lens.az\_el\_to\_pixel}.
+The camera rotation is built as the explicit $R_y(\alpha)R_x(\beta)R_z(\gamma)$
+product used by the reference; a hand-expanded version was wrong and the golden
+tests caught it.
+
+\paragraph{Photometry.} A rotated elliptical Gaussian over seven parameters
+(Fig.~\ref{fig:gauss}), fitted by Levenberg--Marquardt with an analytic
+Jacobian, started from intensity-weighted second moments. The angle derivative
+is $\propto(\sigma_1/\sigma_2-\sigma_2/\sigma_1)$ and therefore vanishes for a
+round star, so the damping is written to keep that case solvable rather than
+singular. Results are returned in one canonical form, major axis first with the
+angle wrapped to $[-90,90)$.
+
+Total intensity above background is the analytic integral
+\begin{equation}
+  F \;=\; 2\pi A\,\sigma_1\sigma_2 ,
+\end{equation}
+which is \emph{unchanged} by rotation because rotation preserves area. That is
+the property an axis-aligned fit violates: forced to cover a tilted ellipse it
+inflates both widths and overestimates the flux. Since $F$ is the measurement,
+this matters directly.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llr}
+\toprule
+Quantity & Reference & Agreement \\
+\midrule
+Ephemeris, 4 stars $\times$ 3 epochs & \texttt{aidatools.js radecToAzZe} & \SI{1e-6}{\degree} \\
+Precession of Sirius to date & \texttt{precessJ2000ToDate} & \SI{1e-9}{rad} \\
+Forward projection, 6 lens models & \texttt{wisc\_lens.az\_el\_to\_pixel} & \SI{1e-6}{px} \\
+Projection on \emph{real} data, 46 stars & Kiruna calibration model positions & \SI{0.0000}{px} median \\
+Same, versus observed positions & the file's own residuals & \num{0.7411} vs \num{0.7411} px \\
+Gaussian flux, noiseless & analytic $2\pi A\sigma_1\sigma_2$ & \SI{2}{\percent} \\
+Gaussian flux, with noise & analytic & \SI{6}{\percent} \\
+Position angle, $-70$ to $+80$\si{\degree} & planted truth & \SI{1}{\degree}, \SI{0.05}{px} \\
+\bottomrule
+\end{tabular}
+\caption{Verification of the estimation chain. The fourth row is the strongest:
+feeding a real calibration's own stored altitude/azimuth through the port
+reproduces AIDA's own model pixel positions exactly, and the fifth reproduces
+that file's published residuals, confirming the \texttt{col}$\leftrightarrow x$,
+\texttt{row}$\leftrightarrow y$ and 1-based conventions that had to be inferred.}
+\label{tab:verify}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=1.0]
+  \draw[soft] (-3.2,-2.1) rectangle (3.2,2.1);
+  \begin{scope}[rotate=28]
+    \draw[cam,thick] (0,0) ellipse (2.0 and 0.85);
+    \draw[cam,dashed] (0,0) ellipse (1.0 and 0.425);
+    \draw[cam,-{Stealth[length=2mm]}] (0,0) -- (2.0,0) node[midway,below,font=\small,cam] {$\sigma_1$};
+    \draw[cam,-{Stealth[length=2mm]}] (0,0) -- (0,0.85) node[midway,left,font=\small,cam] {$\sigma_2$};
+  \end{scope}
+  \draw[soft,-{Stealth[length=2mm]}] (0,0) -- (2.6,0) node[below,font=\small,soft] {image $x$};
+  \draw[soft] (1.3,0) arc (0:28:1.3);
+  \node[font=\small] at (1.62,0.32) {$\theta$};
+  \fill (0,0) circle (1.6pt) node[below left,font=\small] {$(c_x,c_y)$};
+  \node[font=\small,align=left,anchor=north west] at (3.7,2.0)
+    {7 parameters:\\ background $B$\\ amplitude $A$\\ centroid $c_x,c_y$\\ widths $\sigma_1\ge\sigma_2$\\ angle $\theta$};
+  \node[font=\small,align=left,anchor=south west] at (3.7,-2.0)
+    {$F=2\pi A\sigma_1\sigma_2$\\ invariant under $\theta$};
+\end{tikzpicture}
+\caption{The fitted star image. Rotation is needed because trailing during the
+exposure, off-axis coma and astigmatism, and anisotropic binning all produce
+elongated images. The reported angle is meaningless for a round star, which is
+why \texttt{elongation()} is reported alongside it.}
+\label{fig:gauss}
+\end{figure}
+
+\paragraph{Per-camera lens models.} The archive uses \textbf{six} different
+models, and the field test must come from each camera's own calibration rather
+than be assumed (Table~\ref{tab:models}). Brown--Conrady is rectilinear and
+diverges outside its field: the archived \texttt{starvisor-bagdarin} calibration
+returns \num{3.6e8} pixels at azimuth \SI{120}{\degree}, elevation
+\SI{40}{\degree}, and \num{8.6e10} at azimuth \SI{250}{\degree}, elevation
+\SI{20}{\degree}. Those are finite, and an early version returned them as star
+positions. The forward-hemisphere test is deliberately \emph{not} applied to the
+fisheye models, which legitimately image directions with $s_3\le0$: the archived
+optmod-4 calibration has six such directions inside its frame.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrl}
+\toprule
+\texttt{optmod} & cameras & sky above \SI{5}{\degree} in field & note \\
+\midrule
+2  & 27 & \num{612}/\num{612} & all-sky fisheye \\
+6  & 11 & \num{612}/\num{612} & all-sky fisheye \\
+4  & 9  & \num{612}/\num{612} & 6 in-field directions with $s_3\le0$ \\
+12 & 4  & \num{612}/\num{612} & all-sky fisheye \\
+3  & 3  & \num{612}/\num{612} & all-sky fisheye \\
+20 & 3  & \num{176}/\num{612} & rectilinear, diverges outside its field \\
+\bottomrule
+\end{tabular}
+\caption{Lens models in live use, and measured sky coverage on a
+\SI{10}{\degree} azimuth by \SI{5}{\degree} elevation grid.}
+\label{tab:models}
+\end{table}
+
+\section{What the AIDA calibrations do and do not provide}
+
+The calibration HDF5 files contain \texttt{/selected\_stars}, whose columns are
+named in the \texttt{selected\_\allowbreak star\_\allowbreak columns} root attribute: index, an
+included-in-fit flag, altitude and azimuth, the measured star row and column,
+J2000 right ascension and declination, magnitude, the model row and column, and
+the three residuals. Names are in \texttt{selected\_\allowbreak star\_\allowbreak names}. This exists in
+\textbf{27 of 59} archived calibrations, across 26 cameras; the remaining 32 are
+UCalgary skymap-derived fits with no star data.
+
+Crucially the \texttt{magnitude} column is the \emph{catalogue} $V$ magnitude,
+not a measurement: Caph \num{2.27}, Schedar \num{2.23}, $\gamma$~Cas
+\num{2.47}, exactly the published values, and no flux, ADU, instrumental
+magnitude or background appears anywhere in the file. \textbf{There is therefore
+no photometric zero point available}, which is why each star's clear-sky
+reference must come from its own time series.
+
+\section{What is stored}
+
+The \texttt{star\_photometry} table holds one row per camera, frame, star and
+colour channel, indexed so one star's series is a single index scan. It retains
+the sky position (azimuth and elevation at the observation time, plus the J2000
+position identifying the star), the image position twice over (predicted by the
+lens model and found by the fit, with their separation), and every fitted
+parameter including the background, both widths, the angle, the amplitude, the
+flux and the residual.
+
+Two choices are deliberate. \texttt{star\_key} is derived from the J2000
+position, because the catalogue carries no identifier. And a star that is
+\emph{looked for and not found} is still recorded, with a null fit and the
+centroid distance kept: a star missing where the geometry says it should be
+visible is itself evidence about the sky, and dropping the row would make an
+overcast frame indistinguishable from an unmeasured one.
+
+All four channels are measured, red, green, blue and the panchromatic mean,
+because cloud extinction is wavelength dependent.
+
+\section{The unresolved issue: extinction depends on elevation}
+\label{sec:airmass}
+
+The intended estimator is
+\begin{equation}
+  \tau_{\mathrm{v}} \;=\; -\cos z\,\ln\!\frac{F}{F_{\mathrm{clear}}},
+  \qquad F_{\mathrm{clear}} = p_{90}\bigl(F(t)\bigr),
+  \label{eq:tau}
+\end{equation}
+with the $\cos z$ converting the slant path through a plane-parallel layer to a
+vertical depth. This is implemented. The difficulty is $F_{\mathrm{clear}}$.
+
+Stars move. Over a night a given star sweeps a wide range of elevations, and
+even in perfectly clear sky its flux changes because the air mass does:
+$F/F_0 = 10^{-0.4kX}$ with $X\simeq1/\sin(\text{elevation})$ and $k$ of order
+\SI{0.2}{mag} per air mass in $V$. Taking $p_{90}$ over a whole night therefore
+mixes elevations, and the resulting reference is not a clear-sky value at the
+elevation of the sample being compared.
+
+Figure~\ref{fig:airmass} and Table~\ref{tab:airmass} give the size of the
+effect. A star at \SI{20}{\degree} elevation is \SI{30}{\percent} fainter than
+at the zenith in \emph{perfectly clear} sky, which
+Equation~\eqref{eq:tau} would read as $\tau=\num{0.354}$ --- comparable to real
+thin cloud, and larger than the differences the cloud weighting is meant to act
+on.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=0.70\textwidth,height=0.36\textwidth,
+  xlabel={elevation (deg)}, ylabel={clear-sky $F/F_{\text{zenith}}$},
+  domain=10:90, samples=120, xmin=10,xmax=90, ymin=0.3,ymax=1.05,
+  grid=both, grid style={soft!30}, tick label style={font=\small},
+  label style={font=\small}, legend style={font=\small,draw=soft,at={(0.98,0.05)},anchor=south east}]
+ \addplot[very thick,cam,smooth] {pow(10,-0.4*0.2/sin(x))/pow(10,-0.4*0.2)};
+ \addlegendentry{$k=0.20$ mag/airmass}
+ \addplot[dashed,todo,thick,smooth] {pow(10,-0.4*0.35/sin(x))/pow(10,-0.4*0.35)};
+ \addlegendentry{$k=0.35$, hazier}
+ \draw[soft,dotted] (axis cs:20,0.3) -- (axis cs:20,0.702);
+ \draw[soft,dotted] (axis cs:10,0.702) -- (axis cs:20,0.702);
+ \node[font=\scriptsize,soft,anchor=west] at (axis cs:26,0.44) {$-30\%$ at \SI{20}{\degree} with no cloud};
+\end{axis}
+\end{tikzpicture}
+\caption{Clear-sky flux relative to the zenith, from air mass alone. A
+reference built from a star's whole night mixes these elevations.}
+\label{fig:airmass}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{rrrr}
+\toprule
+elevation & air mass $X$ & $F/F_{\text{zenith}}$ & apparent $\tau$ if compared to zenith \\
+\midrule
+\SI{70}{\degree} & 1.06 & 0.988 & 0.012 \\
+\SI{50}{\degree} & 1.31 & 0.945 & 0.056 \\
+\SI{30}{\degree} & 2.00 & 0.832 & 0.184 \\
+\SI{20}{\degree} & 2.92 & 0.702 & \textbf{0.354} \\
+\SI{15}{\degree} & 3.86 & 0.590 & 0.528 \\
+\SI{10}{\degree} & 5.76 & 0.416 & 0.877 \\
+\bottomrule
+\end{tabular}
+\caption{Spurious optical depth from air mass alone, $k=\SI{0.20}{mag}$ per air
+mass. These are not cloud.}
+\label{tab:airmass}
+\end{table}
+
+\paragraph{Three ways to fix it, in increasing quality.}
+\begin{enumerate}
+  \item \textbf{Bin the reference by elevation.} Compute $p_{90}$ within
+    elevation bands, say \SI{10}{\degree} wide, and compare a sample only with
+    its own band. Cheap, needs no model, but needs enough clear samples per band
+    and still leaves a residual trend inside each band.
+  \item \textbf{Fit a clear-sky curve per star.} Regress
+    $\ln F$ on air mass over the upper envelope of the series, giving
+    $\ln F_{\mathrm{clear}}(X) = \ln F_0 - 0.4\ln(10)\,kX$ with $F_0$ and $k$
+    per star. Then $\tau$ is the departure from that curve. This is the standard
+    photometric approach, is well conditioned when a star spans a range of air
+    mass, and yields $k$ as a by-product, itself a useful haze diagnostic.
+  \item \textbf{Fit one extinction coefficient per camera per night}, shared
+    across all its stars, with per-star zero points. More constrained, more
+    robust in patchy conditions, and it separates a camera-wide haze change from
+    localised cloud. This is what I would recommend building.
+\end{enumerate}
+Until one of these is in place the stored fluxes remain correct measurements,
+but the derived optical depths should not be treated as calibrated.
+
+\section{Other open issues}
+
+\begin{itemize}
+  \item \textbf{A persistently clouded star has a depressed $p_{90}$}, so its
+    own reference understates the extinction and it will look clearer than it
+    is. Needs either a minimum clear-fraction test or a reference carried over
+    a longer baseline than the analysis window.
+  \item \textbf{Saturation.} Bright stars clip, which truncates the Gaussian and
+    biases both amplitude and width, always toward underestimating the flux.
+    Clipped patches should be rejected, not fitted.
+  \item \textbf{Moon and twilight} raise the background and its gradient. The
+    fit has a flat background term only; a strong gradient across the patch will
+    leak into the amplitude. A linear background term would be a cheap
+    improvement.
+  \item \textbf{Rectilinear cameras} see under a third of the sky, so they will
+    have far fewer stars and correspondingly sparse Voronoi cells.
+  \item \textbf{Cell geometry.} The Voronoi tessellation is specified over star
+    positions, which are image positions; cloud is at altitude. Whether cells are
+    built in the image plane or on a projected shell changes the map, and should
+    be decided explicitly.
+  \item \textbf{Aurora contaminates the background}, not the star, but a bright
+    arc through a patch will raise the fitted background and can absorb part of
+    the stellar flux. Worth checking the correlation between fitted background
+    and known auroral activity before trusting marginal detections.
+\end{itemize}
+
+\section{What remains to be built}
+
+\begin{enumerate}
+  \item \textbf{A writer.} \texttt{measure\_frame} and \texttt{record\_frame}
+    are implemented and tested but nothing calls them, so the table is empty and
+    the panel shows no data. The pass must decode full-resolution originals,
+    because the \SI{256}{px} globe textures destroy stars, so it belongs in a
+    throttled background job rather than on a request path.
+  \item \textbf{The clear-sky reference}, per Sec.~\ref{sec:airmass}.
+  \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:
+    $w=\text{floor}+(1-\text{floor})e^{-\tau}$, strictly positive so a single
+    contributing camera normalises back to full strength and no hole is punched.
+    It is not yet a factor in \texttt{publish.rs}. It multiplies the weight, not
+    the pixel value, unlike the intensity equalization gains.
+  \item \textbf{Voronoi cloud-cover output}: tessellate with star positions as
+    centres, assign each cell its star's optical depth, and feather the cell
+    edges with the same $\psi$-based smooth step at \SI{10}{\percent} of cell
+    width, then publish the map as a separate image and expose it as an option
+    in the browse-history panel.
+  \item \textbf{A server restart} for the two new endpoints, which are live in
+    the code but not in the running process.
+\end{enumerate}
+
+\section{Where the code is}
+
+\begin{itemize}
+  \item \texttt{backend/starphot.rs} --- catalogue, ephemeris, forward
+    projection, field test, Gaussian fit, percentile, optical depth, cloud
+    weight, storage, variation metric.
+  \item \texttt{backend/schema.sql} --- the \texttt{star\_photometry} table and
+    its indices.
+  \item \texttt{backend/main.rs} --- \texttt{GET /api/sources/\{id\}/stars} and
+    \texttt{.../stars/series}.
+  \item \texttt{app/page.tsx}, \texttt{app/globals.css} --- the Star photometry
+    panel in the Cameras tab: brightness and background series on a shared time
+    axis, and a frame scatter coloured by brightness variation.
+\end{itemize}
+
+\end{document}

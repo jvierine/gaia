@@ -109,7 +109,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   observationStatus.setAttribute('role','status');canvas.parentElement?.appendChild(observationStatus);
   const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Full archive';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';canvas.parentElement?.appendChild(archiveLink);
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null};
-  let cameraSites:{label:string;url?:string;world:number[]}[]=[],publicCameras=new Map<number,PublicCamera>();
+  let cameraSites:{source_id?:string;label:string;url?:string;world:number[]}[]=[],publicCameras=new Map<number,PublicCamera>();
   type Attribution={url:string;width:number;height:number;data:Uint8ClampedArray};
   let attribution:Attribution|null=null;
   const attributionCache=new Map<string,Promise<Attribution>>();
@@ -134,11 +134,28 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
     }return match;
   };
   const tooltip=document.createElement('div');tooltip.style.cssText='position:absolute;display:none;pointer-events:none;z-index:5;background:#04111eee;color:white;padding:6px 9px;border:1px solid #54756a;border-radius:4px;font:12px sans-serif';canvas.parentElement?.appendChild(tooltip);
+  const canManage=import.meta.env.VITE_GAIA_PUBLIC!=='1';
+  let muteTarget:{id:string;name:string}|null=null,muteBusy=false;
+  const enabledOverrides=new Map<string,boolean>();
+  const muteKey=async(e:KeyboardEvent)=>{
+    if(!canManage||e.key.toLowerCase()!=='m'||e.repeat||e.ctrlKey||e.metaKey||e.altKey||!muteTarget||muteBusy)return;
+    if(e.target instanceof HTMLElement&&(e.target.isContentEditable||e.target.closest('input,textarea,select')))return;
+    e.preventDefault();const target=muteTarget;muteBusy=true;
+    try{const enabled=!(enabledOverrides.get(target.id)??true);
+      const response=await fetch(`/gaia/api/sources/${encodeURIComponent(target.id)}/enabled`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled})});
+      if(!response.ok)throw new Error('Could not change camera state');enabledOverrides.set(target.id,enabled);
+      observationStatus.textContent=`${target.name}: ${enabled?'shown':'muted'} — rebuilding composites. Press M to ${enabled?'mute':'show'} again.`;
+      canvas.dispatchEvent(new CustomEvent('gaia-camera-state',{bubbles:true,detail:{id:target.id,enabled}}));
+    }catch(error){observationStatus.textContent=String(error);}finally{muteBusy=false;}
+  };
+  window.addEventListener('keydown',muteKey);
   const hover=(e:PointerEvent)=>{
     tooltip.style.display='none';if(dragging)return;
     const r=canvas.getBoundingClientRect();let label='',url:string|undefined;
     const station=stationCamera(e.clientX,e.clientY),projected=projectedCamera(e.clientX,e.clientY);
     if(station){label=station.label;url=station.url}else if(projected){label=`Camera: ${projected.name}\nOperator: ${projected.producer}\n${locationLabel(projected)}\nClick for originating provider`;url=projected.website_url}
+    const targetId=station?.source_id||projected?.source_id;
+    if(canManage&&targetId){muteTarget={id:targetId,name:station?station.label.split('\n')[0].replace('Camera: ',''):projected!.name};label+='\nPress "M" to '+((enabledOverrides.get(targetId)??true)?'mute':'show')+' this camera';}
     if(label){tooltip.textContent=label;tooltip.dataset.url=url||'';tooltip.style.whiteSpace='pre-line';tooltip.style.display='block';tooltip.style.left=`${e.clientX-r.left+12}px`;tooltip.style.top=`${e.clientY-r.top+12}px`;}
   };
   const hideTooltip=()=>{tooltip.style.display='none'};
@@ -212,18 +229,18 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
   abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
   abort.signal.addEventListener('abort',()=>archiveLink.remove(),{once:true});
-  void (publicOnly?fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+  void (publicOnly?fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{source_id:c.source_id,label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}
     addLayer(sites);
     if(!publicOnly)cameraSites=sources.filter(s=>s.enabled&&s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{label:`${s.producer} · ${s.name}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
-    let lastMinute=-1;
+    let lastMinute=-1,lastRefresh=0;
     type Asset={geometry_url:string;texture_url:string;vertex_count:number};
     type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string;source_map_url?:string}[]};
     const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
     const catalogue=(id:string)=>{
       let c=catalogues.get(id);if(!c||c.expires<Date.now()){
-        c={expires:Date.now()+60000,value:fetch(publicOnly?manifestUrl:`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');return await r.json() as Catalogue})};catalogues.set(id,c);
+        c={expires:Date.now()+60000,value:fetch(publicOnly?manifestUrl:`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');const cat=await r.json() as Catalogue & {cameras?:PublicCamera[]};if(cat.cameras)publicCameras=new Map(cat.cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));return cat})};catalogues.set(id,c);
       }return c.value;
     };
     const pending=new Map<number,Promise<typeof frames>>(),ready=new Map<number,typeof frames>(),requests=new Map<number,AbortController>();
@@ -280,7 +297,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       if(!p){const request=new AbortController();requests.set(minute,request);p=loadFrames(epoch,request).then(result=>{if(!request.signal.aborted&&pending.has(minute))ready.set(minute,result);return result});pending.set(minute,p)}return p;
     };
     const updateFrames=async()=>{
-      const epoch=getEpochMillis(),minute=Math.floor(epoch/60000);if(minute===lastMinute)return;
+      const epoch=getEpochMillis(),minute=Math.floor(epoch/60000),refresh=Date.now()-lastRefresh>=30000;
+      if(minute===lastMinute&&!refresh)return;
+      if(refresh){lastRefresh=Date.now();catalogues.clear();for(const c of requests.values())c.abort();requests.clear();pending.clear();ready.clear();}
       lastMinute=minute;
       for(const key of pending.keys())if(key<minute||key>minute+3){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key)}
       onLoading(!ready.has(minute));
@@ -371,5 +390,5 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     gl.uniform3f(gl.getUniformLocation(lineProgram,'lineColor'),...color);
     gl.drawArrays(gl.LINES,0,count);
   }drawLayers(w,h);measure();animation=requestAnimationFrame(draw)};draw();
-  return()=>{perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);canvas.removeEventListener('gaia-sunlock',sunLockControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  return()=>{window.removeEventListener('keydown',muteKey);perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);canvas.removeEventListener('gaia-sunlock',sunLockControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

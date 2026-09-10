@@ -15,6 +15,15 @@ pub fn open(path: &Path) -> Result<Connection> {
     add_column(&conn, "calibrations", "star_count", "INTEGER")?;
     add_column(&conn, "camera_settings", "selected_calibration_id", "TEXT")?;
     add_column(&conn, "camera_settings", "mask_enabled", "INTEGER NOT NULL DEFAULT 1")?;
+    conn.execute_batch("
+CREATE TABLE IF NOT EXISTS calibration_rebuild (id INTEGER PRIMARY KEY CHECK(id=1), requested INTEGER NOT NULL, completed INTEGER NOT NULL);
+INSERT OR IGNORE INTO calibration_rebuild VALUES(1,1,0);
+CREATE TRIGGER IF NOT EXISTS rebuild_calibration_insert AFTER INSERT ON calibrations BEGIN UPDATE calibration_rebuild SET requested=requested+1 WHERE id=1; END;
+CREATE TRIGGER IF NOT EXISTS rebuild_calibration_update AFTER UPDATE OF hdf5_path,valid_from_utc,valid_to_utc ON calibrations BEGIN UPDATE calibration_rebuild SET requested=requested+1 WHERE id=1; END;
+CREATE TRIGGER IF NOT EXISTS rebuild_camera_enabled AFTER UPDATE OF enabled ON sources WHEN NEW.enabled IS NOT OLD.enabled BEGIN UPDATE calibration_rebuild SET requested=requested+1 WHERE id=1; END;
+CREATE TRIGGER IF NOT EXISTS rebuild_selection_insert AFTER INSERT ON camera_settings WHEN NEW.selected_calibration_id IS NOT NULL BEGIN UPDATE calibration_rebuild SET requested=requested+1 WHERE id=1; END;
+CREATE TRIGGER IF NOT EXISTS rebuild_selection_update AFTER UPDATE OF selected_calibration_id ON camera_settings WHEN NEW.selected_calibration_id IS NOT OLD.selected_calibration_id BEGIN UPDATE calibration_rebuild SET requested=requested+1 WHERE id=1; END;
+")?;
     Ok(conn)
 }
 
@@ -46,4 +55,21 @@ pub fn upsert_source(conn: &Connection, source: &crate::model::SourceConfig) -> 
             format!("{:?}", source.timestamp_mode).to_lowercase(), source.interval_seconds as i64, producer_id,
             source.latitude_deg, source.longitude_deg, source.altitude_m, source.enabled, serde_json::to_string(source)?])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rebuild_tests {
+    #[test]
+    fn requests_are_transactional_and_new_requests_survive_acknowledgement(){
+        let dir=tempfile::tempdir().unwrap();let conn=super::open(&dir.path().join("test.sqlite")).unwrap();
+        let revision=||conn.query_row("SELECT requested FROM calibration_rebuild",[],|r|r.get::<_,i64>(0)).unwrap();
+        let initial=revision();
+        conn.execute_batch("BEGIN; INSERT INTO calibrations(id,created_utc,method,hdf5_path) VALUES('rollback','now','test','test.h5'); ROLLBACK;").unwrap();
+        assert_eq!(revision(),initial);
+        conn.execute("INSERT INTO calibrations(id,created_utc,method,hdf5_path) VALUES('saved','now','test','test.h5')",[]).unwrap();
+        let captured=revision();assert_eq!(captured,initial+1);
+        conn.execute("UPDATE calibrations SET valid_from_utc='earlier' WHERE id='saved'",[]).unwrap();
+        conn.execute("UPDATE calibration_rebuild SET completed=?1",[captured]).unwrap();
+        assert!(revision()>captured);
+    }
 }

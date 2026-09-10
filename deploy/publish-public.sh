@@ -19,9 +19,19 @@ public_target="$publisher_user@juha.no"
 export RSYNC_RSH="ssh -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=120 -o ControlPath=/home/$publisher_user/.ssh/gaia-publish-%C"
 if test "$publisher_user" = bgu001; then RSYNC_RSH="$RSYNC_RSH -o IdentitiesOnly=yes -i /home/bgu001/.ssh/gaia_juha_no_ed25519"; fi
 remote() { $RSYNC_RSH "$public_target" "$@"; }
-/mnt/data/juha/gaia-build/release/gaia-server --publish
+# Rebuild requests are transactionally recorded by SQLite triggers, including
+# uploads outside the HTTP API. A newer request arriving during this run remains
+# pending: only the captured revision is acknowledged after verified delivery.
+revision=$(sqlite3 -cmd '.timeout 10000' "$GAIA_DB_PATH" 'SELECT requested FROM calibration_rebuild WHERE id=1;')
+completed=$(sqlite3 -cmd '.timeout 10000' "$GAIA_DB_PATH" 'SELECT completed FROM calibration_rebuild WHERE id=1;')
+stages=86400
+if test "$manifest_name" = manifest.json && test "$revision" != "$completed"; then stages='1200 3600 21600 86400'; fi
 snapshot=$(mktemp -d /mnt/data/juha/gaia/.publication.XXXXXX)
 trap 'rm -f "$snapshot/manifest.json" "$snapshot/assets.txt"; rmdir "$snapshot"' EXIT
+for lookback in $stages; do
+export GAIA_PUBLISH_LOOKBACK_SECONDS="$lookback"
+echo "GAIA calibration rebuild revision=$revision lookback_seconds=$lookback (newest first)"
+/mnt/data/juha/gaia-build/release/gaia-server --publish
 cp "/mnt/data/juha/gaia/public/$manifest_name" "$snapshot/manifest.json"
 node -e 'const fs=require("fs"),p=require("path");const m=JSON.parse(fs.readFileSync(process.argv[1]));const urls=[m.geometry_url,m.igrf_url,...m.images.flatMap(x=>[x.texture_url,x.source_map_url]),...m.lens_models.flatMap(x=>x.models.map(y=>y.url))].filter(Boolean);const names=[...new Set(urls.map(x=>p.basename(x)))];for(const name of names){if(!fs.statSync(p.join(process.argv[2],name)).size)throw new Error("Empty asset: "+name)}process.stdout.write(names.join("\n")+"\n")' "$snapshot/manifest.json" /mnt/data/juha/gaia/public/assets > "$snapshot/assets.txt"
 # Local disk avoids SMB metadata latency. Files are renamed after transfer;
@@ -38,4 +48,10 @@ rm assets.pending
 REMOTE
 if test "$manifest_name" = manifest.json; then
     node -e 'const fs=require("fs"),m=JSON.parse(fs.readFileSync(process.argv[1]));const p="/mnt/data/juha/gaia/publication-status.json";fs.writeFileSync(p+".pending",JSON.stringify({verified_utc:new Date().toISOString(),latest_observation_utc:m.images.at(-1)?.at,frames:m.images.length}));fs.renameSync(p+".pending",p)' "$snapshot/manifest.json"
+fi
+
+done
+if test "$manifest_name" = manifest.json; then
+    case "$revision" in ''|*[!0-9]*) exit 1;; esac
+    sqlite3 -cmd '.timeout 10000' "$GAIA_DB_PATH" "UPDATE calibration_rebuild SET completed=MAX(completed,$revision) WHERE id=1;"
 fi

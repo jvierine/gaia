@@ -26,6 +26,8 @@
 .public-playback .sun-lock input{display:block;width:18px;height:18px;margin:0;flex:none;accent-color:#80e8c4;cursor:pointer}
 .public-playback .sun-lock span{display:grid;line-height:1.2}
 .public-playback .sun-lock strong{font-size:12px;letter-spacing:.05em}
-.public-playback .sun-lock small{color:#a9d6c6;font-size:9px}
-.public-playback .sun-lock:has(input:checked){background:#80e8c4;border-color:#c8ffe9;color:#04231a}
+.public-playback .sun-lock small{display:none}
+.public-playback .sun-lock{padding:3px 6px;gap:5px;background:transparent;border-color:transparent;border-radius:4px}
+.public-playback .sun-lock input{width:14px;height:14px}
+.public-playback .sun-lock:has(input:checked){background:#14352d;border-color:#34584d;color:#80e8c4}
 .public-playback .sun-lock:has(input:checked) small{color:#0a4433}

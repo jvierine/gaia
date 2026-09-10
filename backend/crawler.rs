@@ -267,8 +267,11 @@ pub async fn run_loop(
             tokio::time::sleep(Duration::from_secs(initial_delay)).await;
             let mut timer=tokio::time::interval(Duration::from_secs(source.interval_seconds.max(30)));
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut failures=0u32;
+            let mut retry_after=Instant::now();
             loop{
             timer.tick().await;
+            if Instant::now()<retry_after {continue}
             let enabled=db::open(&db_path).ok().and_then(|conn|conn.query_row("SELECT enabled AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=sources.id) FROM sources WHERE id=?1",[&source.id],|r|r.get::<_,bool>(0)).ok()).unwrap_or(false);
             if !enabled{continue}
             let _meteor_permit=if is_meteor {Some(meteor_slots.acquire().await.unwrap())} else {None};
@@ -294,10 +297,14 @@ pub async fn run_loop(
             if let (Some(run_id), Ok(conn)) = (run_id, db::open(&db_path)) {
                 match result {
                     Ok((d, n, x)) => {
+                        failures=0;
                         let _=conn.execute("UPDATE crawler_runs SET finished_utc=?1,state='complete',discovered=?2,downloaded=?3,duplicate=?4 WHERE id=?5",rusqlite::params![Utc::now().to_rfc3339(),d as i64,n as i64,x as i64,run_id]);
                         let _=conn.execute("UPDATE sources SET last_attempt_utc=?1,last_success_utc=?1,last_error=NULL WHERE id=?2",rusqlite::params![Utc::now().to_rfc3339(),source.id]);
                     }
                     Err(e) => {
+                        failures=failures.saturating_add(1);
+                        let delay=source.interval_seconds.max(30).saturating_mul(1u64<<failures.min(5)).min(900);
+                        retry_after=Instant::now()+Duration::from_secs(delay);
                         tracing::warn!(source=%source.id,"crawl failed: {e:#}");
                         let _=conn.execute("UPDATE crawler_runs SET finished_utc=?1,state='failed',error=?2 WHERE id=?3",rusqlite::params![Utc::now().to_rfc3339(),format!("{e:#}"),run_id]);
                         let _ = conn.execute(

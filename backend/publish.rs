@@ -224,8 +224,13 @@ pub fn run(s: &AppState) -> Result<()> {
         "GAIA_SOLAR_FLOOR must be in (0,1]"
     );
     let mut magnetic_weight_cache: BTreeMap<String, Vec<f32>> = BTreeMap::new();
-    // Five-minute history plus the latest minute. Reuse immutable completed frames.
-    let mut epochs: Vec<i64> = ((end - 86400) / 300..=end / 300).map(|n| n * 300).collect();
+    // Every archived observation minute, rather than throwing four minutes out
+    // of five away. Historical regeneration uses exactly the live stitcher.
+    let full_archive = std::env::var("GAIA_PUBLISH_ALL").as_deref() == Ok("1");
+    let start = if full_archive { 0 } else { end - 86400 };
+    let mut query = conn.prepare("SELECT DISTINCT (CAST(strftime('%s',i.observation_utc) AS INTEGER)/60+1)*60 AS epoch FROM images i JOIN sources s ON s.id=i.source_id WHERE s.enabled=1 AND EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) AND CAST(strftime('%s',i.observation_utc) AS INTEGER)>=?1 AND CAST(strftime('%s',i.observation_utc) AS INTEGER)<=?2 ORDER BY epoch")?;
+    let mut epochs: Vec<i64> = query.query_map(rusqlite::params![start,end], |r| r.get(0))?.collect::<Result<Vec<_>,_>>()?;
+    epochs.retain(|epoch| *epoch<=end);
     epochs.push(end);
     epochs.sort();
     epochs.dedup();
@@ -505,7 +510,8 @@ pub fn run(s: &AppState) -> Result<()> {
     let lens_model_documentation = json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
     let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d) * solar_taper(sun_elevation)","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"solar_taper":"F + (1-F) * (1 - psi(u)/(psi(u)+psi(1-u))) with u=(elevation-D)/(L-D); whole-image weight from the solar elevation at the camera station","solar_taper_dark_deg":sun_dark_deg,"solar_taper_light_deg":sun_light_deg,"solar_taper_floor":sun_floor,"zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
     let manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
-    atomic(&root.join("manifest.json"), &serde_json::to_vec(&manifest)?)?;
+    let name=if full_archive { "archive-manifest.json" } else { "manifest.json" };
+    atomic(&root.join(name), &serde_json::to_vec(&manifest)?)?;
     Ok(())
 }
 

@@ -40,5 +40,13 @@ next-env.d.ts
 /target/
 /web-dist/
 /public-dist/
+# LaTeX build products; the .tex is the source of record
+docs/*.pdf
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.fls
+docs/*.fdb_latexmk
+docs/*.synctex.gz
 tsconfig.tsbuildinfo
 *.sqlite3*

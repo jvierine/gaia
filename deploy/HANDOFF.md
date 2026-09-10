@@ -44,6 +44,9 @@ Both directories deliberately use `gaia-deploy`, with j and bgu001 as members,
 `/home/bgu001/.ssh/gaia_juha_no_ed25519`. He does not need j's account or key.
 Preserve these permissions; coordinate any manual public-data repair with j's
 automated publisher. Never publish a manifest before its assets are verified.
+The publication script selects the invoking user's juha.no account. As bgu001
+it explicitly uses his dedicated key, not `j@juha.no`. The shared flock still
+prevents simultaneous manual/automatic publishers.
 
 Apache config: `/etc/apache2/conf-enabled/gaia.conf` on juha.no;
 tracked template: `deploy/apache-public.conf`. Old SMB public files remain
@@ -74,6 +77,17 @@ The duplicate publisher, rather than the StarVisor crawler, caused the missing
 public files. Publication correctness is checked independently of acquisition.
 A successful source download is not publication proof.
 
+Failed asset HTTP responses must be `Cache-Control: no-store`; never cache a
+404 as immutable for a year. The viewer retries failed textures with cache
+reload, recovering clients that cached the previous missing-file responses.
+
+GAIA JSON/JS/CSS/HTML use Apache compression on both hosts, configured by
+`deploy/apache-compression.conf` at `/etc/apache2/conf-available/gaia-compression.conf`.
+`deploy/gaia-public-tmpfiles.conf` recreates cache directories on juha.no at boot.
+The backend's Publish status now reads `publication-status.json`, written only
+after verified delivery. It reports the actual public observation time and
+marks delays; the old empty mosaics table no longer determines publication status.
+
 ## Verification and follow-up
 
 Check both live routes, including recent texture and attribution URLs, camera
@@ -81,3 +95,14 @@ hover/click, Sun up drag, and historical playback. Confirm a full publisher run
 succeeds and its manifest references are present on local public storage.
 Keep this note updated with subsequent changes. Do not silently reintroduce
 SMB into public serving, parallel publishers, or separate renderer code paths.
+
+## Parallel preprocessing (2026-09-10)
+
+Publisher commit 8a44e68 uses a dynamic newest-first timestamp queue with up to
+16 Rust worker threads. GAIA_PREPROCESS_WORKERS defaults to 16 and is clamped
+to 1..16. Every worker retains its own magnetic-weight cache; cache writes use
+unique temporary files and atomic rename. Blending equations, source selection,
+GAIA_PUBLISH_ALL, and chronological manifest ordering are unchanged.
+The installed j gaia-publish.service sets CPUQuota=1600%, MemoryMax=12G and
+GAIA_PREPROCESS_WORKERS=16. The existing archive rebuild was NOT interrupted;
+its next publisher invocation loads the new executable.

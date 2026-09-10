@@ -64,17 +64,19 @@ async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
         .unwrap_or(0);
     let count: i64 = conn
         .query_row(
-            "SELECT count(*) FROM images WHERE downloaded_utc >= datetime('now','-1 day')",
+            "SELECT count(*) FROM images WHERE julianday(downloaded_utc) >= julianday('now','-1 day')",
             [],
             |r| r.get(0),
         )
         .unwrap_or(0);
     let latest: Option<String> = conn
-        .query_row("SELECT max(observation_utc) FROM images", [], |r| r.get(0))
+        .query_row("SELECT max(observation_utc) FROM images WHERE julianday(observation_utc)<=julianday('now','+2 minutes')", [], |r| r.get(0))
         .unwrap_or(None);
-    let mosaic: Option<String> = conn
-        .query_row("SELECT max(observation_utc) FROM mosaics", [], |r| r.get(0))
-        .unwrap_or(None);
+    let published=std::fs::read(s.archive_root.join("publication-status.json")).ok()
+        .and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok());
+    let mosaic=published.as_ref().and_then(|v|v["latest_observation_utc"].as_str()).map(str::to_owned);
+    let publication_fresh=mosaic.as_deref().and_then(|t|DateTime::parse_from_rfc3339(t).ok())
+        .is_some_and(|t|Utc::now().signed_duration_since(t).num_minutes()<10);
     Ok(Json(SystemStatus {
         service: "GAIA Data Center",
         now_utc: Utc::now().to_rfc3339(),
@@ -108,6 +110,13 @@ async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
                 name: "Tessellate",
                 state: "ready",
                 detail: "Magnetic-zenith weighted mosaic".into(),
+            },
+            PipelineStage {
+                name: "Publish",
+                state: if publication_fresh {"ready"} else {"delayed"},
+                detail: published.as_ref().and_then(|v|v["latest_observation_utc"].as_str())
+                    .map(|t|format!("Verified on juha.no through {t}"))
+                    .unwrap_or_else(||"Waiting for a verified public delivery".into()),
             },
         ],
     }))

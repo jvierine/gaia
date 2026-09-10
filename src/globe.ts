@@ -250,7 +250,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           let geometry=geometryCache.get(asset.geometry_url),texture=textureCache.get(asset.texture_url);
           const [bytes,blob]=await Promise.all([
             geometry?null:fetch(asset.geometry_url,{signal:request.signal}).then(r=>{if(!r.ok)throw new Error('Geometry unavailable');return r.arrayBuffer()}),
-            texture?null:fetch(asset.texture_url,{signal:request.signal}).then(r=>{if(!r.ok)throw new Error('Texture unavailable');return r.blob()})
+            texture?null:fetch(asset.texture_url,{signal:request.signal}).then(async r=>{if(!r.ok)r=await fetch(asset.texture_url,{cache:'reload',signal:request.signal});if(!r.ok)throw new Error('Texture unavailable');return r.blob()})
           ]);
           if(request.signal.aborted||abort.signal.aborted)return;
           geometry=geometryCache.get(asset.geometry_url)||geometry;

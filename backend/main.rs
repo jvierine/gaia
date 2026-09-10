@@ -12,6 +12,7 @@ mod pixel_mask;
 mod projection;
 mod publish;
 mod quality;
+mod starphot;
 use axum::{
     Json, Router,
     body::Body,

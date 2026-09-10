@@ -11,7 +11,7 @@ const MASK_FADE_FLOOR: f64 = 1e-6;
 const W: u32 = 4096;
 const H: u32 = 2048;
 fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temp = path.with_extension("pending");
+    let temp = path.with_extension(format!("{}.pending", uuid::Uuid::new_v4()));
     std::fs::write(&temp, bytes)?;
     std::fs::rename(temp, path)?;
     Ok(())
@@ -161,7 +161,6 @@ pub fn run(s: &AppState) -> Result<()> {
     atomic(&assets.join(format!("igrf-{}.bin", s.igrf_year)), &s.igrf)?;
     let end = Utc::now().timestamp() / 60 * 60;
     let mut frames = Vec::new();
-    let igrf = ferromagnetic::igrf::IGRF::default();
     let falloff_deg = std::env::var("GAIA_MAGNETIC_FALLOFF_DEG")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
@@ -223,7 +222,6 @@ pub fn run(s: &AppState) -> Result<()> {
         sun_floor.is_finite() && sun_floor > 0.0 && sun_floor <= 1.0,
         "GAIA_SOLAR_FLOOR must be in (0,1]"
     );
-    let mut magnetic_weight_cache: BTreeMap<String, Vec<f32>> = BTreeMap::new();
     // Every archived observation minute, rather than throwing four minutes out
     // of five away. Historical regeneration uses exactly the live stitcher.
     let full_archive = std::env::var("GAIA_PUBLISH_ALL").as_deref() == Ok("1");
@@ -235,7 +233,23 @@ pub fn run(s: &AppState) -> Result<()> {
     epochs.sort();
     epochs.dedup();
     // Work newest-first so initial publication has a live frame before backfill.
-    for epoch in epochs.into_iter().rev() {
+    epochs.reverse();
+    let workers = std::env::var("GAIA_PREPROCESS_WORKERS").ok()
+        .and_then(|v|v.parse::<usize>().ok()).unwrap_or(16).clamp(1,16)
+        .min(epochs.len().max(1));
+    let next_epoch = std::sync::atomic::AtomicUsize::new(0);
+    let started = std::time::Instant::now();
+    tracing::info!(workers, frames=epochs.len(), "Starting parallel atlas preprocessing");
+    let batches = std::thread::scope(|scope| -> Result<Vec<Vec<serde_json::Value>>> {
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            handles.push(scope.spawn(|| -> Result<Vec<serde_json::Value>> {
+                let igrf = ferromagnetic::igrf::IGRF::default();
+                let mut magnetic_weight_cache: BTreeMap<String, Vec<f32>> = BTreeMap::new();
+                let mut frames = Vec::new();
+                loop {
+                    let index = next_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(&epoch) = epochs.get(index) else {break};
         let at = Utc.timestamp_opt(epoch, 0).unwrap();
         let mut inputs = Vec::new();
         for (id, lat, lon, alt) in &cameras {
@@ -496,7 +510,15 @@ pub fn run(s: &AppState) -> Result<()> {
         }
         frames.push(json!({"at":at.to_rfc3339(),"width":W,"height":H,"texture_url":format!("/gaia/public/assets/{name}"),"source_map_url":format!("/gaia/public/assets/{source_name}"),"contributors":inputs.iter().map(|(id,_,_,_,a)|json!({"source_id":id,"observation_utc":a["observation_utc"],"calibration_id":a["calibration_id"]})).collect::<Vec<_>>()}));
     }
-    frames.reverse();
+                Ok(frames)
+            }));
+        }
+        handles.into_iter().map(|handle| handle.join()
+            .map_err(|_|anyhow::anyhow!("atlas worker panicked"))?).collect()
+    })?;
+    for batch in batches {frames.extend(batch);}
+    frames.sort_by(|a,b|a["at"].as_str().cmp(&b["at"].as_str()));
+    tracing::info!(workers, frames=frames.len(), seconds=started.elapsed().as_secs_f64(), "Parallel atlas preprocessing complete");
     anyhow::ensure!(
         !frames.is_empty(),
         "No composites available; retaining previous publication"

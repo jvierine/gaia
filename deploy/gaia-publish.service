@@ -1,6 +1,9 @@
 [Unit]
 Description=Stitch GAIA textures and push static public playback to juha.no
 [Service]
+Environment=GAIA_PREPROCESS_WORKERS=16
+CPUQuota=1600%
+MemoryMax=12G
 Type=oneshot
 WorkingDirectory=/mnt/data/juha/gaia/code
 Environment=GAIA_MAGNETIC_FALLOFF_DEG=20

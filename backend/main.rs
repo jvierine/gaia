@@ -613,7 +613,13 @@ async fn calibration(
             .ok()
             .map(|n| n as i64)
     });
-    conn.execute("INSERT INTO calibrations(id,source_id,created_utc,valid_from_utc,method,hdf5_path,residual_px,submitted_by,star_count) VALUES(?1,?2,?3,?4,'AIDA/WISC',?5,?6,?7,?8)",rusqlite::params![id,source,Utc::now().to_rfc3339(),valid_from,path.to_string_lossy(),residual_px,submitter,stars]).map_err(internal)?;
+    // Activate this newly fitted model, retaining all older models for rollback.
+    // Explicit selection uses the stationary camera model for retained frames too.
+    let tx = conn.unchecked_transaction().map_err(internal)?;
+    tx.execute("INSERT INTO calibrations(id,source_id,created_utc,valid_from_utc,method,hdf5_path,residual_px,submitted_by,star_count) VALUES(?1,?2,?3,?4,'AIDA/WISC',?5,?6,?7,?8)",rusqlite::params![id,source,Utc::now().to_rfc3339(),valid_from,path.to_string_lossy(),residual_px,submitter,stars]).map_err(internal)?;
+    tx.execute("INSERT INTO camera_settings(source_id,updated_utc,selected_calibration_id) VALUES(?1,?2,?3) ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,selected_calibration_id=excluded.selected_calibration_id",rusqlite::params![source,Utc::now().to_rfc3339(),id]).map_err(internal)?;
+    tx.commit().map_err(internal)?;
+
     Ok((
         StatusCode::CREATED,
         Json(json!({"id":id,"state":"calibrated","source_id":source,"star_count":stars,"residual_px":residual_px})),

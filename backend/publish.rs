@@ -65,6 +65,21 @@ fn publish_lens_models(
     }
     Ok(cameras.into_values().collect())
 }
+fn stable_indices(previous: &serde_json::Value, ids: impl Iterator<Item=String>) -> BTreeMap<String,u32> {
+    let mut result=BTreeMap::new();
+    if let Some(rows)=previous["cameras"].as_array(){for row in rows{if let (Some(id),Some(index))=(row["source_id"].as_str(),row["map_index"].as_u64()){result.insert(id.to_string(),index as u32);}}}
+    let mut next=result.values().copied().max().unwrap_or(0)+1;
+    for id in ids{if !result.contains_key(&id){result.insert(id,next);next+=1;}}
+    result
+}
+fn retain_history(previous: &serde_json::Value, frames: &mut Vec<serde_json::Value>, start:i64, end:i64, allowed:&std::collections::BTreeSet<String>){
+    if let Some(rows)=previous["images"].as_array(){for row in rows{
+        let epoch=row["at"].as_str().and_then(|s|chrono::DateTime::parse_from_rfc3339(s).ok()).map(|t|t.timestamp());
+        let safe=row["contributors"].as_array().map(|cs|cs.iter().all(|c|c["source_id"].as_str().is_some_and(|id|allowed.contains(id)))).unwrap_or(false);
+        if safe && epoch.is_some_and(|t|t>=end-86400 && t<start){frames.push(row.clone());}
+    }}
+    frames.sort_by(|a,b|a["at"].as_str().cmp(&b["at"].as_str()));
+}
 pub fn run(s: &AppState) -> Result<()> {
     let root = s.archive_root.join("public");
     let assets = root.join("assets");
@@ -131,11 +146,10 @@ pub fn run(s: &AppState) -> Result<()> {
         let fit = (256.0 / raw_w).min(256.0 / raw_h).min(1.0);
         mask_outlines.insert(id.clone(), (crop, polygons, [raw_w * fit, raw_h * fit]));
     }
-    let camera_indices: BTreeMap<String, u32> = cameras
-        .iter()
-        .enumerate()
-        .map(|(i, (id, _, _, _))| (id.clone(), i as u32 + 1))
-        .collect();
+    let previous:serde_json::Value=std::fs::read(root.join("manifest.json")).ok().and_then(|bytes|serde_json::from_slice(&bytes).ok()).unwrap_or(serde_json::Value::Null);
+    // Existing source-map indices must not change when a new camera is calibrated.
+    let camera_indices=stable_indices(&previous,cameras.iter().map(|(id,_,_,_)|id.clone()));
+    let index_key=serde_json::to_string(&camera_indices)?;
     let mut mesh = Vec::new();
     for y in 0..90 {
         for x in 0..180 {
@@ -225,7 +239,8 @@ pub fn run(s: &AppState) -> Result<()> {
     // Every archived observation minute, rather than throwing four minutes out
     // of five away. Historical regeneration uses exactly the live stitcher.
     let full_archive = std::env::var("GAIA_PUBLISH_ALL").as_deref() == Ok("1");
-    let start = if full_archive { 0 } else { end - 86400 };
+    let lookback=std::env::var("GAIA_PUBLISH_LOOKBACK_SECONDS").ok().and_then(|v|v.parse::<i64>().ok()).unwrap_or(86400).clamp(60,86400);
+    let start = if full_archive { 0 } else { end - lookback };
     let mut query = conn.prepare("SELECT DISTINCT (CAST(strftime('%s',i.observation_utc) AS INTEGER)/60+1)*60 AS epoch FROM images i JOIN sources s ON s.id=i.source_id WHERE s.enabled=1 AND EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) AND CAST(strftime('%s',i.observation_utc) AS INTEGER)>=?1 AND CAST(strftime('%s',i.observation_utc) AS INTEGER)<=?2 ORDER BY epoch")?;
     let mut epochs: Vec<i64> = query.query_map(rusqlite::params![start,end], |r| r.get(0))?.collect::<Result<Vec<_>,_>>()?;
     epochs.retain(|epoch| *epoch<=end);
@@ -271,7 +286,7 @@ pub fn run(s: &AppState) -> Result<()> {
         let source_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "source-v6-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}:{epoch}:{}",
+                "source-v7-indices-{index_key}-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}:{epoch}:{}",
                 serde_json::to_string(&inputs)?
             ))
         );
@@ -517,6 +532,7 @@ pub fn run(s: &AppState) -> Result<()> {
             .map_err(|_|anyhow::anyhow!("atlas worker panicked"))?).collect()
     })?;
     for batch in batches {frames.extend(batch);}
+    if !full_archive && lookback<86400 {retain_history(&previous,&mut frames,start,end,&cameras.iter().map(|(id,_,_,_)|id.clone()).collect());}
     frames.sort_by(|a,b|a["at"].as_str().cmp(&b["at"].as_str()));
     tracing::info!(workers, frames=frames.len(), seconds=started.elapsed().as_secs_f64(), "Parallel atlas preprocessing complete");
     anyhow::ensure!(
@@ -541,6 +557,22 @@ pub fn run(s: &AppState) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn new_cameras_do_not_renumber_previous_attribution(){
+        let previous=json!({"cameras":[{"source_id":"z","map_index":9}]});
+        let indices=stable_indices(&previous,["a".to_string(),"z".to_string()].into_iter());
+        assert_eq!(indices["z"],9);assert_eq!(indices["a"],10);
+    }
+    #[test]
+    fn progressive_publication_keeps_only_safe_older_history(){
+        let frame=|time:&str,id:&str|json!({"at":time,"contributors":[{"source_id":id}]});
+        let old=frame("2026-09-10T00:00:00Z","kept");
+        let previous=json!({"images":[old,frame("2026-09-10T00:01:00Z","disabled"),frame("2026-09-10T23:59:00Z","kept")]});
+        let end=chrono::DateTime::parse_from_rfc3339("2026-09-11T00:00:00Z").unwrap().timestamp();
+        let mut frames=vec![frame("2026-09-10T23:58:00Z","new")];
+        retain_history(&previous,&mut frames,end-1200,end,&["kept".to_string()].into_iter().collect());
+        assert_eq!(frames.len(),2);assert_eq!(frames[0]["at"],"2026-09-10T00:00:00Z");
+    }
     #[test]
     fn concurrent_atomic_cache_writers() {
         let dir = tempfile::tempdir().unwrap();

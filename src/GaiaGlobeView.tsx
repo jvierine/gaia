@@ -7,11 +7,15 @@ type Props={
   onLoading?:(loading:boolean)=>void;
   /** Drive the orientation from the sun-earth line, sun up, planet rotating underneath. */
   sunLock?:boolean;
+  /** Set false to host the zoom controls outside the globe, e.g. in a side pane. */
+  showTools?:boolean;
+  /** Filled with the zoom action so a parent can drive it from its own controls. */
+  zoomRef?:{current:((action:'in'|'out'|'reset')=>void)|null};
   children?:ReactNode;
 };
 
 /** The single 3D stitched-atlas view used by both the public and admin shells. */
-export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},sunLock=false,children}:Props){
+export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},sunLock=false,showTools=true,zoomRef,children}:Props){
   const canvas=useRef<HTMLCanvasElement>(null),epoch=useRef(getEpochMillis),loading=useRef(onLoading);
   epoch.current=getEpochMillis;loading.current=onLoading;
   useEffect(()=>{
@@ -27,10 +31,11 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
   },[]);
   useEffect(()=>{canvas.current?.dispatchEvent(new CustomEvent('gaia-sunlock',{detail:sunLock}))},[sunLock]);
   const zoom=(detail:'in'|'out'|'reset')=>canvas.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail}));
+  if(zoomRef)zoomRef.current=zoom;
   return <div className={className}>
     <canvas ref={canvas} className="gaia-globe-canvas" aria-label="Interactive WebGL Earth with auroral image coverage"/>
     <div className="gaia-globe-hint">Drag to rotate · Scroll or pinch to zoom · Hover or tap imagery for its camera</div>
-    <div className="gaia-globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in" onClick={()=>zoom('in')}>+</button><button type="button" aria-label="Zoom out" onClick={()=>zoom('out')}>−</button><button type="button" aria-label="Reset globe" onClick={()=>zoom('reset')}>◎</button></div>
+    {showTools&&<div className="gaia-globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in" onClick={()=>zoom('in')}>+</button><button type="button" aria-label="Zoom out" onClick={()=>zoom('out')}>−</button><button type="button" aria-label="Reset globe" onClick={()=>zoom('reset')}>◎</button></div>}
     {children}
   </div>;
 }

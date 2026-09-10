@@ -1,5 +1,13 @@
 # GAIA handoff for j and bgu001
 
+## Admin history image sizing (2026-09-10)
+
+FrameBrowser uses the original archived image endpoint rather than the
+256-pixel globe texture. Explicit width/height and object-fit: contain make
+the full image fit the preview area without cropping or distortion. Verified
+in the live Revontuli history dialog using the 608 x 608 Skibotn image: it now
+fills the preview height instead of remaining a 256-pixel thumbnail.
+
 Updated 2026-09-10 UTC by Codex for Juha. This tracked file is exposed at
 `/mnt/data/juha/gaia/agents.md` on Revontuli. Develop in the shared
 `/mnt/data/juha/gaia/code` checkout, preserve each other's work, and push changes

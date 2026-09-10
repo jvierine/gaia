@@ -39,8 +39,7 @@ pub struct SourceConfig {
     pub latitude_deg: Option<f64>,
     pub longitude_deg: Option<f64>,
     pub altitude_m: Option<f64>,
-    /// Fetch images only while the approximate solar altitude is at or below
-    /// this value.  This is a bandwidth gate, not scientific ephemeris data.
+    /// Legacy input accepted for compatibility; ignored. Acquisition runs day and night.
     pub darkness_sun_altitude_deg: Option<f64>,
     pub image_link_regex: Option<String>,
     pub timestamp_regex: Option<String>,

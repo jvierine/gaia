@@ -34,7 +34,7 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
   if(zoomRef)zoomRef.current=zoom;
   return <div className={className}>
     <canvas ref={canvas} className="gaia-globe-canvas" aria-label="Interactive WebGL Earth with auroral image coverage"/>
-    <div className="gaia-globe-hint">Drag to rotate · Scroll or pinch to zoom · Hover or tap imagery for its camera</div>
+    <div className="gaia-globe-hint">Drag to rotate · Scroll or pinch to zoom · Hover or tap a camera · Press M to mute/show</div>
     {showTools&&<div className="gaia-globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in" onClick={()=>zoom('in')}>+</button><button type="button" aria-label="Zoom out" onClick={()=>zoom('out')}>−</button><button type="button" aria-label="Reset globe" onClick={()=>zoom('reset')}>◎</button></div>}
     {children}
   </div>;

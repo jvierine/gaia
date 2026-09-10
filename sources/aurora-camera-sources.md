@@ -139,9 +139,9 @@ rights_snapshot_date
   `GAIA-Aurora-Archive/0.1 (+https://<project>/crawler; contact=<email>)`.
 - Keep one connection pool per origin and at most one in-flight request to an
   origin. Do not rotate agents, addresses, or query strings to evade controls.
-- Schedule by solar altitude. Default image fetching below **-6°**; allow a
-  source-specific threshold where the operator states one (TGO Skibotn uses
-  -2°). During daylight, check only low-rate discovery/health metadata.
+- GAIA polls enabled cameras during both day and night, at their configured
+  conservative cadence. Do not add a local solar-altitude gate. Some upstream
+  instruments only publish at night; record their real availability, not fake frames.
 - Add deterministic station jitter of 0–20% to prevent synchronized bursts while
   keeping repeatable schedules.
 - Use `If-None-Match` and `If-Modified-Since` when supported. Hash content and
@@ -720,8 +720,7 @@ Husafell's dataset DOI is
   17.4 W. The stable JPEG is `https://netnurds.com/indi-allsky/image.jpg`.
   It contains a `YYYY.MM.DD HH:MM:SS` overlay, and Iceland uses UTC year-round;
   its `Last-Modified` header tracked the overlay within seconds in a 2026-09-09
-  probe. GAIA polls it no faster than every five minutes and only below -4°
-  approximate solar altitude. Copyright and acknowledgement are retained in the
+  probe. GAIA polls it no faster than every five minutes, during day and night. Copyright and acknowledgement are retained in the
   source record. Contact `tim@netnurds.com`; no archival licence was found.
 - Iceland-at-Night advertises fixed cameras near Hella and Arnarstapi, but its
   proprietary streams and absent reuse terms make it a permission/discovery lead,

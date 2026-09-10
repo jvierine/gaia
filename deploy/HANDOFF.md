@@ -14,10 +14,10 @@ uses at most 16 workers under the shared publication lock. Older valid frames
 remain available during preview publication; attribution indices stay stable.
 The previous serial 1/6/24-hour staging was replaced to avoid network idle time.
 At 16:33 UTC PID 761429 was measured at 1406 percent CPU with the 16-core cap.
-Paused globe times now refresh their catalogue/frame every 30 seconds on BOTH
-frontends. Admin camera overlays show M to mute/show, using the existing enabled
-state (including acquisition pause); public remains read-only. The M round-trip
-was verified on Tromso AI Skibotn and restored to enabled. Yurga's existing AIDA
+Paused globe times refresh their catalogue/frame every 30 seconds on BOTH
+frontends. IMPORTANT CORRECTION: M is now strictly browser-only on both sites.
+The earlier admin implementation that changed enabled/acquisition state was
+removed. Only the explicit Cameras-tab pause control changes shared state. Yurga's existing AIDA
 fit was explicitly selected to make its earlier stationary-camera frames usable.
 
 ## Admin history image sizing (2026-09-10)
@@ -160,3 +160,81 @@ observed using about 13.7 CPU cores and completed generation with the new pool.
   the globe until calibrated; missing source observations cannot be invented.
   The local serving cache still needs reference-aware garbage collection;
   do not delete assets by age alone. Monitor `/mnt/gaia-public` disk capacity.
+
+## Browser-only mute and delayed live: current deployed contract
+
+- Both frontends use the shared WebGL implementation. Hover or tap a camera,
+  then M toggles its attributed region. It does NOT call the enabled API, alter
+  SQLite/calibrations, pause crawling, stop rendering, or enqueue a rebuild.
+- Preferences are stored per browser/origin in localStorage under
+  gaia-muted-cameras. Other viewers are unaffected. A small GPU visibility lookup
+  uses the existing dominant-camera source map, so this is not restitching:
+  pre-blended overlap contributions are not separated or recomputed locally.
+  Attribution image caching is bounded to six maps and two reusable GPU textures.
+- On both sites, src/live-time.ts defines LIVE_DELAY_MINUTES=10. Latest selects
+  the newest published frame at or before that cutoff, not wall-clock now.
+  Admin labels read now minus 10 min; public Latest reads Latest (-10 min).
+  Playback retains original observation times; prefetching no longer changes the
+  displayed frame timestamp. This delay is a safety margin, not a guarantee that
+  every camera has an observation (daylight, outages and real gaps still apply).
+- Regression command: node --test tests/live-time.test.mjs (2 tests). The distro
+  Node lacks native TypeScript stripping, so the test uses installed TypeScript.
+- Live M tests passed on Revontuli and juha.no, including shader mask activation,
+  local persistence and show-again. Test cameras were restored. SQLite rebuild
+  revision stayed 4/4 and Tromso AI Skibotn remained enabled; no backend mutation.
+- The rebuilt Yurga record now appears as a contributor in 931 published frames,
+  from September 9 16:42 to September 10 16:41 UTC in the checked snapshot.
+
+## Current j@juha.no transfer and GUI release procedure
+
+- Work in /mnt/data/juha/gaia/code; update this tracked handoff through its symlink
+  /mnt/data/juha/gaia/agents.md. Build admin web-dist and separate public-dist
+  from the same source revision. Do not run simultaneous builds/uploads.
+- As j on Revontuli: npm run build:static, then
+  VITE_GAIA_PUBLIC=1 npm run build:static -- --outDir public-dist.
+  web-dist is served directly by Revontuli. Upload public-dist to
+  j@juha.no:/var/www/html/gaia with rsync -r --size-only --chmod=D2775,F664
+  --exclude=index.html; upload index.html to a release-specific .pending name,
+  then rename it to index.html remotely AFTER assets arrive. Keep old hashed
+  assets; never rsync --delete. Release-specific pending names avoid collisions.
+- The sole USER gaia-publish.service pushes generated textures/lens files to
+  j@juha.no:/var/www/gaia-public/assets, validates every snapshot reference, then
+  atomically replaces manifest.json. /var/www/gaia-public points to local
+  /mnt/gaia-public, not the slow SMB archive. No public API forwarding is used.
+- A pending calibration rebuild renders a 20-minute preview and then launches
+  the full 24-hour /gaia-server --publish process concurrently with preview
+  rsync. Exactly one renderer uses GAIA_PREPROCESS_WORKERS=16 and CPUQuota=1600%.
+  Upload time and cache hits need not consume 16 cores. Inspect the --publish
+  process, not just the long-lived crawler/API process, when checking CPU usage.
+- The revised pipeline completed revision 4 at 16:36 UTC; the normal 30-second
+  timer remains active. Data remain authoritative under /mnt/data/juha/gaia.
+
+## Daylight acquisition and the active backend unit (2026-09-10)
+
+- Removed GAIA's solar-altitude acquisition gates: Norsk Meteor no longer skips
+  above -4 degrees; the legacy darkness_sun_altitude_deg field is ignored and
+  Iceland/Greenland records were cleared. Day and night use the SAME conservative
+  cadence, quota limits, concurrency, timeout and backoff. Upstreams may still
+  supply nothing or stale frames during daylight; never invent observations.
+- Historical NMN planning covers full noon-to-noon days, not a solar-filtered
+  subset. No new bulk backfill was launched as part of this change.
+- Stitching has no hard daylight exclusion. Its existing positive solar-weight
+  floor is 0.05; single-contributor normalization cancels that weight. The globe
+  terminator only shades Earth, not the projected image layer.
+- IMPORTANT: the live API/crawler is j's USER gaia-revontuli.service. Its live.conf
+  drop-in enables crawling. Restart using systemctl --user restart
+  gaia-revontuli.service after a backend build. The stale SYSTEM unit with the same
+  name must stay stopped/disabled; starting it only creates port-conflict retries.
+
+## Historical mute picking correction
+
+At 2026-09-09 21:53 UTC several contributing cameras share station coordinates.
+A directly hovered station marker takes priority (8 CSS pixel hit radius); elsewhere image attribution selects the camera. Picking
+intersects the 100-km image shell rather than the Earth surface. The matching
+source map is loaded before swapping a frame; failed map loads are retryable,
+not permanently cached failures. This keeps M tied to the actual displayed
+camera region when scrubbing history. Tests cover inverse shell projection.
+
+### Hover and historical timeline keyboard correction
+
+Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.

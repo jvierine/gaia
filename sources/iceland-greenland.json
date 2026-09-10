@@ -17,7 +17,7 @@
     "latitude_deg": 65.9,
     "longitude_deg": -17.4,
     "altitude_m": null,
-    "darkness_sun_altitude_deg": -4.0,
+    "darkness_sun_altitude_deg": null,
     "stream_updated_header": "last-modified",
     "enabled": true
   },
@@ -39,7 +39,7 @@
     "latitude_deg": 61.16,
     "longitude_deg": -45.44,
     "altitude_m": null,
-    "darkness_sun_altitude_deg": 0.0,
+    "darkness_sun_altitude_deg": null,
     "stream_updated_header": null,
     "enabled": false
   }

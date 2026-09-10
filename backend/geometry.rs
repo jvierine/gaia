@@ -125,8 +125,7 @@ pub fn zenith_angle(observer: [f64; 3], look: [f64; 3]) -> f64 {
 
 /// Geocentric solar direction in the same ECEF frame as `observer_ecef`. This is
 /// the low-precision Meeus series the globe already uses to draw its terminator,
-/// so the weighting and the drawn day/night boundary agree. The crawler's
-/// `norsk_meteor::solar_altitude_deg` is deliberately not reused: its day-of-year
+/// so the weighting and the drawn day/night boundary agree. A simple day-of-year
 /// declination and naive hour angle can be degrees out, which a 12 degree taper
 /// would feel.
 pub fn solar_direction_ecef(unix_seconds: f64) -> [f64; 3] {

@@ -6,14 +6,14 @@ use rusqlite::params;
 use std::{path::Path, time::Duration};
 
 fn schedule(source: &SourceConfig, date: NaiveDate) -> Vec<DateTime<Utc>> {
-    // Norway's evening through the following morning, including the Swedish station.
+    // Complete noon-to-noon record, including daylight, at the normal source cadence.
     let start = date.and_hms_opt(12,0,0).unwrap().and_utc();
     let end = start + chrono::Duration::hours(24);
     let step = chrono::Duration::seconds(source.interval_seconds.max(300) as i64);
     let mut result = Vec::new();
     let mut time = start;
     while time < end {
-        if !norsk_meteor::daylight(source, time) { result.push(time); }
+        result.push(time);
         time += step;
     }
     result
@@ -78,7 +78,7 @@ pub async fn run(sources: &[SourceConfig], db_path: &Path, root: &Path, date: &s
 mod tests {
     use super::*;
     #[test]
-    fn inventory_and_night_schedule() {
+    fn inventory_and_full_day_schedule() {
         let sources:Vec<SourceConfig>=serde_json::from_str(include_str!("../sources/norsk-meteor.json")).unwrap();
         assert_eq!(sources.len(),98);
         assert_eq!(sources.iter().map(|s|&s.id).collect::<std::collections::HashSet<_>>().len(),98);
@@ -88,7 +88,8 @@ mod tests {
             assert!(source.enabled);
             let times=schedule(source,date);
             assert!(!times.is_empty());
-            for time in &times { assert!(!norsk_meteor::daylight(source,*time)); }
+            assert_eq!(times.len(),(86400/source.interval_seconds.max(300)) as usize);
+            assert_eq!(times[0],date.and_hms_opt(12,0,0).unwrap().and_utc());
             for pair in times.windows(2) {assert_eq!((pair[1]-pair[0]).num_seconds(),source.interval_seconds as i64);}
         }
     }

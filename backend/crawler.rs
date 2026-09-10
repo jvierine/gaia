@@ -84,12 +84,7 @@ fn parse_http_or_rfc3339_time(value: &str) -> Option<DateTime<Utc>> {
 }
 
 async fn candidates(client: &Client, source: &SourceConfig) -> Result<Vec<String>> {
-    if source.darkness_sun_altitude_deg.is_some_and(|threshold| {
-        crate::norsk_meteor::solar_altitude_deg(source, Utc::now())
-            .is_some_and(|altitude| altitude > threshold)
-    }) {
-        return Ok(vec![]);
-    }
+    // Request day and night; only the upstream decides whether a frame exists.
     let url = expand_url(&source.url, Utc::now());
     if matches!(source.kind, SourceKind::NorskMeteor) {
         return crate::norsk_meteor::candidates(client, source, Utc::now()).await;

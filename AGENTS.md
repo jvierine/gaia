@@ -1,5 +1,7 @@
 ## Public/admin GAIA synchronization
 
+- Read the current operational handoff at `/mnt/data/juha/gaia/agents.md` (linked to `deploy/HANDOFF.md` in this checkout). Update it after deployments or infrastructure changes so both collaborators remain synchronized.
+
 - Keep the 3D globe and stitching implementation shared between `https://juha.no/gaia/` and `http://revontuli.uit.no/gaia/`. Both shells must use `src/GaiaGlobeView.tsx`, `src/globe.ts`, and the same published magnetic-weighted composite; do not add a separate admin-only or public-only stitching/rendering path.
 - For every globe, stitching, station-marker, projection, playback, or attribution change, build and deploy both the admin and public frontends from the same Git commit.
 - Before pushing, verify both live routes in a browser. A successful local build alone is not acceptance; confirm that the deployed asset hashes changed as expected and that both live canvases render without WebGL or page errors.
@@ -38,7 +40,7 @@ ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.
 
 - Upload assets first and atomically replace the entry HTML last. Retain previous hashed assets for existing viewers and rollback; do not use `rsync --delete`. Backups of the entry HTML live in `/home/bgu001/gaia-deploy-backups` on juha.no.
 - For shared-view changes, build the matching admin target with `npm run build:static` (without `VITE_GAIA_PUBLIC`) from the same commit; its `web-dist` directory is served directly on Revontuli. Verify both live pages, asset hashes, station interaction, playback, and WebGL errors.
-- `/gaia/public/` is a separate Apache alias backed by `/mnt/shovel/gaia/public`. The existing Revontuli publisher remains responsible for those prepared data. GUI deployment does not change that publisher or grant access to raw data, databases, or other juha.no applications.
+- `/gaia/public/` is served from local disk `/var/www/gaia-public` on juha.no. Both `j` and `bgu001` deliberately have deployment access through `gaia-deploy` (setgid directories 2775, files 664). Use your own SSH identity. The old `/mnt/shovel/gaia/public` is retained for rollback only. One automated publisher runs as `j` on Revontuli; never enable the root publisher or start a second automation as `bgu001`. Manual repairs must coordinate with that service, transfer assets first, validate all manifest references, then atomically replace the manifest. No broad sudo or access as `j` is needed on juha.no.
 - Authentication check: run the SSH command above with `-o BatchMode=yes` and `id`. Deployment permission check: create and remove a temporary file inside `/var/www/html/gaia` before uploading. Keys from another workstation must be authorized separately.
 
 ## Codebase map

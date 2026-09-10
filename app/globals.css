@@ -119,7 +119,9 @@
 .timeline-dock .sun-lock{padding:4px 10px;gap:7px}
 .timeline-dock .sun-lock input{width:14px;height:14px}
 .timeline-dock .sun-lock strong{font-size:10px}
-.timeline-dock .sun-lock small{font-size:8px}
+.timeline-dock .sun-lock small{display:none}
+.timeline-dock .sun-lock{padding:3px 6px;gap:5px;background:transparent;border-color:transparent;border-radius:4px}
+.timeline-dock .sun-lock:has(input:checked){background:#14352d;color:var(--aqua);border-color:#34584d}
 .speed-control{display:flex;align-items:center;gap:2px}
 .speed-control button{width:22px;height:22px;border:1px solid #477080;border-radius:50%;background:#102633;color:#dceef0;font-size:12px;line-height:1;cursor:pointer}
 .speed-control button:hover:not(:disabled){border-color:var(--aqua);color:#fff}

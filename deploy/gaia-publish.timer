@@ -2,7 +2,7 @@
 Description=Publish GAIA globe textures every five minutes
 [Timer]
 OnBootSec=2min
-OnUnitInactiveSec=5min
+OnUnitInactiveSec=30s
 Persistent=true
 [Install]
 WantedBy=timers.target

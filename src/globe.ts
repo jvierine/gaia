@@ -1,3 +1,4 @@
+import {manifestUrl,archiveMode} from './public-manifest';
 const VERTEX = `
 attribute vec2 position;
 void main(){ gl_Position=vec4(position,0.0,1.0); }
@@ -102,7 +103,11 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   // Sun-fixed frame. While locked, yaw and pitch are driven from the sun-earth
   // line every frame: the view looks down on the north pole with the sun upwards and
   // the planet rotating underneath. The manual orientation is restored when unlocked.
-  let sunLock=false,manualYaw=yaw,manualPitch=pitch;
+  let sunLock=false,manualYaw=yaw,manualPitch=pitch,sunTilt=-Math.PI/2;
+  const observationStatus=document.createElement('div');
+  observationStatus.style.cssText='position:absolute;left:18px;top:56px;color:#a8c6bf;font:11px monospace;pointer-events:none';
+  observationStatus.setAttribute('role','status');canvas.parentElement?.appendChild(observationStatus);
+  const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Full archive';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';canvas.parentElement?.appendChild(archiveLink);
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null};
   let cameraSites:{label:string;url?:string;world:number[]}[]=[],publicCameras=new Map<number,PublicCamera>();
   type Attribution={url:string;width:number;height:number;data:Uint8ClampedArray};
@@ -148,7 +153,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const pointerMove=(e:PointerEvent)=>{
     if(!pointers.has(e.pointerId))return;e.preventDefault();pointers.set(e.pointerId,[e.clientX,e.clientY]);if(press&&Math.hypot(e.clientX-press[0],e.clientY-press[1])>5)moved=true;
     if(pointers.size>=2){const d=distance();if(pinchDistance>0&&d>0)zoom=Math.max(.5,Math.min(8,zoom*d/pinchDistance));pinchDistance=d;return}
-    if(!sunLock){yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));}last=[e.clientX,e.clientY];
+    if(sunLock){sunTilt=Math.max(-Math.PI+.08,Math.min(-.08,sunTilt-(e.clientY-last[1])*.006));}else{yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));}last=[e.clientX,e.clientY];
   };
   const pointerUp=(e:PointerEvent)=>{const station=!moved&&pointers.size===1&&publicOnly?stationCamera(e.clientX,e.clientY):null,projected=!station&&!moved&&pointers.size===1&&publicOnly?projectedCamera(e.clientX,e.clientY):null,open=station?.url||projected?.website_url;pointers.delete(e.pointerId);pinchDistance=distance();dragging=pointers.size>0;if(dragging)last=[...pointers.values()][0];else press=null;if(open)window.open(open,'_blank','noopener,noreferrer')}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('wheel',wheel,{passive:false});
@@ -205,7 +210,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     for(let i=0;i<8;i++)values.push(...center,...color,...vertex(i*Math.PI/4),...color,...vertex((i+1)*Math.PI/4),...color);
   };
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
-  void (publicOnly?fetch('/gaia/public/manifest.json',{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+  abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
+  abort.signal.addEventListener('abort',()=>archiveLink.remove(),{once:true});
+  void (publicOnly?fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}
     addLayer(sites);
@@ -216,7 +223,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
     const catalogue=(id:string)=>{
       let c=catalogues.get(id);if(!c||c.expires<Date.now()){
-        c={expires:Date.now()+60000,value:fetch(publicOnly?'/gaia/public/manifest.json':`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');return await r.json() as Catalogue})};catalogues.set(id,c);
+        c={expires:Date.now()+60000,value:fetch(publicOnly?manifestUrl:`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');return await r.json() as Catalogue})};catalogues.set(id,c);
       }return c.value;
     };
     const pending=new Map<number,Promise<typeof frames>>(),ready=new Map<number,typeof frames>(),requests=new Map<number,AbortController>();
@@ -231,7 +238,10 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           const cat=await catalogue(s.id);if(!cat)continue;
           let frame:Catalogue['images'][number]|undefined;
           for(let i=cat.images.length-1;i>=0;i--){if(Date.parse(cat.images[i].at)<=epoch){frame=cat.images[i];break}}
-          if(!frame||epoch-Date.parse(frame.at)>600000)continue;
+          // Retain the latest published frame during live delivery delays.
+          // Historical playback still preserves real observation gaps.
+          const live=publicOnly&&Math.abs(Date.now()-epoch)<120000;
+          if(!frame||(!live&&epoch-Date.parse(frame.at)>600000))continue;
           let asset:Asset={...cat,texture_url:frame.texture_url};
           if(frame.width!==cat.width||frame.height!==cat.height){
             const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
@@ -260,7 +270,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
               gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,upload);textureCache.set(asset.texture_url,texture);textureSizes.set(texture,[upload.width,upload.height]);}
             }finally{URL.revokeObjectURL(url)}
           }
-          if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s),sourceMapUrl:frame.source_map_url});
+          if(geometry&&texture){nextFrames.push({geometry,texture,order:sources.indexOf(s),sourceMapUrl:frame.source_map_url});if(live){canvas.dataset.observationUtc=frame.at;canvas.dataset.delayed=String(epoch-Date.parse(frame.at)>600000);observationStatus.textContent=`Image ${new Date(frame.at).toISOString().slice(11,16)} UTC${epoch-Date.parse(frame.at)>600000?' · delayed':''}`;}else{observationStatus.textContent='';}}
         }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
       }}));
       return nextFrames.sort((a,b)=>a.order-b.order);
@@ -277,7 +287,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       const next=await prepare(epoch);
       if(lastMinute===minute&&!abort.signal.aborted){
         if(epoch<displayEpoch||Math.abs(epoch-displayEpoch)>600000){clearSmooth();displayEpoch=epoch}
-        frames=next;
+        if(next.length||Math.abs(Date.now()-epoch)>=120000)frames=next;
         const sourceMapUrl=frames[0]?.sourceMapUrl;if(sourceMapUrl)void loadAttribution(sourceMapUrl).then(value=>{if(frames[0]?.sourceMapUrl===value.url)attribution=value}).catch(console.warn);else attribution=null;
         for(const key of pending.keys())if(key<minute||key>minute+3){pending.delete(key);ready.delete(key)}
         // Decode the next three minutes ahead of playback, not on each tick.
@@ -341,7 +351,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     if(depthTest)gl.enable(gl.DEPTH_TEST);
     if(blend)gl.enable(gl.BLEND);
   };
-  void (publicOnly?fetch('/gaia/public/manifest.json',{cache:'no-store'}).then(r=>r.json()).then(m=>m.igrf_url):Promise.resolve(`/gaia/api/igrf-maglat?format=f32-v2&year=${new Date().getUTCFullYear()}`)).then(url=>fetch(url)).then(r=>{if(!r.ok)throw new Error(`IGRF grid ${r.status}`);return r.arrayBuffer()}).then(buffer=>{const values=new Float32Array(buffer);if(values.length!==720*361)throw new Error(`unexpected IGRF grid length ${values.length}`);const vertices=igrfContourVertices(values);magneticVertices=vertices.length/2;gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW)}).catch(console.error);
+  void (publicOnly?fetch(manifestUrl,{cache:'no-store'}).then(r=>r.json()).then(m=>m.igrf_url):Promise.resolve(`/gaia/api/igrf-maglat?format=f32-v2&year=${new Date().getUTCFullYear()}`)).then(url=>fetch(url)).then(r=>{if(!r.ok)throw new Error(`IGRF grid ${r.status}`);return r.arrayBuffer()}).then(buffer=>{const values=new Float32Array(buffer);if(values.length!==720*361)throw new Error(`unexpected IGRF grid length ${values.length}`);const vertices=igrfContourVertices(values);magneticVertices=vertices.length/2;gl.bindBuffer(gl.ARRAY_BUFFER,magneticBuffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW)}).catch(console.error);
   const solarDirection=(time:number)=>{const jd=time/86400000+2440587.5,t=(jd-2451545)/36525,l0=(280.46646+t*(36000.76983+t*.0003032))*Math.PI/180,m=(357.52911+t*(35999.05029-.0001537*t))*Math.PI/180,lambda=l0+(1.914602-.004817*t-.000014*t*t)*Math.sin(m)*Math.PI/180+.019993*Math.sin(2*m)*Math.PI/180+.000289*Math.sin(3*m)*Math.PI/180,epsilon=(23.439291-.0130042*t)*Math.PI/180,decl=Math.asin(Math.sin(epsilon)*Math.sin(lambda)),ra=Math.atan2(Math.cos(epsilon)*Math.sin(lambda),Math.cos(lambda)),gmst=(280.46061837+360.98564736629*(jd-2451545)+.000387933*t*t-t*t*t/38710000)*Math.PI/180,lon=ra-gmst;return[Math.cos(decl)*Math.sin(lon),Math.sin(decl),Math.cos(decl)*Math.cos(lon)]};
   // Orientation for the sun-fixed, earth-rotating mode. Note the GLSL mat3
   // constructors above are column-major, so the view is
@@ -350,7 +360,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   // the view looks straight down on the pole. yaw then spins the globe until the
   // subsolar meridian points to the top: the sun maps to (0,cos decl,sin decl),
   // straight up, and the planet rotates underneath it as the epoch advances.
-  const sunUpOrientation=(sun:number[]):[number,number]=>[Math.atan2(sun[0],sun[2])+Math.PI,-Math.PI/2];
+  const sunUpOrientation=(sun:number[]):[number,number]=>[Math.atan2(sun[0],sun[2])+Math.PI,sunTilt];
   let lastEpochTime=performance.now();
   const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;const sun=solarDirection(displayEpoch);if(sunLock){const[lockedYaw,lockedPitch]=sunUpOrientation(sun);yaw=lockedYaw;pitch=lockedPitch}gl.uniform2f(rotation,yaw,pitch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
     if(!count)continue;gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,lineBuffer);

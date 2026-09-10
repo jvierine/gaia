@@ -1,5 +1,25 @@
 # GAIA handoff for j and bgu001
 
+## Calibration backfill and admin mute (2026-09-10)
+
+Calibration uploads now transactionally select the new stationary-camera model
+while retaining older models. SQLite triggers increment calibration_rebuild for
+new/changed calibrations, model selections and camera enable/disable changes.
+The user publisher checks this durable queue every 30 seconds and acknowledges
+only its captured revision after successful full publication. New requests made
+during rendering remain pending. No second publisher automation was added.
+A queued run renders the latest 20 minutes, snapshots that manifest, then starts
+the full newest-first 24-hour render WHILE uploading the preview. One renderer
+uses at most 16 workers under the shared publication lock. Older valid frames
+remain available during preview publication; attribution indices stay stable.
+The previous serial 1/6/24-hour staging was replaced to avoid network idle time.
+At 16:33 UTC PID 761429 was measured at 1406 percent CPU with the 16-core cap.
+Paused globe times now refresh their catalogue/frame every 30 seconds on BOTH
+frontends. Admin camera overlays show M to mute/show, using the existing enabled
+state (including acquisition pause); public remains read-only. The M round-trip
+was verified on Tromso AI Skibotn and restored to enabled. Yurga's existing AIDA
+fit was explicitly selected to make its earlier stationary-camera frames usable.
+
 ## Admin history image sizing (2026-09-10)
 
 FrameBrowser uses the original archived image endpoint rather than the

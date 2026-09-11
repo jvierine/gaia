@@ -1,5 +1,27 @@
 # GAIA handoff for j and bgu001
 
+## Playback identity and buffering fix (2026-09-11)
+
+Concurrent `loadFrames` calls used to replace the shared sources array. Older
+loads then used `sources.indexOf(s)` and got -1, sharing a smoothing texture
+between unrelated cameras. Never key camera textures by mutable array identity.
+The loader now snapshots its manifest and assigns stable per-source numeric
+slots. It also resets temporal smoothing when calibration geometry changes.
+Timeline requests have monotonic tickets; only the latest selected minute may
+commit. Prefetch retains eight minutes ahead and two behind instead of clearing
+everything every 30 seconds. Six camera workers prepare an atomic frame batch.
+The public slider pauses playback on interaction, and catalogue refresh preserves
+the selected observation time instead of silently shifting its array index.
+Both shells offer speeds through 32x. Public 16x/32x skip respectively two/four
+timeline steps per tick to keep display cadence bounded; speed is a target and
+uncached frames still buffer rather than display a partial mixed batch.
+The canvas exposes selectedEpoch and cameraOrderUnique for playback diagnostics.
+Concurrent prefetch requests share in-flight geometry/image downloads. Verified
+stable IDs against reordered/expanded catalogues, live public slider seek/pause,
+and 32x controls on both live shells. Both rendered unique camera slots during
+playback, with no new-build console errors at verification. Cold history still
+buffers; do not promise video-rate uncached downloads.
+
 ## Public credits and account controls (2026-09-11, latest)
 
 For bgu001: About no longer displays lens-model downloads or calibration

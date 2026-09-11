@@ -239,16 +239,20 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
-## Pending backend install: per-camera quality weight (2026-09-11)
+## Pending backend install: star photometry writer (2026-09-11)
 
-The running `gaia-server` predates commit `f452a63` and must be replaced. bgu001
+The running `gaia-server` predates commit `378f911` and must be replaced. bgu001
 cannot do it: `/mnt/data/juha/gaia-build` is j-owned and the live unit is j's
-USER `gaia-revontuli.service`. A release build of `f452a63` is staged at
-`/mnt/data/juha/gaia/staging/gaia-server-f452a63`, sha256
-`d4051f40a7d3ab401b4b1e9295de708f421397286f85513d118c120eb0c2afe0`. As j:
+USER `gaia-revontuli.service`. A release build of `378f911` is staged at
+`/mnt/data/juha/gaia/staging/gaia-server-378f911`, sha256
+`8f61ad8e95cd3186579f6f00e8f9db2e65df1f364b8ecf1835310cda479e66de`. As j:
 
-    cp /mnt/data/juha/gaia/staging/gaia-server-f452a63 /mnt/data/juha/gaia-build/release/gaia-server
+    cp /mnt/data/juha/gaia/staging/gaia-server-378f911 /mnt/data/juha/gaia-build/release/gaia-server
     systemctl --user restart gaia-revontuli.service
+
+The `f452a63` build this section first named was installed on 2026-09-11 at
+13:01 and is superseded; it has been removed from staging so the older binary
+cannot be installed by mistake.
 
 Or rebuild from source in the usual place; the staged binary is only a
 convenience. The SYSTEM unit of the same name stays disabled.
@@ -264,3 +268,17 @@ the chosen weight is accepted and discarded, and reverts on reload.
 After the restart the weight is read by the publisher, and the atlas and
 source-map cache keys change (`atlas-v7`, `source-v8-indices`, both now hashing
 the per-camera weights), so the first publish re-renders.
+
+### What the 378f911 install turns on
+
+The star photometry pass starts with the process. It is on by default and the
+default catalogue path resolves, so from the restart it begins writing
+`star_photometry` and `frame_sky` for archived frames in darkness. Measured
+cost on a copy of the live archive: a second per full-resolution frame, twelve
+frames every five minutes, a few percent of one core. `GAIA_STARPHOT_ENABLED=0`
+stops it; every rate limit is an environment variable in
+`deploy/gaia-revontuli.service`, and j's user unit needs those lines only to
+override the defaults, not to run.
+
+`db::open` now sets a 30 second busy timeout, which affects every process that
+opens the database, the publisher included.

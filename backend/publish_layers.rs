@@ -200,8 +200,8 @@ pub fn run(s: &AppState) -> Result<()> {
     let conn = db::open(&s.db_path)?;
     let restricted=conn.prepare("SELECT s.id FROM sources s JOIN producers p ON p.id=s.producer_id WHERE lower(s.id || ' ' || s.url || ' ' || p.name || ' ' || COALESCE(p.website,'')) LIKE '%starvis%'")?.query_map([],|r|r.get::<_,String>(0))?.collect::<Result<BTreeSet<_>,_>>()?;
     let mut cameras=conn.prepare("SELECT s.id,s.name,p.name,COALESCE(p.institution,p.name),COALESCE(NULLIF(p.website,''),s.url),s.latitude_deg,s.longitude_deg,COALESCE(s.altitude_m,0),p.acknowledgement,p.copyright,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),COALESCE(cs.quality_exponent,0) FROM sources s JOIN producers p ON p.id=s.producer_id LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.id")?.query_map([],|r|Ok(json!({"source_id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"producer":r.get::<_,String>(2)?,"institution":r.get::<_,String>(3)?,"website_url":r.get::<_,String>(4)?,"latitude_deg":r.get::<_,Option<f64>>(5)?,"longitude_deg":r.get::<_,Option<f64>>(6)?,"altitude_m":r.get::<_,f64>(7)?,"acknowledgement":r.get::<_,String>(8)?,"copyright":r.get::<_,String>(9)?,"calibrated":r.get::<_,bool>(10)?,"quality_exponent":r.get::<_,i64>(11)?})))?.collect::<Result<Vec<_>,_>>()?;
-    if anonymous {
-        cameras.retain(|c| !restricted.contains(c["source_id"].as_str().unwrap()));
+    for camera in &mut cameras {
+        camera["imagery_restricted"] = json!(restricted.contains(camera["source_id"].as_str().unwrap()));
     }
     let full = std::env::var("GAIA_PUBLISH_ALL").as_deref() == Ok("1");
     let filename = if full {
@@ -238,6 +238,8 @@ pub fn run(s: &AppState) -> Result<()> {
             handles.push(scope.spawn(||->Result<Vec<Value>>{
         let conn=db::open(&s.db_path)?;let mut out=vec![];
         loop{let index=next.fetch_add(1,std::sync::atomic::Ordering::Relaxed);let Some(camera)=cameras.get(index)else{break};let mut camera=camera.clone();camera["map_index"]=json!(index+1);let id=camera["source_id"].as_str().unwrap().to_string();
+            // Public station metadata is allowed, but never prepare or retain its imagery.
+            if anonymous && restricted.contains(&id) {out.push(camera);continue;}
             let (Some(lat),Some(lon),Some(true))=(camera["latitude_deg"].as_f64(),camera["longitude_deg"].as_f64(),camera["calibrated"].as_bool())else{out.push(camera);continue};
             let mut query=conn.prepare("SELECT MAX(observation_utc) FROM images WHERE source_id=?1 AND CAST(strftime('%s',observation_utc) AS INTEGER)>=?2 AND CAST(strftime('%s',observation_utc) AS INTEGER)<=?3 GROUP BY CAST(strftime('%s',observation_utc) AS INTEGER)/60 ORDER BY MAX(observation_utc) DESC")?;
             let times=query.query_map(rusqlite::params![id,start-600,end],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;let mut images=vec![];

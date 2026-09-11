@@ -31,3 +31,7 @@
 .public-playback .sun-lock input{width:14px;height:14px}
 .public-playback .sun-lock:has(input:checked){background:#14352d;border-color:#34584d;color:#80e8c4}
 .public-playback .sun-lock:has(input:checked) small{color:#0a4433}
+
+.gaia-access{box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;position:relative;z-index:20;background:#06121d;color:#c2d6d3;padding:7px 12px;font:14px sans-serif;min-height:48px}.gaia-access button{background:#19302e;border:1px solid #678580;color:white;border-radius:5px;padding:5px 12px}.gaia-access+main.gaia-public{height:calc(100dvh - 48px)}@media(max-width:600px){.gaia-access{font-size:12px;min-height:76px;gap:5px}.gaia-access+main.gaia-public{height:calc(100dvh - 76px)}}
+
+.gaia-access+main.gaia-public{top:var(--gaia-account-height,48px);height:calc(100dvh - var(--gaia-account-height,48px));}

@@ -2,7 +2,7 @@
 
 - Read the current operational handoff at `/mnt/data/juha/gaia/agents.md` (linked to `deploy/HANDOFF.md` in this checkout). Update it after deployments or infrastructure changes so both collaborators remain synchronized.
 
-- Keep the 3D globe and stitching implementation shared between `https://juha.no/gaia/` and `http://revontuli.uit.no/gaia/`. Both shells must use `src/GaiaGlobeView.tsx`, `src/globe.ts`, and the same published magnetic-weighted composite; do not add a separate admin-only or public-only stitching/rendering path.
+- Keep the 3D globe and stitching implementation shared between `https://juha.no/gaia/` and `http://revontuli.uit.no/gaia/`. Both shells use `src/GaiaGlobeView.tsx`, `src/globe.ts`, and `src/camera-compositor.ts`. Revontuli prepares individual 256px textures and masked 100km meshes; FINAL normalized magnetic-weighted composition happens in the browser, by Juha's explicit request. No separate admin/public rendering algorithms.
 - For every globe, stitching, station-marker, projection, playback, or attribution change, build and deploy both the admin and public frontends from the same Git commit.
 - Before pushing, verify both live routes in a browser. A successful local build alone is not acceptance; confirm that the deployed asset hashes changed as expected and that both live canvases render without WebGL or page errors.
 
@@ -40,7 +40,7 @@ ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.
 
 - Upload assets first and atomically replace the entry HTML last. Retain previous hashed assets for existing viewers and rollback; do not use `rsync --delete`. Backups of the entry HTML live in `/home/bgu001/gaia-deploy-backups` on juha.no.
 - For shared-view changes, build the matching admin target with `npm run build:static` (without `VITE_GAIA_PUBLIC`) from the same commit; its `web-dist` directory is served directly on Revontuli. Verify both live pages, asset hashes, station interaction, playback, and WebGL errors.
-- `/gaia/public/` is served from local disk `/var/www/gaia-public` on juha.no. Both `j` and `bgu001` deliberately have deployment access through `gaia-deploy` (setgid directories 2775, files 664). Use your own SSH identity. The old `/mnt/shovel/gaia/public` is retained for rollback only. One automated publisher runs as `j` on Revontuli; never enable the root publisher or start a second automation as `bgu001`. Manual repairs must coordinate with that service, transfer assets first, validate all manifest references, then atomically replace the manifest. No broad sudo or access as `j` is needed on juha.no.
+- On juha.no `/gaia/public/` is DENIED: use anonymous `/gaia/open/` or Google-protected `/gaia/restricted/`. Prepared assets live under `/mnt/shovel/gaia/serving/{open,public}`. `/var/www/gaia-public`, `/var/www/gaia-open` and `/var/www/html/gaia` are compatibility symlinks into shovel. Both collaborators use their own SSH identities. One automated publisher runs as `j` on Revontuli; never enable a duplicate. Transfer immutable assets first and verify them before replacing manifests. If assets are externally deleted or restored, remove the audience receipt-token to force full verification.
 - Authentication check: run the SSH command above with `-o BatchMode=yes` and `id`. Deployment permission check: create and remove a temporary file inside `/var/www/html/gaia` before uploading. Keys from another workstation must be authorized separately.
 
 ## Codebase map
@@ -58,8 +58,9 @@ ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.
 
 ## Architecture invariants
 
-- The backend is Rust; the frontend is TypeScript/React/WebGL. Do not introduce a second stitching implementation in JavaScript.
-- Public `juha.no` is a static local-file viewer. Revontuli creates and pushes its manifest and generated assets; the public browser must not proxy hidden API requests back to Revontuli.
+- The backend is Rust; the frontend is TypeScript/React/WebGL. The shared browser compositor replaces server-side final atlas generation. Preserve ALL existing weighting rules and settings, including full IGRF, horizon and mask tapers, solar weight at the selected timeline epoch, quality exponent, nonpositive exclusion and sum(weight*RGB)/sum(weight). Do not substitute winner-takes-all image colour. Rust still prepares static per-vertex weights using the existing equations/cache.
+- Public `juha.no` is a local-file viewer with a small Rust Google identity gateway. Revontuli pushes individual camera assets; never proxy requests back to Revontuli. Anonymous catalogues/assets exclude Starvisor BEFORE publication; restricted camera files require an authorized GAIA session on every request. Both audiences use the same WebGL compositor. Revontuli has no Google login by Juha's explicit choice.
+- On juha.no ALL GAIA payloads, runtime files, source backups and serving data belong under `/mnt/shovel/gaia/`; never recreate local `/mnt/gaia-public` storage or root-filesystem data. Small Apache/systemd integration configuration may remain under `/etc`.
 - Paused or removed cameras do not contribute projected imagery, station markers, hover targets, public composites, or attribution maps.
 - Preserve source observation timestamps. A download-time fallback must remain explicitly distinguishable from a source/instrument timestamp.
 - Preserve camera-provider provenance and links. GAIA serves projected low-resolution views and lens models, not replacement copies of providers' original high-resolution imagery.

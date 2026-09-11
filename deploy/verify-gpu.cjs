@@ -1,0 +1,15 @@
+// Temporary loopback-only numerical WebGL test page, not a production route.
+const fs=require('fs'),http=require('http'),ts=require('typescript');
+const js=ts.transpileModule(fs.readFileSync('src/camera-compositor.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
+http.createServer((req,res)=>{if(req.url==='/compositor.js'){res.setHeader('Content-Type','text/javascript');res.end(js);return}res.setHeader('Content-Type','text/html');res.end(`<!doctype html><title>GAIA GPU numerical checks</title><h1>GAIA GPU numerical checks</h1><pre id="results"></pre><script type="module">
+import {cameraCompositor} from './compositor.js';
+const results=[];
+for(const portable of [false,true]){
+const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;document.body.append(canvas);const gl=canvas.getContext('webgl',{preserveDrawingBuffer:true});const compositor=cameraCompositor(gl,portable);
+function layer(id,color,weight){const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);const v=[];for(const [x,y] of [[-1,-1],[1,-1],[1,1],[-1,-1],[1,1],[-1,1]])v.push(x,y,.5,(x+1)/2,(y+1)/2,weight);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(v),gl.STATIC_DRAW);const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([...color,255]));return{geometry:{buffer,count:6},texture,order:id,sourceId:String(id),weightScale:1,at:'test'};}
+for(const [name,tiny,mute,expected] of [['weighted',1,false,[64,0,191]],['muted overlap',1,true,[0,0,255]],['tiny positive weights',1e-20,false,[64,0,191]]]){
+const frames=[layer(0,[255,0,0],.25*tiny),layer(1,[0,0,255],.75*tiny),layer(2,[0,255,0],0)];const muted=new Set(mute?['0']:[]);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);const mode=compositor.draw(32,32,0,0,1,frames,new Map(),muted);const pixel=new Uint8Array(4);gl.readPixels(16,16,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);const error=gl.getError(),pass=error===0&&expected.every((v,i)=>Math.abs(v-pixel[i])<=2);results.push({portable,name,mode,pixel:[...pixel],error,pass});
+for(const f of frames){gl.deleteBuffer(f.geometry.buffer);gl.deleteTexture(f.texture)}
+}compositor.dispose();}
+document.getElementById('results').textContent=JSON.stringify({passed:results.every(r=>r.pass),results},null,2);
+</script>`)}).listen(18781,'127.0.0.1',()=>console.log('GAIA numerical GPU check on loopback 18781'));

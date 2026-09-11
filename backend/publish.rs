@@ -16,9 +16,10 @@ fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::rename(temp, path)?;
     Ok(())
 }
-fn publish_lens_models(
+pub(crate) fn publish_lens_models(
     conn: &rusqlite::Connection,
     assets: &Path,
+    excluded: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<serde_json::Value>> {
     let mut query=conn.prepare("SELECT s.id,s.name,p.name,s.latitude_deg,s.longitude_deg,c.id,c.created_utc,c.valid_from_utc,c.valid_to_utc,c.method,c.hdf5_path,c.residual_px FROM sources s JOIN producers p ON p.id=s.producer_id JOIN calibrations c ON c.source_id=s.id WHERE s.enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.name,julianday(c.valid_from_utc),c.created_utc")?;
     let rows = query.query_map([], |r| {
@@ -53,6 +54,7 @@ fn publish_lens_models(
             path,
             residual,
         ) = row?;
+        if excluded.contains(&source_id) {continue;}
         let bytes = std::fs::read(&path)?;
         let sha = format!("{:x}", Sha256::digest(&bytes));
         let filename = format!("lens-{sha}.h5");
@@ -81,11 +83,19 @@ fn retain_history(previous: &serde_json::Value, frames: &mut Vec<serde_json::Val
     frames.sort_by(|a,b|a["at"].as_str().cmp(&b["at"].as_str()));
 }
 pub fn run(s: &AppState) -> Result<()> {
-    let root = s.archive_root.join("public");
+    crate::publish_layers::run(s)
+}
+#[allow(dead_code)]
+fn legacy_atlas(s: &AppState) -> Result<()> {
+    let anonymous=std::env::var("GAIA_PUBLISH_AUDIENCE").as_deref()==Ok("anonymous");
+    let root = s.archive_root.join(if anonymous { "open" } else { "public" });
     let assets = root.join("assets");
     std::fs::create_dir_all(&assets)?;
     let conn = db::open(&s.db_path)?;
-    let cameras=conn.prepare("SELECT id,latitude_deg,longitude_deg,COALESCE(altitude_m,0) FROM sources WHERE enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=sources.id) AND latitude_deg IS NOT NULL AND longitude_deg IS NOT NULL AND EXISTS(SELECT 1 FROM calibrations WHERE source_id=sources.id) ORDER BY id")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,f64>(1)?,r.get::<_,f64>(2)?,r.get::<_,f64>(3)?)))?.collect::<Result<Vec<_>,_>>()?;
+    // Classification is server-side, before blending, not a dominant-pixel mask.
+    let restricted=conn.prepare("SELECT s.id FROM sources s JOIN producers p ON p.id=s.producer_id WHERE lower(s.id || ' ' || s.url || ' ' || p.name || ' ' || COALESCE(p.website,'')) LIKE '%starvis%'")?.query_map([],|r|r.get::<_,String>(0))?.collect::<Result<std::collections::BTreeSet<_>,_>>()?;
+    let mut cameras=conn.prepare("SELECT id,latitude_deg,longitude_deg,COALESCE(altitude_m,0) FROM sources WHERE enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=sources.id) AND latitude_deg IS NOT NULL AND longitude_deg IS NOT NULL AND EXISTS(SELECT 1 FROM calibrations WHERE source_id=sources.id) ORDER BY id")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,f64>(1)?,r.get::<_,f64>(2)?,r.get::<_,f64>(3)?)))?.collect::<Result<Vec<_>,_>>()?;
+    if anonymous { cameras.retain(|(id,_,_,_)|!restricted.contains(id)); }
     // Crop, obstruction outlines and the working-grid size for each camera, used by
     // the mask-edge fade below. The mesh is rasterized on the 256px thumbnail, so the
     // fade width is expressed in those pixels.
@@ -555,15 +565,21 @@ pub fn run(s: &AppState) -> Result<()> {
         "No composites available; retaining previous publication"
     );
     let credits=conn.prepare("SELECT DISTINCT p.name,p.website,p.acknowledgement,p.copyright FROM producers p JOIN sources s ON s.producer_id=p.id")?.query_map([],|r|Ok(json!({"name":r.get::<_,String>(0)?,"website":r.get::<_,Option<String>>(1)?,"acknowledgement":r.get::<_,String>(2)?,"copyright":r.get::<_,String>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
-    let public_cameras=conn.prepare("SELECT s.id,s.name,p.name,COALESCE(p.institution,p.name),COALESCE(NULLIF(p.website,''),s.url),s.latitude_deg,s.longitude_deg,p.acknowledgement,p.copyright,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) FROM sources s JOIN producers p ON p.id=s.producer_id WHERE s.enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY p.name,s.name")?.query_map([],|r|{
+    let mut public_cameras=conn.prepare("SELECT s.id,s.name,p.name,COALESCE(p.institution,p.name),COALESCE(NULLIF(p.website,''),s.url),s.latitude_deg,s.longitude_deg,p.acknowledgement,p.copyright,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) FROM sources s JOIN producers p ON p.id=s.producer_id WHERE s.enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY p.name,s.name")?.query_map([],|r|{
         let id=r.get::<_,String>(0)?;
         Ok(json!({"source_id":id,"name":r.get::<_,String>(1)?,"producer":r.get::<_,String>(2)?,"institution":r.get::<_,String>(3)?,"website_url":r.get::<_,String>(4)?,"latitude_deg":r.get::<_,Option<f64>>(5)?,"longitude_deg":r.get::<_,Option<f64>>(6)?,"acknowledgement":r.get::<_,String>(7)?,"copyright":r.get::<_,String>(8)?,"calibrated":r.get::<_,bool>(9)?,"map_index":camera_indices.get(&id)}))
     })?.collect::<Result<Vec<_>,_>>()?;
-    let lens_models = publish_lens_models(&conn, &assets)?;
+    let mut lens_models = publish_lens_models(&conn, &assets, &if anonymous {restricted.clone()} else {Default::default()})?;
+    if anonymous { public_cameras.retain(|c|!restricted.contains(c["source_id"].as_str().unwrap_or(""))); lens_models.retain(|c|!restricted.contains(c["source_id"].as_str().unwrap_or(""))); }
     let lens_model_documentation = json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
     let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d) * solar_taper(sun_elevation) * quality_weight","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"solar_taper":"F + (1-F) * (1 - psi(u)/(psi(u)+psi(1-u))) with u=(elevation-D)/(L-D); whole-image weight from the solar elevation at the camera station","solar_taper_dark_deg":sun_dark_deg,"solar_taper_light_deg":sun_light_deg,"solar_taper_floor":sun_floor,"quality_weight":"per-camera operator setting, a power of two from 1 to 1/256, multiplying the weight and not the pixel value","zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
-    let manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
+    let mut manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
     let name=if full_archive { "archive-manifest.json" } else { "manifest.json" };
+    if anonymous {
+        fn urls(v:&mut serde_json::Value){match v{serde_json::Value::String(s)=>{if s.starts_with("/gaia/public/"){*s=s.replacen("/gaia/public/","/gaia/open/",1)}},serde_json::Value::Array(a)=>for x in a{urls(x)},serde_json::Value::Object(o)=>for x in o.values_mut(){urls(x)},_=>{}}}
+        urls(&mut manifest);manifest["audience"]=json!("anonymous-no-starvisor");
+        anyhow::ensure!(manifest["images"].as_array().unwrap().iter().all(|f|f["contributors"].as_array().unwrap().iter().all(|c|!restricted.contains(c["source_id"].as_str().unwrap_or("")))),"Restricted contributor in anonymous atlas");
+    }
     atomic(&root.join(name), &serde_json::to_vec(&manifest)?)?;
     Ok(())
 }

@@ -1,3 +1,4 @@
+import GoogleAccess from './GoogleAccess';
 import {liveCutoff,readyFrames,LIVE_DELAY_MINUTES} from './live-time';
 import React,{useEffect,useRef,useState} from 'react';
 import './public-viewer.css';
@@ -12,7 +13,8 @@ type Manifest={generated_utc:string;images:{at:string}[];cameras?:Camera[];lens_
 const date=(value?:string|null)=>value?new Date(value).toISOString().slice(0,10):'open';
 const location=(camera:Camera)=>camera.latitude_deg==null||camera.longitude_deg==null?'Location unavailable':`${Math.abs(camera.latitude_deg).toFixed(3)}°${camera.latitude_deg>=0?'N':'S'}, ${Math.abs(camera.longitude_deg).toFixed(3)}°${camera.longitude_deg>=0?'E':'W'}`;
 
-export default function PublicViewer(){
+export default function PublicViewer(){return <GoogleAccess><PublicContent/></GoogleAccess>}
+function PublicContent(){
   const epoch=useRef(liveCutoff()),loading=useRef(false);
   const [manifest,setManifest]=useState<Manifest>(),[index,setIndex]=useState(-1),[play,setPlay]=useState(false),[credits,setCredits]=useState(false),[error,setError]=useState(''),[sunLock,setSunLock]=useState(false);
   useEffect(()=>{const controller=new AbortController();const refresh=()=>fetch(manifestUrl,{cache:'no-store',signal:controller.signal}).then(r=>{if(!r.ok)throw Error('Published images unavailable');return r.json()}).then(m=>{setManifest({...m,images:readyFrames(m.images)});setError('')}).catch(e=>{if(!controller.signal.aborted)setError(String(e.message))});void refresh();const timer=setInterval(refresh,60000);return()=>{controller.abort();clearInterval(timer)}},[]);

@@ -1,0 +1,23 @@
+[Unit]
+Description=GAIA Google identity and protected local assets
+After=network-online.target
+RequiresMountsFor=/mnt/shovel/gaia
+
+[Service]
+User=j
+Group=gaia-deploy
+Environment=GAIA_GOOGLE_CLIENT_ID=89792751201-si1n0pp9ofi9qfc7kdqeuoggps0saejk.apps.googleusercontent.com
+Environment=GAIA_AUTH_ALLOWLIST=/mnt/shovel/gaia/runtime/allowlist
+Environment=GAIA_AUTH_ASSET_ROOT=/mnt/shovel/gaia/serving/public
+ExecStart=/mnt/shovel/gaia/runtime/gaia-public-auth
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+MemoryMax=192M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

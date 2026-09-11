@@ -12,6 +12,20 @@ Environment=GAIA_STATIC_DIR=/mnt/data/juha/gaia/code/web-dist
 Environment=GAIA_LISTEN=127.0.0.1:18765
 Environment=GAIA_CRAWLER_ENABLED=0
 Environment=GAIA_OCR_ENABLED=1
+# Star photometry pass. The catalogue is the AIDA WISCAT1 payload; without it
+# the pass logs a warning and stays idle. Rate limits are deliberately gentle:
+# the publisher owns the cores, and cloud is estimated from a time series that
+# only needs sampling often enough to follow the weather.
+Environment=GAIA_STARPHOT_ENABLED=1
+Environment=GAIA_STARPHOT_CATALOG=/home/j/src/widefield-star-calibrator/data/tycho2_mag8.bin.gz
+Environment=GAIA_STARPHOT_MAX_MAG=4
+Environment=GAIA_STARPHOT_INTERVAL_SEC=300
+Environment=GAIA_STARPHOT_CADENCE_MIN=10
+Environment=GAIA_STARPHOT_FRAMES_PER_CYCLE=12
+Environment=GAIA_STARPHOT_REST_MS=250
+Environment=GAIA_STARPHOT_SUN_BELOW_DEG=-6
+Environment=GAIA_STARPHOT_MAX_OFFSET_PX=3
+Environment=GAIA_STARPHOT_LOOKBACK_HOURS=48
 ExecStart=/mnt/data/juha/gaia-build/release/gaia-server
 Restart=on-failure
 RestartSec=5

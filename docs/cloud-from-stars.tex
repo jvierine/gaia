@@ -18,7 +18,7 @@
 \title{\bfseries Cloud coverage from stellar intensity time series\\[2mm]
 \large Status of the GAIA implementation, and what remains}
 \author{Memo --- GAIA Data Center}
-\date{11 September 2026 \\ \small(revised; first issued 10 September 2026)}
+\date{11 September 2026 \\ \small(second revision; first issued 10 September 2026)}
 
 \begin{document}
 \maketitle
@@ -35,9 +35,11 @@ been strengthened where it was weakest: the sky under a star is now a bilinear
 plane rather than a constant, every measurement carries the scatter of its own
 fit residuals so a star can be tested against the frame's own noise instead of
 being trusted blindly, and the solar and lunar state at the station is computed
-and stored per frame. Storage and both diagnostic plots exist. Three things
-still do not: nothing yet writes measurements, the cloud weight is not applied
-to the composite, and the Voronoi cloud-cover output is not built. One
+and stored per frame. Storage and both diagnostic plots exist, and the
+writer that fills them now runs: on a copy of the live archive it measures a
+frame per second and finds \num{109} stars in a good one. Two things still do
+not exist: the cloud weight is not applied to the composite, and the Voronoi
+cloud-cover output is not built. One
 methodological issue is unresolved and is the main risk to the numbers:
 atmospheric extinction varies with elevation, and a star's clear-sky reference
 taken over a whole night mixes elevations, which alone can imitate an optical
@@ -65,6 +67,9 @@ Sec.~\ref{sec:remains} are unchanged in substance.
     factor}, a power of two from 1 to $1/256$ set by the operator. It is
     unrelated to cloud, but it settles the question of how an extra per-camera
     factor enters the sum, and the cloud weight will enter the same way.
+  \item \textbf{The writer exists} (Sec.~\ref{sec:writer}). The tables are no
+    longer empty, which moves the blocking item from ``nothing measures'' to
+    ``nothing yet turns a measurement into an optical depth''.
 \end{enumerate}
 
 \section{The measurement chain}
@@ -95,7 +100,7 @@ depth. The first four are built; the last is not.
  \node[below=5mm of proj,font=\scriptsize,soft,text width=42mm,align=center]
    {verified against AIDA to \SI{1e-6}{\degree} and \SI{1e-6}{px}};
  \node[below=5mm of tau,font=\scriptsize,todo,text width=40mm,align=center]
-   {not yet written, not yet applied};
+   {no optical depth yet, no weight applied};
 \end{tikzpicture}
 \caption{Green stages are implemented and tested; orange stages are not built.
 The chain runs entirely from the camera's own calibration, so it needs no
@@ -340,6 +345,80 @@ overcast frame indistinguishable from an unmeasured one.
 All four channels are measured, red, green, blue and the panchromatic mean,
 because cloud extinction is wavelength dependent.
 
+\section{The writer}
+\label{sec:writer}
+
+The pass lives in \texttt{backend/starpass.rs} and runs inside the archive
+server. A frame is a candidate when its camera is enabled, located and
+calibrated, when the frame lies inside the look-back window, and when it has no
+row in \texttt{frame\_sky}. Every candidate is given its Sun and Moon row
+immediately: that costs arithmetic only, it fills the sky record, and it is what
+marks the frame as seen, so the pending set drains even for frames that will
+never be worth photometering. Photometry itself runs only on the frames that
+survive two further tests, a solar elevation at or below \SI{-6}{\degree} and a
+minimum spacing from every frame of that camera already measured. The spacing is
+checked against the database, not against a counter, so the sampling cadence
+survives a restart.
+
+The lens model is chosen by exactly the expression the projection and the
+publisher use, an explicit operator selection when there is one and the
+calibration covering the frame otherwise. A star is then measured through the
+same optics the mosaic is drawn with. Reading the model shells out to
+\texttt{h5dump}, so it is cached per calibration and carried between cycles.
+Frames are decoded at full resolution; the \SI{256}{px} globe textures are
+useless here, and nothing in this path may touch them.
+
+\paragraph{Cost.} On a copy of the live archive one cycle wrote \num{400} sky
+rows and photometered six \num{3840}$\times$\num{2160} frames in
+\SI{7}{\second}, about a second per frame including the JPEG decode and the
+search over all \num{512} catalogue stars. At the shipped settings, twelve
+frames every five minutes with a \SI{250}{\milli\second} rest between them, the
+pass costs a few percent of one core. It rests deliberately: the publisher takes
+sixteen cores under its own lock, and a missed frame costs nothing when the
+quantity wanted is a time series.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llrrrr}
+\toprule
+camera & UTC & looked for & detected & best $\mathrm{SNR}_F$ & $(\overline{\Delta x},\overline{\Delta y})$ px \\
+\midrule
+\texttt{starvisor-yurga}    & 14:08 & 43 & 74  & 39.1  & $(-1.01,+1.05)$ \\
+\texttt{starvisor-bagdarin} & 14:09 & 47 & 109 & 110.1 & $(-1.41,-0.27)$ \\
+\texttt{starvisor-bagdarin} & 14:19 & 52 & 109 & 78.8  & $(-1.32,-0.26)$ \\
+\texttt{starvisor-yurga}    & 14:19 & 42 & 85  & 52.0  & $(-0.80,+0.87)$ \\
+\bottomrule
+\end{tabular}
+\caption{The first real measurements, 11 September 2026. ``Looked for'' counts
+stars; ``detected'' counts rows, four colour channels each, so roughly half of
+the channels of half of the stars yield a fit. The last column is the mean
+offset of the fitted centroid from the position the lens model predicts.}
+\label{tab:firstlight}
+\end{table}
+
+\paragraph{An immediate finding: the prediction is systematically off.}
+Table~\ref{tab:firstlight} shows a mean offset of one to one and a half pixels
+that does not shrink with signal-to-noise: the brightest stars, at
+$\mathrm{SNR}_F$ of 50 to 60, sit \num{2.1} to \SI{2.5}{px} from their predicted
+positions, where a well-pointed model would put them inside half a pixel. The
+offset is a \emph{rigid shift}, the same in both frames of a camera ten minutes
+apart, with a scatter about it of only \SI{1.1}{px}. That rules out a timing
+error, which would rotate the field and vary across it, and points at the
+calibration's own pointing: Bagdarin's fit carries a residual of
+\SI{0.86}{px} and Yurga's \SI{2.52}{px}, and the scatter matches.
+
+This does not corrupt the photometry --- the patch is 19 pixels across, the fit
+finds the true centroid, and the flux is what it is --- but it eats the
+acceptance margin. The gate is \SI{3}{px} about an uncorrected prediction, so a
+camera with a \SI{1.5}{px} boresight error has only \SI{1.5}{px} of real
+tolerance left. The rejected fits are not near misses: their mean offset is
+\num{3.3e4} pixels, which is a Levenberg--Marquardt run diverging on a patch
+with no star in it, so the gate is discarding empty sky rather than good stars.
+The proper fix is to fit one rigid $(\Delta x,\Delta y)$ per frame from the
+confidently detected stars and gate on the residual from \emph{that}, which
+would also give a per-frame pointing check for free.
+
 \section{The unresolved issue: extinction depends on elevation}
 \label{sec:airmass}
 
@@ -467,13 +546,11 @@ but the derived optical depths should not be treated as calibrated.
 \label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{A writer.} This is still the blocking item, and everything below
-    it is idle until it exists. \texttt{measure\_frame},
-    \texttt{record\_frame} and \texttt{record\_sky} are implemented and tested
-    but nothing calls them, so both tables are empty and the panel shows no
-    data. The pass must decode full-resolution originals, because the
-    \SI{256}{px} globe textures destroy stars, so it belongs in a throttled
-    background job rather than on a request path.
+  \item \textbf{Correct the pointing before gating}, per
+    Sec.~\ref{sec:writer}: one rigid offset per frame, fitted from the confident
+    detections, with the \SI{3}{px} test applied to the residual from it. Until
+    then a camera whose calibration is a pixel and a half off spends half its
+    acceptance margin on a constant.
   \item \textbf{The clear-sky reference}, per Sec.~\ref{sec:airmass}.
   \item \textbf{Gate $\tau$ on detectability}, so a fit that is indistinguishable
     from noise is treated as an absent star rather than a faint one.
@@ -494,9 +571,9 @@ but the derived optical depths should not be treated as calibrated.
     edges with the same $\psi$-based smooth step at \SI{10}{\percent} of cell
     width, then publish the map as a separate image and expose it as an option
     in the browse-history panel.
-  \item \textbf{A server restart.} The star endpoints, and now the camera
-    settings changes that carry the quality weight, are live in the code but not
-    in the running process.
+  \item \textbf{Let the pass reach the whole archive.} It looks back
+    \SI{48}{\hour} by default, which keeps it current but leaves the history
+    unmeasured. A backfill wants a wider window and a night-by-night sweep.
 \end{enumerate}
 
 \section{Where the code is}
@@ -508,8 +585,12 @@ but the derived optical depths should not be treated as calibrated.
     weight, storage, variation metric.
   \item \texttt{backend/schema.sql} --- the \texttt{star\_photometry} and
     \texttt{frame\_sky} tables and their indices.
+  \item \texttt{backend/starpass.rs} --- the writer: frame selection, the sky
+    record, cadence thinning, the lens-model cache and the background loop.
   \item \texttt{backend/main.rs} --- \texttt{GET /api/sources/\{id\}/stars} and
-    \texttt{.../stars/series}.
+    \texttt{.../stars/series}, and the spawn of the pass.
+  \item \texttt{deploy/gaia-revontuli.service} --- the \texttt{GAIA\_STARPHOT\_*}
+    settings, all of them overridable without a rebuild.
   \item \texttt{app/page.tsx}, \texttt{app/globals.css} --- the Star photometry
     panel in the Cameras tab: brightness and background series on a shared time
     axis, and a frame scatter coloured by brightness variation.

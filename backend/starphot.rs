@@ -19,6 +19,10 @@ use std::path::Path;
 
 const DEG: f64 = std::f64::consts::PI / 180.0;
 const BROWN_CONRADY_OPTMOD: i32 = 20;
+/// The lunar series expresses its semi-major axis in equatorial Earth radii,
+/// not the mean radius used elsewhere in GAIA; 60.2666 of these gives the
+/// familiar 384400 km.
+const MOON_EARTH_RADIUS_KM: f64 = 6378.14;
 
 /// One catalogue entry: ICRS/J2000 position and Tycho V_T magnitude.
 #[derive(Debug, Clone, Copy)]
@@ -114,8 +118,20 @@ pub fn star_az_ze(
     lat_deg: f64,
     lon_deg: f64,
 ) -> (f64, f64) {
-    let sidereal = (gmst_deg(unix_seconds) + lon_deg) * DEG;
     let (ra, dec) = precess_j2000_to_date(ra_hours, dec_deg, unix_seconds);
+    equatorial_to_az_ze(ra, dec, unix_seconds, lat_deg, lon_deg)
+}
+
+/// Azimuth and zenith angle of an equator-of-date position. Azimuth is measured
+/// from north through east.
+pub fn equatorial_to_az_ze(
+    ra: f64,
+    dec: f64,
+    unix_seconds: f64,
+    lat_deg: f64,
+    lon_deg: f64,
+) -> (f64, f64) {
+    let sidereal = (gmst_deg(unix_seconds) + lon_deg) * DEG;
     let lat = lat_deg * DEG;
     let altitude = ((sidereal - ra).cos() * dec.cos() * lat.cos() + dec.sin() * lat.sin())
         .clamp(-1.0, 1.0)
@@ -291,25 +307,42 @@ pub fn camera_rotation(alpha_deg: f64, beta_deg: f64, gamma_deg: f64) -> [[f64; 
     mat3_mul(mat3_mul(rot2, rot3), rot1)
 }
 
-/// Result of a two-dimensional Gaussian fit to one star image.
+/// Result of a two-dimensional Gaussian fit to one star image, over a bilinear
+/// background.
 #[derive(Debug, Clone, Copy)]
 pub struct GaussianFit {
+    /// Background evaluated at the fitted centroid, i.e. the sky under the star.
     pub background: f64,
+    /// Bilinear background coefficients per pixel, about the patch centre:
+    /// `b0 + bx X + by Y + bxy X Y`.
+    pub background_level: f64,
+    pub background_dx: f64,
+    pub background_dy: f64,
+    pub background_dxy: f64,
     pub amplitude: f64,
     pub centre_x: f64,
     pub centre_y: f64,
-    /// Major axis width. Always the larger of the two, with `angle_deg` naming
-    /// its direction, so an ellipse has one representation rather than two.
+    /// Major axis width. Always the larger, with `angle_deg` naming its direction.
     pub sigma_x: f64,
     /// Minor axis width.
     pub sigma_y: f64,
     /// Position angle of the major axis from the image x axis, in degrees,
     /// wrapped to [-90, 90). Meaningless for a round star; see `elongation`.
     pub angle_deg: f64,
-    /// Total intensity above background, the analytic integral of the fit.
-    /// Rotation is area preserving, so this stays 2 pi A sx sy.
+    /// Total intensity above background, `2 pi A sx sy`. Rotation preserves area,
+    /// so this is unchanged by the angle.
     pub flux: f64,
+    /// Standard deviation of the fit residuals: the pixel noise this frame
+    /// actually shows, against which a detection has to be judged.
+    pub residual_std: f64,
     pub rms_residual: f64,
+    /// Peak height in units of the residual scatter.
+    pub amplitude_snr: f64,
+    /// Integrated flux over its uncertainty. For white noise of scale `sigma`
+    /// the error on an integrated Gaussian is `sigma sqrt(4 pi sx sy)`, the
+    /// effective area of the profile, so this is the meaningful detection
+    /// measure for a photometric point.
+    pub flux_snr: f64,
 }
 
 impl GaussianFit {
@@ -317,6 +350,20 @@ impl GaussianFit {
     /// carries no information.
     pub fn elongation(&self) -> f64 {
         if self.sigma_y > 0.0 { self.sigma_x / self.sigma_y } else { f64::INFINITY }
+    }
+
+    /// Whether the star stands far enough above the frame's own noise to be
+    /// called a measurement. A peak comparable to the residual scatter is not a
+    /// star, and its flux must not be fed to the cloud estimate as though it
+    /// were: that would read noise as a clear sky.
+    pub fn detectable(&self, min_snr: f64) -> bool {
+        self.amplitude_snr >= min_snr && self.flux_snr >= min_snr && self.amplitude > 0.0
+    }
+
+    /// Background gradient magnitude per pixel, a warning that moonlight,
+    /// twilight or an auroral arc is sloping across the patch.
+    pub fn background_slope(&self) -> f64 {
+        self.background_dx.hypot(self.background_dy)
     }
 }
 
@@ -357,49 +404,62 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     if x.iter().all(|v| v.is_finite()) { Some(x) } else { None }
 }
 
-/// Fit a rotated elliptical Gaussian
-/// `background + amplitude * exp(-0.5 (u^2 + v^2))`, where `u` and `v` are the
-/// offsets along the ellipse axes divided by their widths, by
-/// Levenberg-Marquardt with an analytic Jacobian over seven parameters:
-/// background, amplitude, both centroid coordinates, both widths and the
-/// position angle. `patch` is row-major `width * height` and the returned centre
-/// is in patch coordinates.
+/// Fit a rotated elliptical Gaussian over a bilinear background:
+/// `b0 + bx X + by Y + bxy X Y + A exp(-0.5 (u^2 + v^2))`, where `X` and `Y` are
+/// offsets from the patch centre and `u`, `v` are offsets along the ellipse axes
+/// divided by their widths. Ten parameters, by Levenberg-Marquardt with an
+/// analytic Jacobian.
 ///
-/// The angle matters because star images are not always round: trailing during
-/// the exposure, coma and astigmatism off axis, and anisotropic binning all
-/// produce elongated images whose flux an axis-aligned fit would misestimate.
-/// The starting angle comes from the intensity-weighted second moments, so an
-/// already-elongated star does not have to be rotated into place by the solver.
+/// A flat background is not good enough around a real star. Moonlight, twilight
+/// and auroral arcs all slope across a patch, and a constant term forced to
+/// cover a gradient pushes the difference into the amplitude, biasing the flux.
+/// The background is initialised by least squares on the border ring alone,
+/// where the star does not reach, and then refined jointly so that flux is not
+/// biased by star light leaking into the border estimate.
 pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<GaussianFit> {
-    if width < 5 || height < 5 || patch.len() != width * height {
+    if width < 7 || height < 7 || patch.len() != width * height {
         return None;
     }
-    // Background from the border ring, which a star should not reach.
-    let mut border: Vec<f64> = Vec::new();
+    let (xc, yc) = ((width - 1) as f64 / 2.0, (height - 1) as f64 / 2.0);
+    // Bilinear background from the border ring only.
+    let mut ata = vec![vec![0.0; 4]; 4];
+    let mut atb = vec![0.0; 4];
     for y in 0..height {
         for x in 0..width {
-            if x == 0 || y == 0 || x == width - 1 || y == height - 1 {
-                border.push(patch[y * width + x]);
+            if !(x == 0 || y == 0 || x == width - 1 || y == height - 1) {
+                continue;
+            }
+            let (dx, dy) = (x as f64 - xc, y as f64 - yc);
+            let basis = [1.0, dx, dy, dx * dy];
+            let value = patch[y * width + x];
+            for i in 0..4 {
+                atb[i] += basis[i] * value;
+                for j in 0..4 {
+                    ata[i][j] += basis[i] * basis[j];
+                }
             }
         }
     }
-    border.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let background0 = border[border.len() / 2];
-    // Peak pixel, then intensity-weighted second moments for the shape.
+    let plane = solve(ata, atb).unwrap_or_else(|| vec![0.0, 0.0, 0.0, 0.0]);
+    let background_at = |t: &[f64], x: f64, y: f64| {
+        let (dx, dy) = (x - xc, y - yc);
+        t[0] + t[1] * dx + t[2] * dy + t[3] * dx * dy
+    };
+    // Peak above that background, and intensity-weighted moments for the shape.
     let mut peak = (0usize, 0usize, f64::NEG_INFINITY);
     for y in 1..height - 1 {
         for x in 1..width - 1 {
-            let value = patch[y * width + x];
-            if value > peak.2 {
-                peak = (x, y, value);
+            let above = patch[y * width + x] - background_at(&plane, x as f64, y as f64);
+            if above > peak.2 {
+                peak = (x, y, above);
             }
         }
     }
-    let amplitude0 = (peak.2 - background0).max(1e-6);
+    let amplitude0 = peak.2.max(1e-6);
     let (mut sum, mut sx, mut sy) = (0.0, 0.0, 0.0);
     for y in 0..height {
         for x in 0..width {
-            let w = (patch[y * width + x] - background0).max(0.0);
+            let w = (patch[y * width + x] - background_at(&plane, x as f64, y as f64)).max(0.0);
             sum += w;
             sx += w * x as f64;
             sy += w * y as f64;
@@ -414,7 +474,8 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
     if sum > 0.0 {
         for y in 0..height {
             for x in 0..width {
-                let w = (patch[y * width + x] - background0).max(0.0);
+                let w =
+                    (patch[y * width + x] - background_at(&plane, x as f64, y as f64)).max(0.0);
                 let (dx, dy) = (x as f64 - cx0, y as f64 - cy0);
                 mxx += w * dx * dx;
                 myy += w * dy * dy;
@@ -431,12 +492,14 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
     let limit = (width.min(height) as f64) / 3.0;
     let major0 = (half + spread).max(0.09).sqrt().clamp(0.4, limit);
     let minor0 = (half - spread).max(0.09).sqrt().clamp(0.4, limit);
-    let mut theta = [background0, amplitude0, cx0, cy0, major0, minor0, angle0];
-    let residuals = |t: &[f64; 7]| -> f64 {
+    let mut theta = [
+        plane[0], plane[1], plane[2], plane[3], amplitude0, cx0, cy0, major0, minor0, angle0,
+    ];
+    let residuals = |t: &[f64; 10]| -> f64 {
         let mut total = 0.0;
         for y in 0..height {
             for x in 0..width {
-                let d = patch[y * width + x] - gaussian_value(t, x as f64, y as f64);
+                let d = patch[y * width + x] - gaussian_value(t, x as f64, y as f64, xc, yc);
                 total += d * d;
             }
         }
@@ -444,16 +507,17 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
     };
     let mut lambda = 1e-3;
     let mut cost = residuals(&theta);
-    for _ in 0..120 {
-        let mut jtj = vec![vec![0.0; 7]; 7];
-        let mut jtr = vec![0.0; 7];
+    for _ in 0..140 {
+        let mut jtj = vec![vec![0.0; 10]; 10];
+        let mut jtr = vec![0.0; 10];
         for y in 0..height {
             for x in 0..width {
-                let (model, jac) = gaussian_value_and_jacobian(&theta, x as f64, y as f64);
+                let (model, jac) =
+                    gaussian_value_and_jacobian(&theta, x as f64, y as f64, xc, yc);
                 let residual = patch[y * width + x] - model;
-                for i in 0..7 {
+                for i in 0..10 {
                     jtr[i] += jac[i] * residual;
-                    for j in 0..7 {
+                    for j in 0..10 {
                         jtj[i][j] += jac[i] * jac[j];
                     }
                 }
@@ -462,11 +526,11 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
         let mut improved = false;
         for _ in 0..14 {
             let mut damped = jtj.clone();
-            for i in 0..7 {
+            for i in 0..10 {
                 damped[i][i] *= 1.0 + lambda;
                 if damped[i][i].abs() < 1e-14 {
-                    // A round star leaves the angle unconstrained; damping alone
-                    // keeps the system solvable and the angle step near zero.
+                    // A round star leaves the angle unconstrained; damping keeps
+                    // the system solvable and that step near zero.
                     damped[i][i] = lambda.max(1e-12);
                 }
             }
@@ -475,11 +539,11 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
                 continue;
             };
             let mut candidate = theta;
-            for i in 0..7 {
+            for i in 0..10 {
                 candidate[i] += step[i];
             }
-            candidate[4] = candidate[4].abs().clamp(0.3, width as f64);
-            candidate[5] = candidate[5].abs().clamp(0.3, height as f64);
+            candidate[7] = candidate[7].abs().clamp(0.3, width as f64);
+            candidate[8] = candidate[8].abs().clamp(0.3, height as f64);
             let candidate_cost = residuals(&candidate);
             if candidate_cost < cost {
                 let converged = (cost - candidate_cost) < 1e-12 * cost.max(1.0);
@@ -498,11 +562,29 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
             break;
         }
     }
-    if theta[1] <= 0.0 || !theta.iter().all(|v| v.is_finite()) {
+    if theta[4] <= 0.0 || !theta.iter().all(|v| v.is_finite()) {
         return None;
     }
+    // Residual scatter: the noise this frame actually shows.
+    let count = (width * height) as f64;
+    let mut mean = 0.0;
+    for y in 0..height {
+        for x in 0..width {
+            mean += patch[y * width + x] - gaussian_value(&theta, x as f64, y as f64, xc, yc);
+        }
+    }
+    mean /= count;
+    let mut variance = 0.0;
+    for y in 0..height {
+        for x in 0..width {
+            let d =
+                patch[y * width + x] - gaussian_value(&theta, x as f64, y as f64, xc, yc) - mean;
+            variance += d * d;
+        }
+    }
+    let residual_std = (variance / count.max(1.0)).sqrt();
     // One canonical form: major axis first, angle wrapped to [-90, 90).
-    let (mut major, mut minor, mut angle) = (theta[4], theta[5], theta[6]);
+    let (mut major, mut minor, mut angle) = (theta[7], theta[8], theta[9]);
     if minor > major {
         std::mem::swap(&mut major, &mut minor);
         angle += std::f64::consts::FRAC_PI_2;
@@ -511,43 +593,64 @@ pub fn fit_gaussian(patch: &[f64], width: usize, height: usize) -> Option<Gaussi
     if angle_deg >= 90.0 {
         angle_deg -= 180.0;
     }
+    let amplitude = theta[4];
+    let flux = std::f64::consts::TAU * amplitude * major * minor;
+    // For white noise the error on an integrated Gaussian is sigma sqrt(4 pi sx sy).
+    let flux_sigma = residual_std * (4.0 * std::f64::consts::PI * major * minor).sqrt();
     Some(GaussianFit {
-        background: theta[0],
-        amplitude: theta[1],
-        centre_x: theta[2],
-        centre_y: theta[3],
+        background: background_at(&theta, theta[5], theta[6]),
+        background_level: theta[0],
+        background_dx: theta[1],
+        background_dy: theta[2],
+        background_dxy: theta[3],
+        amplitude,
+        centre_x: theta[5],
+        centre_y: theta[6],
         sigma_x: major,
         sigma_y: minor,
         angle_deg,
-        flux: std::f64::consts::TAU * theta[1] * major * minor,
-        rms_residual: (cost / (width * height) as f64).sqrt(),
+        flux,
+        residual_std,
+        rms_residual: (cost / count).sqrt(),
+        amplitude_snr: if residual_std > 0.0 { amplitude / residual_std } else { f64::INFINITY },
+        flux_snr: if flux_sigma > 0.0 { flux / flux_sigma } else { f64::INFINITY },
     })
 }
 
 /// Offsets along the ellipse axes, divided by their widths.
-fn gaussian_axes(t: &[f64; 7], x: f64, y: f64) -> (f64, f64) {
-    let (dx, dy) = (x - t[2], y - t[3]);
-    let (c, s) = (t[6].cos(), t[6].sin());
-    ((dx * c + dy * s) / t[4], (-dx * s + dy * c) / t[5])
+fn gaussian_axes(t: &[f64; 10], x: f64, y: f64) -> (f64, f64) {
+    let (dx, dy) = (x - t[5], y - t[6]);
+    let (c, s) = (t[9].cos(), t[9].sin());
+    ((dx * c + dy * s) / t[7], (-dx * s + dy * c) / t[8])
 }
 
-fn gaussian_value(t: &[f64; 7], x: f64, y: f64) -> f64 {
+fn gaussian_value(t: &[f64; 10], x: f64, y: f64, xc: f64, yc: f64) -> f64 {
     let (u, v) = gaussian_axes(t, x, y);
-    t[0] + t[1] * (-0.5 * (u * u + v * v)).exp()
+    let (dx, dy) = (x - xc, y - yc);
+    t[0] + t[1] * dx + t[2] * dy + t[3] * dx * dy + t[4] * (-0.5 * (u * u + v * v)).exp()
 }
 
-fn gaussian_value_and_jacobian(t: &[f64; 7], x: f64, y: f64) -> (f64, [f64; 7]) {
+fn gaussian_value_and_jacobian(
+    t: &[f64; 10],
+    x: f64,
+    y: f64,
+    xc: f64,
+    yc: f64,
+) -> (f64, [f64; 10]) {
     let (u, v) = gaussian_axes(t, x, y);
-    let (sx, sy) = (t[4], t[5]);
-    let (c, s) = (t[6].cos(), t[6].sin());
+    let (sx, sy) = (t[7], t[8]);
+    let (c, s) = (t[9].cos(), t[9].sin());
     let e = (-0.5 * (u * u + v * v)).exp();
-    let peak = t[1] * e;
+    let peak = t[4] * e;
+    let (dx, dy) = (x - xc, y - yc);
     (
-        t[0] + peak,
+        t[0] + t[1] * dx + t[2] * dy + t[3] * dx * dy + peak,
         [
             1.0,
+            dx,
+            dy,
+            dx * dy,
             e,
-            // d/dcx and d/dcy carry the rotation through both axes.
             peak * (u * c / sx - v * s / sy),
             peak * (u * s / sx + v * c / sy),
             peak * u * u / sx,
@@ -609,8 +712,10 @@ pub fn record_frame(
         "INSERT INTO star_photometry(source_id,image_id,observation_utc,star_key,channel,
             ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,
             predicted_x,predicted_y,centroid_x,centroid_y,centroid_offset_px,
-            background,amplitude,sigma_major,sigma_minor,angle_deg,flux,rms_residual)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
+            background,amplitude,sigma_major,sigma_minor,angle_deg,flux,rms_residual,
+            residual_std,amplitude_snr,flux_snr,background_dx,background_dy,background_dxy)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
+                ?23,?24,?25,?26,?27,?28)
          ON CONFLICT(source_id,image_id,star_key,channel) DO UPDATE SET
             observation_utc=excluded.observation_utc,azimuth_deg=excluded.azimuth_deg,
             elevation_deg=excluded.elevation_deg,predicted_x=excluded.predicted_x,
@@ -618,7 +723,10 @@ pub fn record_frame(
             centroid_y=excluded.centroid_y,centroid_offset_px=excluded.centroid_offset_px,
             background=excluded.background,amplitude=excluded.amplitude,
             sigma_major=excluded.sigma_major,sigma_minor=excluded.sigma_minor,
-            angle_deg=excluded.angle_deg,flux=excluded.flux,rms_residual=excluded.rms_residual",
+            angle_deg=excluded.angle_deg,flux=excluded.flux,rms_residual=excluded.rms_residual,
+            residual_std=excluded.residual_std,amplitude_snr=excluded.amplitude_snr,
+            flux_snr=excluded.flux_snr,background_dx=excluded.background_dx,
+            background_dy=excluded.background_dy,background_dxy=excluded.background_dxy",
     )?;
     let mut written = 0;
     for m in measurements {
@@ -646,10 +754,56 @@ pub fn record_frame(
             fit.map(|f| f.angle_deg),
             fit.map(|f| f.flux),
             fit.map(|f| f.rms_residual),
+            fit.map(|f| f.residual_std),
+            fit.map(|f| f.amplitude_snr),
+            fit.map(|f| f.flux_snr),
+            fit.map(|f| f.background_dx),
+            fit.map(|f| f.background_dy),
+            fit.map(|f| f.background_dxy),
         ])?;
         written += 1;
     }
     Ok(written)
+}
+
+/// Record the sky conditions for one frame: the Moon, and the solar elevation
+/// that gates everything. Idempotent per frame.
+pub fn record_sky(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    image_id: &str,
+    observation_utc: &str,
+    sun_elevation_deg: f64,
+    moon: &MoonState,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO frame_sky(source_id,image_id,observation_utc,sun_elevation_deg,
+            moon_azimuth_deg,moon_elevation_deg,moon_illuminated_fraction,moon_phase_angle_deg,
+            moon_distance_km,moon_apparent_magnitude,moon_sky_brightness)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+         ON CONFLICT(source_id,image_id) DO UPDATE SET
+            observation_utc=excluded.observation_utc,sun_elevation_deg=excluded.sun_elevation_deg,
+            moon_azimuth_deg=excluded.moon_azimuth_deg,moon_elevation_deg=excluded.moon_elevation_deg,
+            moon_illuminated_fraction=excluded.moon_illuminated_fraction,
+            moon_phase_angle_deg=excluded.moon_phase_angle_deg,
+            moon_distance_km=excluded.moon_distance_km,
+            moon_apparent_magnitude=excluded.moon_apparent_magnitude,
+            moon_sky_brightness=excluded.moon_sky_brightness",
+        rusqlite::params![
+            source_id,
+            image_id,
+            observation_utc,
+            sun_elevation_deg,
+            moon.azimuth_deg,
+            moon.elevation_deg,
+            moon.illuminated_fraction,
+            moon.phase_angle_deg,
+            moon.distance_km,
+            moon.apparent_magnitude,
+            moon.sky_brightness,
+        ],
+    )?;
+    Ok(())
 }
 
 /// How much a star's brightness has varied over its series: 0 when steady, and
@@ -662,6 +816,166 @@ pub fn brightness_variation(fluxes: &[f64]) -> Option<f64> {
         return None;
     }
     Some((1.0 - (low / high)).clamp(0.0, 1.0))
+}
+
+/// Geocentric lunar position: right ascension and declination of date in
+/// radians, and distance in kilometres.
+///
+/// A truncated orbital series with the principal perturbations (evection,
+/// variation, the yearly and parallactic equations and the main latitude and
+/// distance terms), accurate to a few arcminutes. That is far finer than needed
+/// to decide whether the sky is moonlit, which is what this is for.
+pub fn moon_equatorial(unix_seconds: f64) -> (f64, f64, f64) {
+    // Days since 2000 Jan 0.0, the epoch this series is written for.
+    let d = julian_date(unix_seconds) - 2451543.5;
+    let norm = |v: f64| v.rem_euclid(360.0);
+    // Solar elements, needed for the perturbations and the elongation.
+    let ws = 282.9404 + 4.70935e-5 * d;
+    let ms = norm(356.0470 + 0.9856002585 * d);
+    // Lunar elements.
+    let nm = norm(125.1228 - 0.0529538083 * d);
+    let inc = 5.1454;
+    let wm = norm(318.0634 + 0.1643573223 * d);
+    let a = 60.2666; // Earth radii
+    let e = 0.054900;
+    let mm = norm(115.3654 + 13.0649929509 * d);
+    // Kepler, iterated; the eccentricity is small so this converges at once.
+    let mut ecc = mm * DEG + e * (mm * DEG).sin() * (1.0 + e * (mm * DEG).cos());
+    for _ in 0..12 {
+        let next = ecc - (ecc - e * ecc.sin() - mm * DEG) / (1.0 - e * ecc.cos());
+        if (next - ecc).abs() < 1e-12 {
+            ecc = next;
+            break;
+        }
+        ecc = next;
+    }
+    let (xv, yv) = (a * (ecc.cos() - e), a * (1.0 - e * e).sqrt() * ecc.sin());
+    let v = yv.atan2(xv);
+    let r = xv.hypot(yv);
+    // Into ecliptic coordinates.
+    let (n, i, w) = (nm * DEG, inc * DEG, wm * DEG);
+    let xe = r * (n.cos() * (v + w).cos() - n.sin() * (v + w).sin() * i.cos());
+    let ye = r * (n.sin() * (v + w).cos() + n.cos() * (v + w).sin() * i.cos());
+    let ze = r * (v + w).sin() * i.sin();
+    let mut lon = ye.atan2(xe) / DEG;
+    let mut lat = ze.atan2(xe.hypot(ye)) / DEG;
+    let mut dist = r;
+    // Principal perturbations, in degrees and Earth radii.
+    let ls = norm(ms + ws);
+    let lm = norm(nm + wm + mm);
+    let elong = norm(lm - ls);
+    let f = norm(lm - nm);
+    let (s_mm, s_ms, s_d, s_f) = (mm * DEG, ms * DEG, elong * DEG, f * DEG);
+    lon += -1.274 * (s_mm - 2.0 * s_d).sin()
+        + 0.658 * (2.0 * s_d).sin()
+        - 0.186 * s_ms.sin()
+        - 0.059 * (2.0 * s_mm - 2.0 * s_d).sin()
+        - 0.057 * (s_mm - 2.0 * s_d + s_ms).sin()
+        + 0.053 * (s_mm + 2.0 * s_d).sin()
+        + 0.046 * (2.0 * s_d - s_ms).sin()
+        + 0.041 * (s_mm - s_ms).sin()
+        - 0.035 * s_d.sin()
+        - 0.031 * (s_mm + s_ms).sin()
+        - 0.015 * (2.0 * s_f - 2.0 * s_d).sin()
+        + 0.011 * (s_mm - 4.0 * s_d).sin();
+    lat += -0.173 * (s_f - 2.0 * s_d).sin()
+        - 0.055 * (s_mm - s_f - 2.0 * s_d).sin()
+        - 0.046 * (s_mm + s_f - 2.0 * s_d).sin()
+        + 0.033 * (s_f + 2.0 * s_d).sin()
+        + 0.017 * (2.0 * s_mm + s_f).sin();
+    dist += -0.58 * (s_mm - 2.0 * s_d).cos() - 0.46 * (2.0 * s_d).cos();
+    // Ecliptic to equatorial.
+    let obliquity = (23.4393 - 3.563e-7 * d) * DEG;
+    let (lo, la) = (lon * DEG, lat * DEG);
+    let (x, y, z) = (
+        la.cos() * lo.cos(),
+        la.cos() * lo.sin(),
+        la.sin(),
+    );
+    let (yq, zq) = (
+        y * obliquity.cos() - z * obliquity.sin(),
+        y * obliquity.sin() + z * obliquity.cos(),
+    );
+    (
+        yq.atan2(x).rem_euclid(std::f64::consts::TAU),
+        zq.atan2(x.hypot(yq)),
+        dist * MOON_EARTH_RADIUS_KM,
+    )
+}
+
+/// Geocentric lunar direction in the same ECEF frame as `solar_direction_ecef`,
+/// so the two can be compared directly.
+pub fn moon_direction_ecef(unix_seconds: f64) -> [f64; 3] {
+    let (ra, dec, _) = moon_equatorial(unix_seconds);
+    let longitude = ra - gmst_deg(unix_seconds) * DEG;
+    [
+        dec.cos() * longitude.cos(),
+        dec.cos() * longitude.sin(),
+        dec.sin(),
+    ]
+}
+
+/// Sun-Moon elongation seen from Earth, in radians. Frame independent, so the
+/// two ECEF directions can be compared without undoing Earth rotation.
+pub fn moon_elongation(unix_seconds: f64) -> f64 {
+    let moon = moon_direction_ecef(unix_seconds);
+    let sun = crate::geometry::solar_direction_ecef(unix_seconds);
+    (moon[0] * sun[0] + moon[1] * sun[1] + moon[2] * sun[2])
+        .clamp(-1.0, 1.0)
+        .acos()
+}
+
+/// Illuminated fraction of the lunar disc. With the Sun far away the phase angle
+/// is the supplement of the elongation, so `k = (1 - cos elongation)/2`: zero at
+/// new moon and one at full.
+pub fn moon_illuminated_fraction(unix_seconds: f64) -> f64 {
+    ((1.0 - moon_elongation(unix_seconds).cos()) / 2.0).clamp(0.0, 1.0)
+}
+
+/// Everything about the Moon that bears on how bright the sky is.
+#[derive(Debug, Clone, Copy)]
+pub struct MoonState {
+    pub azimuth_deg: f64,
+    pub elevation_deg: f64,
+    pub illuminated_fraction: f64,
+    pub phase_angle_deg: f64,
+    pub distance_km: f64,
+    /// Apparent visual magnitude, the standard phase-angle approximation with a
+    /// distance correction. More negative is brighter.
+    pub apparent_magnitude: f64,
+    /// A geometric proxy for how much moonlight reaches the sky at this station:
+    /// the illuminated fraction times the sine of the lunar elevation, and zero
+    /// while the Moon is down. This is a proxy, not a photometric sky model.
+    pub sky_brightness: f64,
+}
+
+/// Lunar state at one station and time.
+pub fn moon_state(unix_seconds: f64, lat_deg: f64, lon_deg: f64) -> MoonState {
+    let (ra, dec, distance_km) = moon_equatorial(unix_seconds);
+    let (az, ze) = equatorial_to_az_ze(ra, dec, unix_seconds, lat_deg, lon_deg);
+    let elevation_deg = 90.0 - ze / DEG;
+    let elongation = moon_elongation(unix_seconds);
+    let phase_angle = std::f64::consts::PI - elongation;
+    let illuminated = ((1.0 + phase_angle.cos()) / 2.0).clamp(0.0, 1.0);
+    let phase_deg = phase_angle / DEG;
+    // Allen's phase law, plus the inverse-square distance term.
+    let magnitude = -12.73
+        + 0.026 * phase_deg.abs()
+        + 4.0e-9 * phase_deg.powi(4)
+        + 5.0 * (distance_km / 384_400.0).log10();
+    MoonState {
+        azimuth_deg: az / DEG,
+        elevation_deg,
+        illuminated_fraction: illuminated,
+        phase_angle_deg: phase_deg,
+        distance_km,
+        apparent_magnitude: magnitude,
+        sky_brightness: if elevation_deg <= 0.0 {
+            0.0
+        } else {
+            illuminated * (elevation_deg * DEG).sin()
+        },
+    }
 }
 
 /// A stable identity for a catalogue star. The WISCAT payload carries no
@@ -1036,27 +1350,28 @@ mod tests {
     }
 
     /// Render a noiseless star patch for fitting tests.
-    fn synth(w: usize, h: usize, t: [f64; 7]) -> Vec<f64> {
+    fn synth(w: usize, h: usize, t: [f64; 10]) -> Vec<f64> {
+        let (xc, yc) = ((w - 1) as f64 / 2.0, (h - 1) as f64 / 2.0);
         (0..w * h)
-            .map(|i| gaussian_value(&t, (i % w) as f64, (i / w) as f64))
+            .map(|i| gaussian_value(&t, (i % w) as f64, (i / w) as f64, xc, yc))
             .collect()
     }
 
     #[test]
     fn gaussian_fit_recovers_a_known_star() {
-        let truth = [12.0, 240.0, 8.3, 7.6, 2.1, 1.8, 0.0];
+        let truth = [12.0, 0.0, 0.0, 0.0, 240.0, 8.3, 7.6, 2.1, 1.8, 0.0];
         let patch = synth(17, 17, truth);
         let fit = fit_gaussian(&patch, 17, 17).expect("fit");
         assert!((fit.background - truth[0]).abs() < 0.05, "background {}", fit.background);
-        assert!((fit.amplitude - truth[1]).abs() < 0.5, "amplitude {}", fit.amplitude);
-        assert!((fit.centre_x - truth[2]).abs() < 0.01, "cx {}", fit.centre_x);
-        assert!((fit.centre_y - truth[3]).abs() < 0.01, "cy {}", fit.centre_y);
-        assert!((fit.sigma_x - truth[4]).abs() < 0.02, "sx {}", fit.sigma_x);
-        assert!((fit.sigma_y - truth[5]).abs() < 0.02, "sy {}", fit.sigma_y);
+        assert!((fit.amplitude - truth[4]).abs() < 0.5, "amplitude {}", fit.amplitude);
+        assert!((fit.centre_x - truth[5]).abs() < 0.01, "cx {}", fit.centre_x);
+        assert!((fit.centre_y - truth[6]).abs() < 0.01, "cy {}", fit.centre_y);
+        assert!((fit.sigma_x - truth[7]).abs() < 0.02, "sx {}", fit.sigma_x);
+        assert!((fit.sigma_y - truth[8]).abs() < 0.02, "sy {}", fit.sigma_y);
         // Axis aligned, so the recovered angle must be near zero.
         assert!(fit.angle_deg.abs() < 2.0, "angle {}", fit.angle_deg);
         // Total intensity above background is the analytic integral.
-        let expected = std::f64::consts::TAU * truth[1] * truth[4] * truth[5];
+        let expected = std::f64::consts::TAU * truth[4] * truth[7] * truth[8];
         assert!(
             (fit.flux - expected).abs() / expected < 0.02,
             "flux {} vs analytic {expected}",
@@ -1068,7 +1383,7 @@ mod tests {
     #[test]
     fn gaussian_fit_is_stable_against_noise_and_refuses_junk() {
         // Deterministic pseudo-noise so the test cannot flake.
-        let truth = [30.0, 180.0, 9.0, 9.0, 2.0, 2.0, 0.0];
+        let truth = [30.0, 0.0, 0.0, 0.0, 180.0, 9.0, 9.0, 2.0, 2.0, 0.0];
         let mut patch = synth(19, 19, truth);
         let mut seed = 12345u64;
         for value in patch.iter_mut() {
@@ -1077,7 +1392,7 @@ mod tests {
             *value += unit * 6.0;
         }
         let fit = fit_gaussian(&patch, 19, 19).expect("fit under noise");
-        let expected = std::f64::consts::TAU * truth[1] * truth[4] * truth[5];
+        let expected = std::f64::consts::TAU * truth[4] * truth[7] * truth[8];
         assert!(
             (fit.flux - expected).abs() / expected < 0.06,
             "noisy flux {} vs {expected}",
@@ -1096,13 +1411,13 @@ mod tests {
     fn gaussian_fit_locates_an_offset_star_so_the_caller_can_reject_it() {
         // The 3-pixel acceptance is a caller policy; the fit must report the true
         // centre so that policy can be applied.
-        let truth = [10.0, 200.0, 13.5, 4.5, 1.6, 1.6, 0.0];
+        let truth = [10.0, 0.0, 0.0, 0.0, 200.0, 13.5, 4.5, 1.6, 1.6, 0.0];
         let patch = synth(19, 19, truth);
         let fit = fit_gaussian(&patch, 19, 19).expect("fit");
         let offset = ((fit.centre_x - 9.0).powi(2) + (fit.centre_y - 9.0).powi(2)).sqrt();
         assert!(offset > 3.0, "centroid offset {offset} should exceed the 3 px limit");
-        assert!((fit.centre_x - truth[2]).abs() < 0.05);
-        assert!((fit.centre_y - truth[3]).abs() < 0.05);
+        assert!((fit.centre_x - truth[5]).abs() < 0.05);
+        assert!((fit.centre_y - truth[6]).abs() < 0.05);
     }
 
     #[test]
@@ -1110,13 +1425,7 @@ mod tests {
         // A trailed or astigmatic image: clearly elliptical and clearly rotated.
         for truth_angle_deg in [-70.0, -35.0, -5.0, 0.0, 20.0, 52.0, 80.0] {
             let truth = [
-                18.0,
-                300.0,
-                10.4,
-                9.7,
-                3.2,
-                1.3,
-                truth_angle_deg * DEG,
+                18.0, 0.0, 0.0, 0.0, 300.0, 10.4, 9.7, 3.2, 1.3, truth_angle_deg * DEG,
             ];
             let patch = synth(25, 25, truth);
             let fit = fit_gaussian(&patch, 25, 25).expect("fit");
@@ -1138,12 +1447,83 @@ mod tests {
     }
 
     #[test]
+    fn the_bilinear_background_is_recovered_and_does_not_bias_the_flux() {
+        // Moonlight, twilight and auroral arcs slope across a patch. A constant
+        // background forced to cover a gradient pushes the difference into the
+        // amplitude, so the gradient has to be part of the model.
+        for (bx, by, bxy) in [(0.0, 0.0, 0.0), (1.8, -1.1, 0.0), (-2.4, 0.9, 0.05), (0.6, 0.6, -0.04)] {
+            let truth = [40.0, bx, by, bxy, 260.0, 12.3, 11.6, 2.5, 1.7, 24.0 * DEG];
+            let patch = synth(25, 25, truth);
+            let fit = fit_gaussian(&patch, 25, 25).expect("fit");
+            assert!((fit.background_level - 40.0).abs() < 0.4, "level {}", fit.background_level);
+            assert!((fit.background_dx - bx).abs() < 0.05, "dx {} vs {bx}", fit.background_dx);
+            assert!((fit.background_dy - by).abs() < 0.05, "dy {} vs {by}", fit.background_dy);
+            assert!((fit.background_dxy - bxy).abs() < 0.01, "dxy {} vs {bxy}", fit.background_dxy);
+            // The flux must be right whatever the gradient does.
+            let expected = std::f64::consts::TAU * 260.0 * 2.5 * 1.7;
+            assert!(
+                (fit.flux - expected).abs() / expected < 0.02,
+                "flux {} with gradient ({bx},{by},{bxy}) vs {expected}",
+                fit.flux
+            );
+            // And the amplitude must not have absorbed part of the slope.
+            assert!((fit.amplitude - 260.0).abs() < 4.0, "amplitude {}", fit.amplitude);
+            // background is reported under the star, so it follows the slope.
+            let at_star = 40.0 + bx * (12.3 - 12.0) + by * (11.6 - 12.0) + bxy * (12.3 - 12.0) * (11.6 - 12.0);
+            assert!((fit.background - at_star).abs() < 0.5, "background under star {}", fit.background);
+            assert!(fit.background_slope() >= 0.0);
+        }
+    }
+
+    #[test]
+    fn residual_scatter_decides_whether_a_star_is_a_measurement() {
+        // Deterministic noise so the test cannot flake.
+        let noisy = |amplitude: f64, span: f64| {
+            let truth = [50.0, 0.3, -0.2, 0.0, amplitude, 11.0, 11.0, 2.0, 2.0, 0.0];
+            let mut patch = synth(23, 23, truth);
+            let mut seed = 99u64;
+            for value in patch.iter_mut() {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let unit = ((seed >> 33) as f64 / (1u64 << 31) as f64) - 0.5;
+                *value += unit * span;
+            }
+            fit_gaussian(&patch, 23, 23)
+        };
+        // Uniform noise of width w has standard deviation w/sqrt(12).
+        let span = 20.0;
+        let expected_noise = span / 12f64.sqrt();
+        let bright = noisy(400.0, span).expect("bright fit");
+        assert!(
+            (bright.residual_std - expected_noise).abs() / expected_noise < 0.3,
+            "residual_std {} vs injected {expected_noise}",
+            bright.residual_std
+        );
+        assert!(bright.amplitude_snr > 20.0, "bright amplitude snr {}", bright.amplitude_snr);
+        assert!(bright.flux_snr > 20.0, "bright flux snr {}", bright.flux_snr);
+        assert!(bright.detectable(5.0), "a bright star must be a measurement");
+        // A peak comparable to the scatter is not a star. Its flux must not be
+        // handed to the cloud estimate, which would read noise as clear sky.
+        let faint = noisy(expected_noise * 1.2, span).expect("faint fit");
+        assert!(faint.amplitude_snr < 5.0, "faint amplitude snr {}", faint.amplitude_snr);
+        assert!(!faint.detectable(5.0), "a star at the noise level is not detectable");
+        // Monotone in brightness once above the noise. Below it the fitted peak
+        // is whatever the noise offers, so no ordering can be expected there,
+        // which is precisely why a detectability test is needed.
+        let mut previous = 0.0;
+        for amplitude in [20.0, 60.0, 150.0, 400.0] {
+            let snr = noisy(amplitude, span).expect("fit").amplitude_snr;
+            assert!(snr > previous, "snr {snr} should exceed {previous} at amplitude {amplitude}");
+            previous = snr;
+        }
+    }
+
+    #[test]
     fn rotation_does_not_change_the_flux() {
         // Rotation is area preserving, so the integral stays 2 pi A sx sy. An
         // axis-aligned fit would instead misestimate an elongated rotated star.
         let expected = std::f64::consts::TAU * 260.0 * 3.0 * 1.2;
         for angle_deg in [0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0, 135.0] {
-            let truth = [9.0, 260.0, 12.0, 12.0, 3.0, 1.2, angle_deg * DEG];
+            let truth = [9.0, 0.0, 0.0, 0.0, 260.0, 12.0, 12.0, 3.0, 1.2, angle_deg * DEG];
             let patch = synth(27, 27, truth);
             let fit = fit_gaussian(&patch, 27, 27).expect("fit");
             assert!(
@@ -1158,7 +1538,7 @@ mod tests {
     fn a_round_star_still_fits_though_its_angle_is_meaningless() {
         // With equal widths the angle Jacobian vanishes; the solve must stay
         // stable and the flux must still be right.
-        let truth = [22.0, 150.0, 8.0, 8.0, 2.4, 2.4, 0.0];
+        let truth = [22.0, 0.0, 0.0, 0.0, 150.0, 8.0, 8.0, 2.4, 2.4, 0.0];
         let patch = synth(21, 21, truth);
         let fit = fit_gaussian(&patch, 21, 21).expect("round fit");
         assert!((fit.elongation() - 1.0).abs() < 0.05, "elongation {}", fit.elongation());
@@ -1265,6 +1645,13 @@ mod tests {
         conn.execute_batch(include_str!("schema.sql")).unwrap();
         let fit = GaussianFit {
             background: 31.5,
+            background_level: 31.0,
+            background_dx: 0.12,
+            background_dy: -0.08,
+            background_dxy: 0.001,
+            residual_std: 1.9,
+            amplitude_snr: 110.5,
+            flux_snr: 48.2,
             amplitude: 210.0,
             centre_x: 1402.25,
             centre_y: 1380.75,
@@ -1366,6 +1753,110 @@ mod tests {
         assert!(brightness_variation(&one_bad).unwrap() < 0.05);
         assert!(brightness_variation(&[]).is_none());
         assert!(brightness_variation(&[0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn the_lunar_ephemeris_obeys_its_physical_invariants() {
+        // No ephemeris library is available here, so the Moon is checked against
+        // properties of its actual orbit rather than golden values.
+        let start = 1789077600.0; // 2026-09-10T22:00:00Z
+        let mut min_dist = f64::INFINITY;
+        let mut max_dist: f64 = 0.0;
+        let mut max_lat: f64 = 0.0;
+        for step in 0..400 {
+            let unix = start + step as f64 * 86400.0;
+            let (ra, dec, distance) = moon_equatorial(unix);
+            assert!(ra.is_finite() && (0.0..std::f64::consts::TAU).contains(&ra));
+            assert!(dec.abs() < 30.0 * DEG, "declination {} out of range", dec / DEG);
+            min_dist = min_dist.min(distance);
+            max_dist = max_dist.max(distance);
+            // Ecliptic latitude is bounded by the orbital inclination plus the
+            // perturbation terms, about 5.3 degrees.
+            let obliquity = 23.4393 * DEG;
+            let (x, y, z) = (dec.cos() * ra.cos(), dec.cos() * ra.sin(), dec.sin());
+            let ecliptic_z = -y * obliquity.sin() + z * obliquity.cos();
+            max_lat = max_lat.max((ecliptic_z.asin() / DEG).abs());
+            let k = moon_illuminated_fraction(unix);
+            assert!((0.0..=1.0).contains(&k), "illuminated fraction {k}");
+        }
+        assert!(max_lat < 5.6, "ecliptic latitude reached {max_lat} deg");
+        // Perigee and apogee bracket the real range, 356400 to 406700 km.
+        assert!((350_000.0..372_000.0).contains(&min_dist), "perigee {min_dist} km");
+        assert!((398_000.0..415_000.0).contains(&max_dist), "apogee {max_dist} km");
+    }
+
+    #[test]
+    fn the_lunar_and_solar_longitudes_beat_at_the_synodic_month() {
+        // The strongest check available without an ephemeris library: the phase
+        // cycle is the beat between two independently implemented bodies, so if
+        // either the lunar or the solar series were wrong this period would not
+        // come out at 29.53 days.
+        let start = 1789077600.0;
+        let step = 1800.0; // half hour
+        let mut fulls = Vec::new();
+        let mut previous = moon_illuminated_fraction(start);
+        // Take the initial direction from the data. Assuming the Moon is waxing
+        // registers a false maximum on the first sample whenever it is waning.
+        let mut rising = moon_illuminated_fraction(start + step) > previous;
+        for i in 1..(70.0 * 86400.0 / step) as usize {
+            let unix = start + i as f64 * step;
+            let k = moon_illuminated_fraction(unix);
+            if rising && k < previous {
+                // Only a genuine full moon counts, which also rejects any
+                // numerical wiggle in the nearly flat peak.
+                if previous > 0.99 {
+                    fulls.push(unix - step);
+                }
+                rising = false;
+            } else if !rising && k > previous {
+                rising = true;
+            }
+            previous = k;
+        }
+        assert!(fulls.len() >= 2, "expected at least two full moons in 60 days");
+        let period = (fulls[1] - fulls[0]) / 86400.0;
+        assert!(
+            (period - 29.53).abs() < 0.4,
+            "synodic period came out {period} days, not 29.53"
+        );
+        // At full moon the Moon is opposite the Sun; at new moon, beside it.
+        let full = fulls[0];
+        assert!(moon_elongation(full) / DEG > 172.0, "full moon elongation {}", moon_elongation(full) / DEG);
+        assert!(moon_illuminated_fraction(full) > 0.995);
+        let new = full + 0.5 * 29.53 * 86400.0;
+        assert!(moon_elongation(new) / DEG < 12.0, "new moon elongation {}", moon_elongation(new) / DEG);
+        assert!(moon_illuminated_fraction(new) < 0.02);
+    }
+
+    #[test]
+    fn moon_state_reports_brightness_only_while_the_moon_is_up() {
+        let (lat, lon) = (67.84, 20.41);
+        let start = 1789077600.0;
+        let mut saw_up = false;
+        let mut saw_down = false;
+        let mut brightest = f64::NEG_INFINITY;
+        for step in 0..(24 * 30) {
+            let unix = start + step as f64 * 3600.0;
+            let m = moon_state(unix, lat, lon);
+            assert!((0.0..360.0).contains(&m.azimuth_deg));
+            assert!(m.elevation_deg > -95.0 && m.elevation_deg < 95.0);
+            assert!((0.0..=1.0).contains(&m.illuminated_fraction));
+            assert!((0.0..=180.0).contains(&m.phase_angle_deg));
+            // Brightness is zero while the Moon is below the horizon, and never
+            // negative, so it can be used directly as a weighting input.
+            if m.elevation_deg <= 0.0 {
+                assert_eq!(m.sky_brightness, 0.0, "the Moon is down");
+                saw_down = true;
+            } else {
+                assert!(m.sky_brightness >= 0.0 && m.sky_brightness <= 1.0);
+                saw_up = true;
+            }
+            // Full Moon is about magnitude -12.7, new Moon far fainter.
+            assert!(m.apparent_magnitude > -13.5 && m.apparent_magnitude < 0.0);
+            brightest = brightest.max(-m.apparent_magnitude);
+        }
+        assert!(saw_up && saw_down, "the Moon should rise and set over a month");
+        assert!(brightest > 12.0, "a full Moon should reach about magnitude -12.7");
     }
 
     #[test]

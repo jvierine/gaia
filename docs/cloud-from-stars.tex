@@ -204,6 +204,7 @@ Residual scatter $\sigma_r$ & injected uniform noise & \SI{30}{\percent} \\
 Lunar perigee, apogee over 400 d & \num{356400}--\SI{406700}{\kilo\meter} & bracketed \\
 Lunar ecliptic latitude & orbital inclination \SI{5.3}{\degree} & $<\SI{5.6}{\degree}$ \\
 Synodic month, Sun--Moon beat & \SI{29.53}{d} & \SI{0.4}{d} \\
+One-based convention, 165 stars & file \texttt{model\_col\_px\_1based} & $-1.000000$, sd 0 \\
 \bottomrule
 \end{tabular}
 \caption{Verification of the estimation chain. The fourth row is the strongest:
@@ -402,11 +403,38 @@ Table~\ref{tab:firstlight} shows a mean offset of one to one and a half pixels
 that does not shrink with signal-to-noise: the brightest stars, at
 $\mathrm{SNR}_F$ of 50 to 60, sit \num{2.1} to \SI{2.5}{px} from their predicted
 positions, where a well-pointed model would put them inside half a pixel. The
-offset is a \emph{rigid shift}, the same in both frames of a camera ten minutes
-apart, with a scatter about it of only \SI{1.1}{px}. That rules out a timing
-error, which would rotate the field and vary across it, and points at the
-calibration's own pointing: Bagdarin's fit carries a residual of
-\SI{0.86}{px} and Yurga's \SI{2.52}{px}, and the scatter matches.
+offset is dominated by a \emph{rigid shift}, the same in every frame of a
+camera, and it differs between cameras.
+
+\paragraph{It is not an off-by-one.} The obvious suspect is the one-based
+indexing AIDA inherits from its \textsc{Matlab} ancestry, and it was checked
+rather than assumed. The chain holds at every link. The calibration columns say
+so in their own names, \texttt{star\_col\_px\_1based} and
+\texttt{model\_col\_px\_1based}; the exporter writes them as
+\texttt{match.image.x + 1} from a centroid that indexes the raw raster from
+zero; \texttt{wisc\_lens.az\_el\_to\_pixel} documents its return as zero-based
+and produces it as $u\,W-1$; and the port reproduces that. Run over the 165
+selected stars of the Bagdarin calibration, the port's output minus the file's
+\texttt{model\_col\_px\_1based} is $-1.000000$ with a standard deviation of
+zero, in both axes. The conversion appears exactly once, in the right place.
+The measurements say the same: a spurious $\pm1$ would be identical in both
+axes and identical for every camera, whereas the observed shifts are
+$(-1.4,-0.1)$ for Bagdarin and $(-0.9,+0.8)$ for Yurga. And AIDA's own fit
+residuals are centred at $0.000$ px in both axes, so at calibration time the
+model sat on the stars.
+
+\paragraph{What it actually is.} The offset appeared \emph{after} calibration.
+Fitting an affine field to the per-frame offsets and decomposing it separates
+the causes. There is a uniform scale term of $5\times10^{-4}$ in both cameras,
+about a pixel at the frame edge, which no timing error can produce. There is a
+rotation of $10^{-3}$ radians in Bagdarin, which read as a stale timestamp
+would mean a lag of 7 to \SI{15}{\second}; Yurga shows none, so a download-time
+lag is at most a minor contributor. What is left, and what dominates, is a
+constant per-camera pointing shift: the cameras have moved slightly since they
+were calibrated. Removing the affine field brings Bagdarin's residual to
+\num{0.56} to \SI{0.95}{px}, against the \SI{0.61}{px} scatter of its own
+calibration, and Yurga's to \SI{1.3}{px} against its \SI{1.81}{px}. In both
+cases the correction recovers the accuracy the calibration itself had.
 
 This does not corrupt the photometry --- the patch is 19 pixels across, the fit
 finds the true centroid, and the flux is what it is --- but it eats the
@@ -415,9 +443,12 @@ camera with a \SI{1.5}{px} boresight error has only \SI{1.5}{px} of real
 tolerance left. The rejected fits are not near misses: their mean offset is
 \num{3.3e4} pixels, which is a Levenberg--Marquardt run diverging on a patch
 with no star in it, so the gate is discarding empty sky rather than good stars.
-The proper fix is to fit one rigid $(\Delta x,\Delta y)$ per frame from the
-confidently detected stars and gate on the residual from \emph{that}, which
-would also give a per-frame pointing check for free.
+The fix is to fit the offset per frame from the confidently detected stars and
+gate on the residual from \emph{that}. A rigid $(\Delta x,\Delta y)$ removes
+most of it; the full affine recovers the calibration's own accuracy for four
+more parameters on a few tens of stars. Either way it yields a per-frame
+pointing check for nothing, and a camera that has drifted far enough to want
+recalibrating would announce itself.
 
 \section{The unresolved issue: extinction depends on elevation}
 \label{sec:airmass}

@@ -8,6 +8,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     }
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
+    // The crawler, the publisher and the star photometry pass all write. Without
+    // a busy timeout a writer that meets another one fails outright instead of
+    // waiting the moment it takes.
+    conn.busy_timeout(std::time::Duration::from_secs(30))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(include_str!("schema.sql"))?;
     // schema.sql is replayed on every open, but CREATE TABLE IF NOT EXISTS cannot

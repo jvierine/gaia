@@ -9,6 +9,14 @@ pub struct Projection {
     #[serde(skip)] pub uv:Vec<f32>,
 }
 
+/// The lens model of one calibration file. Reading it runs `h5dump`, so callers
+/// that work through many frames should cache the result per calibration.
+pub fn optical_parameters(hdf5_path:&str)->Result<Vec<f64>> {
+    let p=numeric(hdf5_path,"wisc_optpar_with_optmod",false)?;
+    if p.len()<9 {bail!("invalid lens parameters")}
+    Ok(p)
+}
+
 fn numeric(path:&str, name:&str, attr:bool)->Result<Vec<f64>> {
     let out=std::process::Command::new("h5dump").args(["-y","-w","0","-m","%0.17g",if attr{"-a"}else{"-d"},name,path]).output()?;
     if !out.status.success(){bail!("cannot read calibration {name}")}

@@ -12,6 +12,7 @@ mod pixel_mask;
 mod projection;
 mod publish;
 mod quality;
+mod starpass;
 mod starphot;
 use axum::{
     Json, Router,
@@ -1062,9 +1063,25 @@ async fn main() -> anyhow::Result<()> {
     }
     // Stage a migrated archive without running two collectors against providers.
     if std::env::var("GAIA_CRAWLER_ENABLED").as_deref() != Ok("0") {
-        tokio::spawn(crawler::run_loop(source_configs, db_path, archive_root));
+        tokio::spawn(crawler::run_loop(source_configs, db_path.clone(), archive_root));
     } else {
         tracing::info!("Crawler disabled for staging/read-only operation");
+    }
+    // The star photometry writer. Independent of the crawler: it measures what
+    // is already archived, so it is useful on a staging machine that collects
+    // nothing. Failure to start is logged and never fatal.
+    if starpass::enabled() {
+        let settings = starpass::Settings::from_env();
+        if starpass::catalog_present(&settings.catalog_path) {
+            tokio::spawn(starpass::run_loop(db_path.clone(), settings));
+        } else {
+            tracing::warn!(
+                catalog = %settings.catalog_path.display(),
+                "star photometry disabled: set GAIA_STARPHOT_CATALOG to the WISCAT1 file"
+            );
+        }
+    } else {
+        tracing::info!("Star photometry pass disabled");
     }
     let static_dir = std::env::var("GAIA_STATIC_DIR").unwrap_or_else(|_| "web-dist".into());
     let app = Router::new()

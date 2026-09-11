@@ -1,4 +1,6 @@
 import {shellTextureCoordinates} from './source-map-coordinates';
+import {cameraCompositor} from './camera-compositor';
+import {cameraWeightScale} from './composition-rules';
 import {liveCutoff} from './live-time';
 import {manifestUrl,archiveMode} from './public-manifest';
 const VERTEX = `
@@ -92,12 +94,14 @@ function igrfContourVertices(values:Float32Array){
 
 export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>number,onLoading:(loading:boolean)=>void=()=>{},publicOnly=false) {
   const gl = canvas.getContext('webgl', { antialias: true }); if (!gl) return () => {};
+  const attributeCount=gl.getParameter(gl.MAX_VERTEX_ATTRIBS) as number;
+  const resetAttributes=()=>{for(let i=0;i<attributeCount;i++)gl.disableVertexAttribArray(i)};
   const mobilePublic=publicOnly&&matchMedia('(pointer:coarse)').matches;
   const perf=new URLSearchParams(location.search).has('perf')?document.createElement('output'):null;
   if(perf){perf.style.cssText='position:absolute;right:16px;top:70px;color:#9cddc4;font:12px monospace;pointer-events:none';canvas.parentElement?.appendChild(perf)}
   let perfStart=performance.now(),perfFrames=0,perfErrors=0;
   const measure=()=>{if(!perf)return;perfFrames++;const now=performance.now();if(now-perfStart>=1000){if(gl.getError()!==gl.NO_ERROR)perfErrors++;perf.textContent=`${Math.round(perfFrames*1000/(now-perfStart))} display fps · ${perfErrors} WebGL errors`;perfStart=now;perfFrames=0}};
-  const program=makeProgram(gl,VERTEX,FRAGMENT),lineProgram=makeProgram(gl,LINE_VERTEX,LINE_FRAGMENT);gl.useProgram(program);
+  const program=makeProgram(gl,VERTEX,FRAGMENT),lineProgram=makeProgram(gl,LINE_VERTEX,LINE_FRAGMENT);resetAttributes();gl.useProgram(program);
   const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
   const position = gl.getAttribLocation(program,'position'); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
   const resolution=gl.getUniformLocation(program,'resolution'),rotation=gl.getUniformLocation(program,'rotation'),zoomLoc=gl.getUniformLocation(program,'zoom'),sunLoc=gl.getUniformLocation(program,'sunDirection');
@@ -110,7 +114,10 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   observationStatus.style.cssText='position:absolute;left:18px;top:56px;color:#a8c6bf;font:11px monospace;pointer-events:none';
   observationStatus.setAttribute('role','status');canvas.parentElement?.appendChild(observationStatus);
   const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Full archive';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';canvas.parentElement?.appendChild(archiveLink);
-  type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null};
+  type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null;projection?:any;calibrated?:boolean};
+  let browserLayers=false,layerManifest:any=null,manifestRefresh:Promise<any>|null=null,manifestFetched=0;
+  const compositor=cameraCompositor(gl);
+  const published=()=>{if(!manifestRefresh||Date.now()-manifestFetched>30000){manifestFetched=Date.now();manifestRefresh=fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw Error('Camera layers unavailable');layerManifest=await r.json();browserLayers=layerManifest.composition==='browser-layers-v1';return layerManifest}).catch(e=>{manifestRefresh=null;throw e})}return manifestRefresh};
   let cameraSites:{source_id?:string;label:string;url?:string;world:number[]}[]=[],publicCameras=new Map<number,PublicCamera>();
   type Attribution={url:string;width:number;height:number;data:Uint8ClampedArray};
   let attribution:Attribution|null=null;
@@ -128,6 +135,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
     attributionCache.set(url,result);for(const key of attributionCache.keys()){if(attributionCache.size<=6)break;if(key!==url&&key!==attribution?.url)attributionCache.delete(key);}return result;
   };
   const projectedCamera=(clientX:number,clientY:number)=>{
+    if(browserLayers){const r=canvas.getBoundingClientRect();const id=compositor.pick((clientX-r.left)*canvas.width/r.width,(r.bottom-clientY)*canvas.height/r.height,canvas.width,canvas.height,yaw,pitch,zoom,frames,mutedSources);return [...publicCameras.values()].find(c=>c.source_id===id)||null;}
     if(!attribution)return null;const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);
     const px=(2*(clientX-r.left)-r.width)/side/zoom,py=(r.height-2*(clientY-r.top))/side/zoom;
     const uv=shellTextureCoordinates(px,py,yaw,pitch);if(!uv)return null;const [u,v]=uv;
@@ -227,7 +235,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   type SmoothState={textures:[WebGLTexture,WebGLTexture];index:number;target:WebGLTexture;changed:number;initialized:boolean;size:[number,number]};
   const smoothStates=new Map<number,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
-  let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string;at:string}[]=[];
+  let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number}[]=[];
   const layers:{buffer:WebGLBuffer;count:number}[]=[];
   const addLayer=(values:number[]|Float32Array)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6})};
   // Expand each station into a small globe-surface disc. WebGL point sprites have
@@ -242,17 +250,18 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
   abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
   abort.signal.addEventListener('abort',()=>archiveLink.remove(),{once:true});
-  void (publicOnly?fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw new Error('Public camera catalogue unavailable');const manifest=await r.json() as {cameras?:PublicCamera[]};const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{source_id:c.source_id,label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return [{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+  void (publicOnly?published().then(async manifest=>{const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{source_id:c.source_id,label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return browserLayers?cameras.map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:!!c.projection,enabled:true,latitude_deg:null,longitude_deg:null})):[{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}
     addLayer(sites);
     if(!publicOnly)cameraSites=sources.filter(s=>s.enabled&&s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{source_id:s.id,label:`Camera: ${s.name}\nOperator: ${s.producer}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
     let lastMinute=-1,lastRefresh=0;
-    type Asset={geometry_url:string;texture_url:string;vertex_count:number};
-    type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string;source_map_url?:string}[]};
+    type Asset={geometry_url:string;texture_url:string;vertex_count:number;weight_scale?:number};
+    type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string;source_map_url?:string;geometry_url?:string;vertex_count?:number;weight_scale?:number}[]};
     const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
     const catalogue=(id:string)=>{
       let c=catalogues.get(id);if(!c||c.expires<Date.now()){
+        if(publicOnly){c={expires:Date.now()+30000,value:published().then(m=>{publicCameras=new Map((m.cameras||[]).filter((c:PublicCamera)=>c.map_index!=null).map((c:PublicCamera)=>[c.map_index!,c]));return browserLayers?m.cameras.find((c:PublicCamera)=>c.source_id===id)?.projection||null:m})};catalogues.set(id,c);return c.value;}
         c={expires:Date.now()+60000,value:fetch(publicOnly?manifestUrl:`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');const cat=await r.json() as Catalogue & {cameras?:PublicCamera[]};if(cat.cameras){publicCameras=new Map(cat.cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));visibilityDirty=true;}return cat})};catalogues.set(id,c);
       }return c.value;
     };
@@ -260,6 +269,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     abort.signal.addEventListener('abort',()=>{for(const c of requests.values())c.abort()},{once:true});
     const loadFrames=async(epoch:number,request:AbortController)=>{
       const nextFrames:typeof frames=[];
+      if(browserLayers){const m=await published();sources=m.cameras.filter((c:PublicCamera)=>c.projection).map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}));}
       const queue=sources.filter(s=>s.enabled&&s.calibrated);
       const at=new Date(epoch).toISOString();
       await Promise.all([0,1,2,3].map(async()=>{while(queue.length&&!request.signal.aborted){
@@ -271,9 +281,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           // Retain the latest published frame during live delivery delays.
           // Historical playback still preserves real observation gaps.
           const live=publicOnly&&Math.abs(liveCutoff()-epoch)<120000;
-          if(!frame||(!live&&epoch-Date.parse(frame.at)>600000))continue;
-          let asset:Asset={...cat,texture_url:frame.texture_url};
-          if(frame.width!==cat.width||frame.height!==cat.height){
+          if(!frame||((browserLayers||!live)&&epoch-Date.parse(frame.at)>600000))continue;
+          let asset:Asset={...cat,...frame,texture_url:frame.texture_url} as Asset;
+          if(!browserLayers&&(frame.width!==cat.width||frame.height!==cat.height)){
             const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
             if(r.status===404)continue;if(!r.ok)throw new Error(await r.text());asset=await r.json();
           }
@@ -284,7 +294,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           ]);
           if(request.signal.aborted||abort.signal.aborted)return;
           geometry=geometryCache.get(asset.geometry_url)||geometry;
-          if(!geometry&&bytes){const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);geometry={buffer:b,count:bytes.byteLength/20};geometryCache.set(asset.geometry_url,geometry)}
+          if(!geometry&&bytes){const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);geometry={buffer:b,count:bytes.byteLength/(browserLayers?24:20)};geometryCache.set(asset.geometry_url,geometry)}
           if(!texture&&blob){
             const url=URL.createObjectURL(blob),im=new Image();
             try{await new Promise<void>((resolve,reject)=>{im.onload=()=>resolve();im.onerror=()=>reject(new Error('Texture decode failed'));im.src=url});
@@ -302,7 +312,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           }
           // Never display an image with the preceding frame's camera map.
           if(frame.source_map_url)await loadAttribution(frame.source_map_url);
-          if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s),sourceMapUrl:frame.source_map_url,at:frame.at});
+          const camera=layerManifest?.cameras?.find((c:PublicCamera)=>c.source_id===s.id);
+          const weightScale=browserLayers&&camera&&layerManifest?.stitching?.rules?cameraWeightScale(camera,epoch,layerManifest.stitching.rules):asset.weight_scale;
+          if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s),sourceMapUrl:frame.source_map_url,at:frame.at,sourceId:s.id,weightScale});
         }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
       }}));
       return nextFrames.sort((a,b)=>a.order-b.order);
@@ -330,8 +342,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         if(epoch<Date.now()-240000)for(let i=1;i<=3;i++)void prepare(epoch+i*60000);
         const protectedFrames=[...frames,...[...ready.values()].flat()];
         // Keep a bounded GPU cache; HTTP caching retains older frame assets.
-        for(const [key,t] of textureCache){if(textureCache.size<=(mobilePublic?3:publicOnly?6:96))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
-        for(const [key,g] of geometryCache){if(geometryCache.size<=32)break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
+        for(const [key,t] of textureCache){if(textureCache.size<=(browserLayers?(mobilePublic?160:320):(mobilePublic?3:publicOnly?6:96)))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
+        for(const [key,g] of geometryCache){if(geometryCache.size<=(browserLayers?128:32))break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
         onLoading(false);
       }
     };
@@ -345,7 +357,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const now=performance.now(),dt=Math.min(100,now-lastSmoothTime);lastSmoothTime=now;
     const amount=1-Math.exp(-dt/65),displayTextures=new Map<number,WebGLTexture>();
     for(const [order,s] of smoothStates)if(!frames.some(f=>f.order===order)){for(const t of s.textures)gl.deleteTexture(t);smoothStates.delete(order)}
-    gl.useProgram(smoothProgram);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+    resetAttributes();gl.useProgram(smoothProgram);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
     const a=gl.getAttribLocation(smoothProgram,'position');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
     gl.uniform1i(gl.getUniformLocation(smoothProgram,'previous'),0);gl.uniform1i(gl.getUniformLocation(smoothProgram,'target'),1);
     for(const frame of frames){
@@ -365,7 +377,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       state.initialized=true;state.index=next;displayTextures.set(frame.order,state.textures[next]);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);
-    gl.useProgram(imageProgram);
+    resetAttributes();gl.useProgram(imageProgram);
     gl.uniform2f(gl.getUniformLocation(imageProgram,'resolution'),w,h);
     gl.uniform2f(gl.getUniformLocation(imageProgram,'rotation'),yaw,pitch);
     gl.uniform1f(gl.getUniformLocation(imageProgram,'zoom'),zoom);
@@ -377,8 +389,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const worldAttr=gl.getAttribLocation(imageProgram,'world'),rgbAttr=gl.getAttribLocation(imageProgram,'rgb'),uvAttr=gl.getAttribLocation(imageProgram,'uv');
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),1);gl.uniform1i(gl.getUniformLocation(imageProgram,'frame'),0);gl.activeTexture(gl.TEXTURE0);
     gl.disableVertexAttribArray(rgbAttr);gl.enableVertexAttribArray(worldAttr);gl.enableVertexAttribArray(uvAttr);
-    if(publicOnly){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);}
-    for(const frame of frames){const applyMute=mutedSources.size>0&&attribution?.url===frame.sourceMapUrl;gl.uniform1i(gl.getUniformLocation(imageProgram,'applyMute'),applyMute?1:0);canvas.dataset.muteApplied=String(applyMute);gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(frame.order)||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
+    if(browserLayers){canvas.dataset.composition=compositor.draw(w,h,yaw,pitch,zoom,frames,displayTextures,mutedSources);canvas.dataset.cameraLayers=String(frames.length);canvas.dataset.muteApplied=String(mutedSources.size>0);resetAttributes();gl.useProgram(imageProgram);gl.activeTexture(gl.TEXTURE0);gl.enableVertexAttribArray(worldAttr);}
+    if(publicOnly&&!browserLayers){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);}
+    for(const frame of browserLayers?[]:frames){const applyMute=mutedSources.size>0&&attribution?.url===frame.sourceMapUrl;gl.uniform1i(gl.getUniformLocation(imageProgram,'applyMute'),applyMute?1:0);canvas.dataset.muteApplied=String(applyMute);gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(frame.order)||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
     if(publicOnly)gl.disable(gl.BLEND);
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),0);gl.disableVertexAttribArray(uvAttr);
     for(const layer of layers){
@@ -403,8 +416,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   // straight up, and the planet rotates underneath it as the epoch advances.
   const sunUpOrientation=(sun:number[]):[number,number]=>[Math.atan2(sun[0],sun[2])+Math.PI,sunTilt];
   let lastEpochTime=performance.now();
-  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;const sun=solarDirection(displayEpoch);if(sunLock){const[lockedYaw,lockedPitch]=sunUpOrientation(sun);yaw=lockedYaw;pitch=lockedPitch}gl.uniform2f(rotation,yaw,pitch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
-    if(!count)continue;gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,lineBuffer);
+  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);resetAttributes();gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;const sun=solarDirection(displayEpoch);if(sunLock){const[lockedYaw,lockedPitch]=sunUpOrientation(sun);yaw=lockedYaw;pitch=lockedPitch}gl.uniform2f(rotation,yaw,pitch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
+    if(!count)continue;resetAttributes();gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,lineBuffer);
     gl.enableVertexAttribArray(magneticPosition);gl.vertexAttribPointer(magneticPosition,2,gl.FLOAT,false,0,0);
     gl.uniform2f(gl.getUniformLocation(lineProgram,'resolution'),w,h);
     gl.uniform2f(gl.getUniformLocation(lineProgram,'rotation'),yaw,pitch);
@@ -412,5 +425,5 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     gl.uniform3f(gl.getUniformLocation(lineProgram,'lineColor'),...color);
     gl.drawArrays(gl.LINES,0,count);
   }drawLayers(w,h);measure();animation=requestAnimationFrame(draw)};draw();
-  return()=>{gl.deleteTexture(sourceMapTexture);gl.deleteTexture(visibilityTexture);window.removeEventListener('keydown',muteKey);perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);canvas.removeEventListener('gaia-sunlock',sunLockControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  return()=>{gl.deleteTexture(sourceMapTexture);gl.deleteTexture(visibilityTexture);window.removeEventListener('keydown',muteKey);perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);compositor.dispose();abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);canvas.removeEventListener('gaia-sunlock',sunLockControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

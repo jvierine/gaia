@@ -11,6 +11,7 @@ mod norsk_meteor;
 mod pixel_mask;
 mod projection;
 mod publish;
+mod publish_layers;
 mod quality;
 mod starpass;
 mod starphot;

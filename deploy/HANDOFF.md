@@ -1,5 +1,76 @@
 # GAIA handoff for j and bgu001
 
+## CURRENT CONTRACT: browser composition (2026-09-11)
+
+Verification at approximately 17:09 UTC: both running viewers displayed the
+new camera layers. Public playback advanced with 111-120 display fps and zero
+WebGL errors in this desktop browser (not an iPhone performance claim).
+Compared 5,200,572 vertex weights across 91 matching cached meshes against
+the legacy magnetic cache: ZERO byte differences. The loopback test page
+`node deploy/verify-gpu.cjs` passed six real-GPU cases: weighted overlap, muted
+overlap and weights down to 1e-20, on both half-float and portable paths; zero
+weights excluded and all returned pixels matched within two channel levels.
+Do not expose this numerical test page as part of the public deployment.
+The first rule-preserving anonymous preview was published at 17:07 UTC;
+full-day layer backfill/transfer was still running at this check. Older full
+archive manifests may still be legacy atlases until explicitly converted with
+`deploy/publish-public.sh archive`; do not claim their conversion is complete.
+Five Google-gateway tests passed. Anonymous restricted requests returned 401,
+legacy mixed /gaia/public returned 403, and the open catalogue had zero
+Starvisor cameras. Google login on the public page was also verified as Juha.
+Temporary browser verification tunnels must be closed after testing.
+
+This section supersedes ALL historical atlas/local-disk descriptions below.
+Juha explicitly changed final composition to the BROWSER on BOTH sites.
+`backend/publish_layers.rs` now handles `--publish`: individual masked/cropped
+100km meshes and maximum-256px textures, retaining original lens coordinates.
+It never rasterizes a cross-camera atlas. The legacy atlas function remains
+only as an unused numerical reference; no live publisher calls it.
+`src/camera-compositor.ts` is the one shared WebGL compositor. `M` skips the
+actual camera layer before normalization, exposing overlapping cameras beneath.
+
+ALL old blend rules are retained. Static weights reuse the exact existing
+magnetic-weight-v3 cache bytes (or the same full-IGRF/C-infinity equations).
+GAIA_MAGNETIC_FALLOFF_DEG, GAIA_ZENITH_TAPER_START_DEG/WIDTH_DEG,
+GAIA_MASK_FADE_PX, GAIA_SOLAR_DARK_DEG/LIGHT_DEG/FLOOR are published in the
+manifest. Browser solar weights use the SELECTED composition epoch, not the
+observation time; multiply by 2^quality_exponent and normalize sum(w*RGB)/sum(w).
+Zero horizon weights remain zero; only the mask feather has its old 1e-6 floor.
+There was no active photometric equalization or cloud rejection in the old
+atlas loop, so this change does not pretend those dormant functions were active.
+GPU half-float accumulation uses a cancelling per-pixel scale to avoid tiny
+positive weights underflowing. The portable fallback uses the SAME normalized
+running mean, not strongest-camera colours; RGBA8 rounding is lower precision.
+Raster interpolation is now in the globe view rather than a 4096x2048 atlas,
+so do not promise bit-identical output pixels. Unchanged compositions are cached.
+
+Validate time-dependent parity with `node deploy/verify-composition-rules.cjs`.
+The initial 27-case comparison against Rust had zero scale difference and
+maximum solar elevation difference 1.56e-10 degrees. Existing Rust suite passed
+63 tests (one optional ignored); continue running new tests before release.
+
+Manifest schema `composition: browser-layers-v1`: camera.projection.images
+contains at, geometry_url, texture_url, vertex_count, calibration_id. Meshes
+are little-endian float32 x,y,z,u,v,weight (24 bytes/vertex). Top-level images
+are timeline ticks, NOT finished textures. Honour each frame's own geometry.
+Public anonymous namespace is /gaia/open/, approved Google sessions use
+/gaia/restricted/, and admin uses its own /gaia/public/ without login.
+All juha.no payloads are under /mnt/shovel/gaia/{www,runtime,serving,legacy}.
+Old root checkouts and database folders and the full local serving cache were
+archived and compared before removal. Root had 2.3GB free and /mnt 3.7GB free
+after migration; backups remain recoverable in shovel/gaia/legacy.
+
+Only j's USER gaia-publish.timer/service runs. It prepares up to 16 camera jobs,
+publishes a live preview then a full day for pending calibration revisions.
+Transfers use four disjoint rsync queues and 16-way destination verification.
+Immutable-asset receipts avoid rechecking every historical SMB file each cycle.
+Receipts are under /mnt/data/juha/gaia/publication-receipts; remote receipt-token
+is in each serving audience. After ANY external asset deletion/restore, remove
+that audience's receipt-token so the next transfer fully verifies all assets.
+Do not delete assets by age. New assets are verified before manifest replacement.
+No credentials or the account allowlist belong in Git.
+
+
 ## Calibration backfill and admin mute (2026-09-10)
 
 Calibration uploads now transactionally select the new stationary-camera model
@@ -307,3 +378,69 @@ No access restriction has been deployed by this branding-only change.
 Branding deployment verified in the public live Info panel; admin build is served
 directly on Revontuli. Local browser DNS could not resolve revontuli.uit.no during
 this check. Authentication is still pending, not protected by this deployment.
+
+## CURRENT: Google access, storage and realtime recovery (2026-09-11)
+
+This section supersedes earlier static-only, local-disk and pending-login notes.
+User explicitly chose Google login ONLY on juha.no/gaia, not Revontuli.
+MOMAP now lives at pikos.org/omaps. Its existing Google client still authorizes
+https://juha.no (verified in Google Cloud console); no Google settings changed.
+GAIA reuses that public client ID but has separate random HttpOnly Secure
+SameSite=Lax sessions and single-use Google nonce challenges. No client secret
+is required. Only the three exact emails specified by Juha are allowed; the
+allowlist is outside Git under /mnt/shovel/gaia/runtime/allowlist on juha.no.
+The leading asterisk in the request was formatting, not a wildcard.
+
+backend/public_auth.rs is the small local Rust gateway, on 127.0.0.1:18766.
+It verifies RS256 signatures with rotating Google certificates, audience, issuer,
+expiry, verified email and nonce. POST origin must be exactly https://juha.no.
+Sessions expire after eight hours; restart logs everyone out. It never calls
+Revontuli. Google identity does not grant camera-admin rights.
+Build the gateway for x86_64-unknown-linux-musl on Revontuli using musl-gcc;
+juha.no's older glibc cannot run the normal Revontuli build.
+
+URLs: /gaia/auth/* is local identity; /gaia/restricted/* requires a session
+and allowlist membership on EVERY file request, including history. These
+responses are private,no-store. Legacy /gaia/public/* is denied on juha.no
+to prevent direct-URL bypass. /gaia/open/* is anonymous imagery, generated
+with GAIA_PUBLISH_AUDIENCE=anonymous and Starvisor sources excluded before
+blending, catalogue and lens export. Both render paths use backend/publish.rs.
+Revontuli continues using its original full /gaia/public/ without login.
+Previously downloaded public copies cannot be recalled from other browsers.
+
+All juha.no payloads now target /mnt/shovel/gaia/: www/, runtime/, serving/public/,
+serving/open/, legacy/. Do not use /mnt/gaia-public or /mnt/gaia-open for new data.
+The system gaia-public-auth.service requires the shovel mount and reads its
+allowlist/binary there. Apache active configuration is a REGULAR FILE at
+/etc/apache2/conf-enabled/gaia.conf, not a symlink to conf-available! Update
+the actual enabled file, run apachectl configtest, then reload Apache.
+Tracked template is deploy/apache-public-auth.conf. System gaia.service stays
+disabled (old crawler); the heavy service runs only on Revontuli.
+
+The realtime outage was confirmed in publication logs: rsync receiver failed
+with ENOSPC repeatedly. Last successful public delivery had been 08:54 UTC,
+latest frame 08:52. Old hashed serving files filled the 4-GB local disk.
+The replacement anonymous preview was HTTP/browser verified with a 15:47 UTC
+frame. Migration preserves local snapshots in legacy/ before removal; raw
+archive originals remain on Revontuli. Root checkouts were tar-archived and
+compared before deletion, freeing about 1.1 GB on the system disk.
+
+The existing j USER publish timer is the sole publication automation. Its
+script publishes full assets to serving/public, then runs publish-open.sh for
+anonymous assets. Both transfer assets first, validate refs, and rename manifest
+last. Both use the same publication lock; do not start duplicate publishers.
+GUI releases upload assets to /mnt/shovel/gaia/www, then atomically replace
+index.html. Build admin and public from the same commit.
+
+Auth tests include absent/forged sessions, unapproved accounts, approved test
+sessions, forged Google credentials, exact Origin, and traversal rejection.
+No test-only authentication bypass exists in the deployed server.
+
+Routine publication now renders only the newest 20 minutes for each audience,
+retaining valid earlier frames in the 24-hour manifest. Pending calibration
+revisions still run 20 minutes then the full day, newest-first. Full archive
+is explicit. Rendering audiences sequentially keeps the total cap at 16 cores.
+This replaces the earlier background full-day stage on EVERY normal cycle.
+Google login was verified in the browser as Juha's approved account, including
+visible protected imagery; anonymous direct restricted URLs returned 401 and
+legacy mixed public URLs returned 403. No Google client changes were needed.

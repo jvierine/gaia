@@ -750,7 +750,7 @@ async fn source_stars(
     let mut statement = conn
         .prepare(
             "SELECT star_key,vt_mag,ra_hours_j2000,dec_deg_j2000,predicted_x,predicted_y,
-                    elevation_deg,flux,background,observation_utc
+                    elevation_deg,flux,background,residual_std,flux_snr
              FROM star_photometry
              WHERE source_id=?1 AND channel=?2
                AND julianday(observation_utc) >= julianday('now', ?3)
@@ -771,6 +771,8 @@ async fn source_stars(
                     r.get::<_, f64>(6)?,
                     r.get::<_, Option<f64>>(7)?,
                     r.get::<_, Option<f64>>(8)?,
+                    r.get::<_, Option<f64>>(9)?,
+                    r.get::<_, Option<f64>>(10)?,
                 ))
             },
         )
@@ -787,11 +789,14 @@ async fn source_stars(
         background: Vec<f64>,
         frames: usize,
         found: usize,
+        detected: usize,
+        noise: Vec<f64>,
+        snr: Vec<f64>,
     }
     let mut by_star: std::collections::BTreeMap<String, Aggregate> =
         std::collections::BTreeMap::new();
     for row in rows.filter_map(Result::ok) {
-        let (key, mag, ra, dec, x, y, elevation, flux, background) = row;
+        let (key, mag, ra, dec, x, y, elevation, flux, background, noise, snr) = row;
         let entry = by_star.entry(key).or_default();
         entry.vt_mag = mag;
         entry.ra = ra;
@@ -806,6 +811,16 @@ async fn source_stars(
         }
         if let Some(b) = background {
             entry.background.push(b);
+        }
+        if let Some(n) = noise {
+            entry.noise.push(n);
+        }
+        if let Some(v) = snr {
+            entry.snr.push(v);
+            // A peak comparable to the frame's own scatter is not a detection.
+            if v >= 5.0 {
+                entry.detected += 1;
+            }
         }
     }
     let median = |values: &[f64]| starphot::percentile(values, 0.5);
@@ -825,6 +840,9 @@ async fn source_stars(
                 "median_flux": median(&a.flux),
                 "clear_flux": starphot::percentile(&a.flux, 0.9),
                 "median_background": median(&a.background),
+                "median_noise": median(&a.noise),
+                "median_flux_snr": median(&a.snr),
+                "detected": a.detected,
                 "variation": starphot::brightness_variation(&a.flux),
             })
         })
@@ -847,13 +865,18 @@ async fn source_star_series(
     let conn = db::open(&s.db_path).map_err(internal)?;
     let mut statement = conn
         .prepare(
-            "SELECT observation_utc,flux,background,amplitude,sigma_major,sigma_minor,
-                    angle_deg,centroid_offset_px,elevation_deg,azimuth_deg,
-                    predicted_x,predicted_y,centroid_x,centroid_y,rms_residual
-             FROM star_photometry
-             WHERE source_id=?1 AND star_key=?2 AND channel=?3
-               AND julianday(observation_utc) >= julianday('now', ?4)
-             ORDER BY observation_utc",
+            "SELECT p.observation_utc,p.flux,p.background,p.amplitude,p.sigma_major,p.sigma_minor,
+                    p.angle_deg,p.centroid_offset_px,p.elevation_deg,p.azimuth_deg,
+                    p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,p.rms_residual,
+                    p.residual_std,p.amplitude_snr,p.flux_snr,
+                    p.background_dx,p.background_dy,p.background_dxy,
+                    s.moon_elevation_deg,s.moon_illuminated_fraction,s.moon_sky_brightness,
+                    s.moon_apparent_magnitude,s.sun_elevation_deg
+             FROM star_photometry p
+             LEFT JOIN frame_sky s ON s.source_id=p.source_id AND s.image_id=p.image_id
+             WHERE p.source_id=?1 AND p.star_key=?2 AND p.channel=?3
+               AND julianday(p.observation_utc) >= julianday('now', ?4)
+             ORDER BY p.observation_utc",
         )
         .map_err(internal)?;
     let samples: Vec<Value> = statement
@@ -876,6 +899,17 @@ async fn source_star_series(
                     "centroid_x": r.get::<_,Option<f64>>(12)?,
                     "centroid_y": r.get::<_,Option<f64>>(13)?,
                     "rms_residual": r.get::<_,Option<f64>>(14)?,
+                    "residual_std": r.get::<_,Option<f64>>(15)?,
+                    "amplitude_snr": r.get::<_,Option<f64>>(16)?,
+                    "flux_snr": r.get::<_,Option<f64>>(17)?,
+                    "background_dx": r.get::<_,Option<f64>>(18)?,
+                    "background_dy": r.get::<_,Option<f64>>(19)?,
+                    "background_dxy": r.get::<_,Option<f64>>(20)?,
+                    "moon_elevation_deg": r.get::<_,Option<f64>>(21)?,
+                    "moon_illuminated_fraction": r.get::<_,Option<f64>>(22)?,
+                    "moon_sky_brightness": r.get::<_,Option<f64>>(23)?,
+                    "moon_apparent_magnitude": r.get::<_,Option<f64>>(24)?,
+                    "sun_elevation_deg": r.get::<_,Option<f64>>(25)?,
                 }))
             },
         )

@@ -15,6 +15,16 @@ pub fn open(path: &Path) -> Result<Connection> {
     add_column(&conn, "calibrations", "star_count", "INTEGER")?;
     add_column(&conn, "camera_settings", "selected_calibration_id", "TEXT")?;
     add_column(&conn, "camera_settings", "mask_enabled", "INTEGER NOT NULL DEFAULT 1")?;
+    for column in [
+        "residual_std",
+        "amplitude_snr",
+        "flux_snr",
+        "background_dx",
+        "background_dy",
+        "background_dxy",
+    ] {
+        add_column(&conn, "star_photometry", column, "REAL")?;
+    }
     conn.execute_batch("
 CREATE TABLE IF NOT EXISTS calibration_rebuild (id INTEGER PRIMARY KEY CHECK(id=1), requested INTEGER NOT NULL, completed INTEGER NOT NULL);
 INSERT OR IGNORE INTO calibration_rebuild VALUES(1,1,0);

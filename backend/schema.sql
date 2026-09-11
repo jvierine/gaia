@@ -67,9 +67,30 @@ CREATE TABLE IF NOT EXISTS star_photometry(
   background REAL, amplitude REAL,
   sigma_major REAL, sigma_minor REAL, angle_deg REAL,
   flux REAL, rms_residual REAL,
+  residual_std REAL, amplitude_snr REAL, flux_snr REAL,
+  background_dx REAL, background_dy REAL, background_dxy REAL,
   PRIMARY KEY(source_id,image_id,star_key,channel)
 );
 CREATE INDEX IF NOT EXISTS star_photometry_series
   ON star_photometry(source_id,star_key,channel,observation_utc);
 CREATE INDEX IF NOT EXISTS star_photometry_frame
   ON star_photometry(source_id,observation_utc);
+-- Sky conditions for one frame at one station. The Moon is a property of the
+-- frame rather than of any star, so it is kept once per frame; moonlight raises
+-- the background and its gradient, which is what the star fits have to work
+-- against. The solar elevation is stored beside it because it gates everything.
+CREATE TABLE IF NOT EXISTS frame_sky(
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  image_id TEXT NOT NULL REFERENCES images(id),
+  observation_utc TEXT NOT NULL,
+  sun_elevation_deg REAL NOT NULL,
+  moon_azimuth_deg REAL NOT NULL,
+  moon_elevation_deg REAL NOT NULL,
+  moon_illuminated_fraction REAL NOT NULL,
+  moon_phase_angle_deg REAL NOT NULL,
+  moon_distance_km REAL NOT NULL,
+  moon_apparent_magnitude REAL NOT NULL,
+  moon_sky_brightness REAL NOT NULL,
+  PRIMARY KEY(source_id,image_id)
+);
+CREATE INDEX IF NOT EXISTS frame_sky_series ON frame_sky(source_id,observation_utc);

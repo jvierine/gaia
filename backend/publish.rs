@@ -91,14 +91,24 @@ pub fn run(s: &AppState) -> Result<()> {
     // fade width is expressed in those pixels.
     let mut mask_outlines: BTreeMap<String, ([f64; 4], Vec<Vec<[f64; 2]>>, [f64; 2])> =
         BTreeMap::new();
+    let mut quality_weights: BTreeMap<String, f64> = BTreeMap::new();
     for (id, _, _, _) in &cameras {
-        let (crop_json, mask_json, mask_enabled): (Option<String>, Option<String>, bool) = conn
+        let (crop_json, mask_json, mask_enabled, quality_exponent): (
+            Option<String>,
+            Option<String>,
+            bool,
+            i64,
+        ) = conn
             .query_row(
-                "SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
+                "SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1),COALESCE(c.quality_exponent,0) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
-            .unwrap_or((None, None, true));
+            .unwrap_or((None, None, true, 0));
+        // Operator judgement of image quality, a power of two from 1 down to
+        // 1/256. The cameras in this network differ enormously and no geometric
+        // or photometric factor captures a lens that is simply soft or dirty.
+        quality_weights.insert(id.clone(), 2f64.powi(quality_exponent.clamp(-8, 0) as i32));
         let (raw_w, raw_h): (f64, f64) = conn
             .query_row(
                 "SELECT width,height FROM images WHERE source_id=?1 AND width IS NOT NULL AND height IS NOT NULL ORDER BY observation_utc DESC LIMIT 1",
@@ -279,14 +289,16 @@ pub fn run(s: &AppState) -> Result<()> {
         let texture_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "atlas-v6-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}:{epoch}:{}",
+                "atlas-v7-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}-quality-{}:{epoch}:{}",
+                serde_json::to_string(&quality_weights)?,
                 serde_json::to_string(&inputs)?
             ))
         );
         let source_key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "source-v7-indices-{index_key}-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}:{epoch}:{}",
+                "source-v8-indices-{index_key}-igrf-laplacian-{falloff_deg:.6}-taper-{taper_start_deg:.6}-{taper_width_deg:.6}-maskfade-{mask_fade_px:.6}-sun-{sun_dark_deg:.6}-{sun_light_deg:.6}-{sun_floor:.6}-quality-{}:{epoch}:{}",
+                serde_json::to_string(&quality_weights)?,
                 serde_json::to_string(&inputs)?
             ))
         );
@@ -326,6 +338,8 @@ pub fn run(s: &AppState) -> Result<()> {
                     .collect();
                 let o = geometry::observer_ecef(**lat, **lon, **alt / 1000.);
                 // Whole-image twilight weight from the sun at this station, at this frame.
+                let quality_weight =
+                    quality_weights.get(*id).copied().unwrap_or(1.0) as f32;
                 let sun_weight = geometry::solar_taper(
                     geometry::solar_elevation_deg(**lat, **lon, epoch as f64),
                     sun_dark_deg,
@@ -463,7 +477,8 @@ pub fn run(s: &AppState) -> Result<()> {
                             let weight = (0..3)
                                 .map(|k| q[k] as f32 * magnetic_weights[triangle_index * 3 + k])
                                 .sum::<f32>()
-                                * sun_weight;
+                                * sun_weight
+                                * quality_weight;
                             if weight <= 0. {
                                 continue;
                             }
@@ -546,7 +561,7 @@ pub fn run(s: &AppState) -> Result<()> {
     })?.collect::<Result<Vec<_>,_>>()?;
     let lens_models = publish_lens_models(&conn, &assets)?;
     let lens_model_documentation = json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
-    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d) * solar_taper(sun_elevation)","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"solar_taper":"F + (1-F) * (1 - psi(u)/(psi(u)+psi(1-u))) with u=(elevation-D)/(L-D); whole-image weight from the solar elevation at the camera station","solar_taper_dark_deg":sun_dark_deg,"solar_taper_light_deg":sun_light_deg,"solar_taper_floor":sun_floor,"zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
+    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d) * solar_taper(sun_elevation) * quality_weight","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"solar_taper":"F + (1-F) * (1 - psi(u)/(psi(u)+psi(1-u))) with u=(elevation-D)/(L-D); whole-image weight from the solar elevation at the camera station","solar_taper_dark_deg":sun_dark_deg,"solar_taper_light_deg":sun_light_deg,"solar_taper_floor":sun_floor,"quality_weight":"per-camera operator setting, a power of two from 1 to 1/256, multiplying the weight and not the pixel value","zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
     let manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
     let name=if full_archive { "archive-manifest.json" } else { "manifest.json" };
     atomic(&root.join(name), &serde_json::to_vec(&manifest)?)?;

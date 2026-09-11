@@ -169,3 +169,8 @@
 .star-ramp small{color:var(--muted);font-size:10px}
 .star-hint{display:block;color:var(--muted);font-size:10px;line-height:1.45}
 @media(max-width:900px){.star-panels{grid-template-columns:minmax(0,1fr)}}
+
+.camera-quality{display:flex;align-items:center;gap:.5rem;margin-top:.55rem;font-size:.76rem;letter-spacing:.04em;color:var(--muted)}
+.camera-quality span{text-transform:uppercase}
+.camera-quality select{background:rgba(8,28,40,.75);color:var(--text);border:1px solid rgba(103,200,215,.35);border-radius:6px;padding:.22rem .4rem;font:inherit}
+.camera-quality select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}

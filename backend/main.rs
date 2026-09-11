@@ -135,7 +135,7 @@ async fn credits(State(s): State<AppState>) -> ApiResult<Json<Vec<Value>>> {
 
 async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
-    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled FROM sources s JOIN producers p ON p.id=s.producer_id WHERE NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.name").map_err(internal)?;
+    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled,COALESCE(cs.quality_exponent,0) FROM sources s JOIN producers p ON p.id=s.producer_id LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.name").map_err(internal)?;
     let rows = q
         .query_map([], |r| {
             let last: Option<String> = r.get(4)?;
@@ -154,6 +154,7 @@ async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>
                 longitude_deg: r.get(10)?,
                 calibrated: r.get(11)?,
                 enabled: r.get(12)?,
+                quality_exponent: r.get(13)?,
                 state: state.into(),
                 timestamp_mode: r.get(3)?,
                 last_observation_utc: r.get(6)?,
@@ -165,7 +166,9 @@ async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>
             })
         })
         .map_err(internal)?;
-    Ok(Json(rows.filter_map(Result::ok).collect()))
+    // Propagated, not skipped: a row that fails to map is a bug in this query,
+    // and silently dropping it presents an empty camera registry as success.
+    Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
 }
 
 async fn history(State(s): State<AppState>) -> ApiResult<Json<Vec<String>>> {
@@ -307,6 +310,8 @@ struct CameraSettingsInput {
     mask: Option<Value>,
     /// Omitted leaves the camera's current choice untouched.
     mask_enabled: Option<bool>,
+    /// Quality weight as a power of two, 0 to -8. Omitted leaves it untouched.
+    quality_exponent: Option<i64>,
 }
 async fn get_camera_settings(
     Path(id): Path<String>,
@@ -314,9 +319,9 @@ async fn get_camera_settings(
 ) -> ApiResult<Json<Value>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
     let row = conn.query_row(
-        "SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
+        "SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1),COALESCE(c.quality_exponent,0) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
         [&id],
-        |r| Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,bool>(2)?)),
+        |r| Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,bool>(2)?,r.get::<_,i64>(3)?)),
     ).map_err(|e| if matches!(e,rusqlite::Error::QueryReturnedNoRows) {
         (StatusCode::NOT_FOUND,"camera not found".into())
     } else { internal(e) })?;
@@ -325,7 +330,7 @@ async fn get_camera_settings(
             .unwrap_or(Ok(Value::Null))
     };
     Ok(Json(
-        json!({"crop":parse(row.0)?,"mask":parse(row.1)?,"mask_enabled":row.2}),
+        json!({"crop":parse(row.0)?,"mask":parse(row.1)?,"mask_enabled":row.2,"quality_exponent":row.3}),
     ))
 }
 async fn camera_settings(
@@ -362,7 +367,37 @@ async fn camera_settings(
             )
             .unwrap_or(true),
     };
-    conn.execute("INSERT INTO camera_settings(source_id,updated_utc,crop_json,mask_json,mask_enabled) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,crop_json=excluded.crop_json,mask_json=excluded.mask_json,mask_enabled=excluded.mask_enabled",rusqlite::params![id,Utc::now().to_rfc3339(),input.crop.map(|v|v.to_string()),input.mask.map(|v|v.to_string()),mask_enabled]).map_err(internal)?;
+    // Crop and mask are likewise resolved to the stored values when omitted.
+    // Without this a request that sets only the quality weight would write NULL
+    // over an operator's crop rectangle and obstruction outlines.
+    let stored: (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT crop_json,mask_json FROM camera_settings WHERE source_id=?1",
+            [&id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((None, None));
+    let crop_json = match input.crop {
+        Some(v) => Some(v.to_string()),
+        None => stored.0,
+    };
+    let mask_json = match input.mask {
+        Some(v) => Some(v.to_string()),
+        None => stored.1,
+    };
+    // Clamped to the offered range so a malformed request cannot silently
+    // erase a camera from the mosaic.
+    let quality_exponent = match input.quality_exponent {
+        Some(value) => value.clamp(-8, 0),
+        None => conn
+            .query_row(
+                "SELECT COALESCE(quality_exponent,0) FROM camera_settings WHERE source_id=?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0),
+    };
+    conn.execute("INSERT INTO camera_settings(source_id,updated_utc,crop_json,mask_json,mask_enabled,quality_exponent) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,crop_json=excluded.crop_json,mask_json=excluded.mask_json,mask_enabled=excluded.mask_enabled,quality_exponent=excluded.quality_exponent",rusqlite::params![id,Utc::now().to_rfc3339(),crop_json,mask_json,mask_enabled,quality_exponent]).map_err(internal)?;
     Ok(Json(json!({"state":"saved"})))
 }
 

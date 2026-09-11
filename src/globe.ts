@@ -143,8 +143,8 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
     return publicCameras.get((attribution.data[i]<<16)|(attribution.data[i+1]<<8)|attribution.data[i+2])||null;
   };
   const locationLabel=(camera:PublicCamera)=>camera.latitude_deg==null||camera.longitude_deg==null?'location unavailable':`${Math.abs(camera.latitude_deg).toFixed(2)}°${camera.latitude_deg>=0?'N':'S'}, ${Math.abs(camera.longitude_deg).toFixed(2)}°${camera.longitude_deg>=0?'E':'W'}`;
-  const stationCamera=(clientX:number,clientY:number)=>{
-    const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);let best=8,match:typeof cameraSites[number]|null=null;
+  const stationCamera=(clientX:number,clientY:number,radius=8)=>{
+    const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);let best=radius,match:typeof cameraSites[number]|null=null;
     for(const site of cameraSites){const[x,y,z]=site.world,xx=Math.cos(yaw)*x-Math.sin(yaw)*z,zz=Math.sin(yaw)*x+Math.cos(yaw)*z,yy=Math.cos(pitch)*y+Math.sin(pitch)*zz,depth=-Math.sin(pitch)*y+Math.cos(pitch)*zz;if(depth<0)continue;
       const distance=Math.hypot(clientX-r.left-r.width/2-xx*zoom*side/2,clientY-r.top-r.height/2+yy*zoom*side/2);if(distance<best){best=distance;match=site}
     }return match;
@@ -158,16 +158,18 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   for(const texture of [sourceMapTexture,visibilityTexture]){gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([255,255,255,255]));}
   let visibilityDirty=true,uploadedSourceMap='';
   let muteTarget:{id:string;name:string}|null=null;
-  const muteKey=(e:KeyboardEvent)=>{
-    if(e.key.toLowerCase()!=='m'||e.repeat||e.ctrlKey||e.metaKey||e.altKey||!muteTarget)return;
-    if(e.target instanceof HTMLElement&&(e.target.isContentEditable||e.target.closest('input:not([type=range]),textarea,select')))return;
-    e.preventDefault();const target=muteTarget;
+  const toggleMute=(target:{id:string;name:string})=>{
     if(mutedSources.has(target.id))mutedSources.delete(target.id);else mutedSources.add(target.id);
     visibilityDirty=true;
     try{localStorage.setItem('gaia-muted-cameras',JSON.stringify([...mutedSources]));}catch{}
     canvas.dataset.mutedCameras=JSON.stringify([...mutedSources]);
     tooltip.textContent=tooltip.textContent?.replace(/Press "M" to (show|mute) this camera/, 'Press "M" to '+(mutedSources.has(target.id)?'show':'mute')+' this camera')||'';
-    observationStatus.textContent=`${target.name}: ${mutedSources.has(target.id)?'muted':'shown'} in this browser. Press M to ${mutedSources.has(target.id)?'show':'mute'} again.`;
+    observationStatus.textContent=`${target.name}: ${mutedSources.has(target.id)?'muted':'shown'} in this browser. Hold station or press M to toggle.`;
+  };
+  const muteKey=(e:KeyboardEvent)=>{
+    if(e.key.toLowerCase()!=='m'||e.repeat||e.ctrlKey||e.metaKey||e.altKey||!muteTarget)return;
+    if(e.target instanceof HTMLElement&&(e.target.isContentEditable||e.target.closest('input:not([type=range]),textarea,select')))return;
+    e.preventDefault();toggleMute(muteTarget);
   };
   window.addEventListener('keydown',muteKey);
   const hover=(e:PointerEvent)=>{
@@ -186,14 +188,23 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const sunLockControl=(event:Event)=>{const next=!!(event as CustomEvent<boolean>).detail;if(next===sunLock)return;if(next){manualYaw=yaw;manualPitch=pitch}else{yaw=manualYaw;pitch=manualPitch}sunLock=next};
   canvas.addEventListener('gaia-sunlock',sunLockControl);
   const pointers=new Map<number,[number,number]>();let pinchDistance=0,press:[number,number]|null=null,moved=false;
+  let holdTimer:ReturnType<typeof setTimeout>|undefined;
+  const cancelHold=()=>{if(holdTimer!==undefined)clearTimeout(holdTimer);holdTimer=undefined};
+  const suppressNativeMenu=(e:Event)=>e.preventDefault();
+  canvas.addEventListener('contextmenu',suppressNativeMenu);
+  canvas.addEventListener('selectstart',suppressNativeMenu);
   const distance=()=>{const p=[...pointers.values()];return p.length<2?0:Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1])};
-  const pointerDown=(e:PointerEvent)=>{if(e.pointerType==='mouse'&&e.button!==0)return;e.preventDefault();hideTooltip();pointers.set(e.pointerId,[e.clientX,e.clientY]);dragging=true;last=[e.clientX,e.clientY];press=[e.clientX,e.clientY];moved=false;pinchDistance=distance();canvas.setPointerCapture(e.pointerId)};
+  const pointerDown=(e:PointerEvent)=>{
+    if(e.pointerType==='mouse'&&e.button!==0)return;e.preventDefault();cancelHold();hideTooltip();pointers.set(e.pointerId,[e.clientX,e.clientY]);dragging=true;last=[e.clientX,e.clientY];press=[e.clientX,e.clientY];moved=pointers.size>1;pinchDistance=distance();canvas.setPointerCapture(e.pointerId);
+    const station=e.pointerType==='touch'&&pointers.size===1?stationCamera(e.clientX,e.clientY,14):null;
+    if(station?.source_id){const target={id:station.source_id,name:station.label.split('\n')[0].replace('Camera: ','')};holdTimer=setTimeout(()=>{holdTimer=undefined;if(moved||pointers.size!==1||!pointers.has(e.pointerId))return;moved=true;muteTarget=target;toggleMute(target)},550)}
+  };
   const pointerMove=(e:PointerEvent)=>{
-    if(!pointers.has(e.pointerId))return;e.preventDefault();pointers.set(e.pointerId,[e.clientX,e.clientY]);if(press&&Math.hypot(e.clientX-press[0],e.clientY-press[1])>5)moved=true;
+    if(!pointers.has(e.pointerId))return;e.preventDefault();pointers.set(e.pointerId,[e.clientX,e.clientY]);if(press&&Math.hypot(e.clientX-press[0],e.clientY-press[1])>8){moved=true;cancelHold()}
     if(pointers.size>=2){const d=distance();if(pinchDistance>0&&d>0)zoom=Math.max(.5,Math.min(8,zoom*d/pinchDistance));pinchDistance=d;return}
     if(sunLock){sunTilt=Math.max(-Math.PI+.08,Math.min(-.08,sunTilt-(e.clientY-last[1])*.006));}else{yaw-=(e.clientX-last[0])*.006;pitch=Math.max(-1.35,Math.min(1.35,pitch-(e.clientY-last[1])*.006));}last=[e.clientX,e.clientY];
   };
-  const pointerUp=(e:PointerEvent)=>{const station=!moved&&pointers.size===1&&publicOnly?stationCamera(e.clientX,e.clientY):null,projected=!station&&!moved&&pointers.size===1&&publicOnly?projectedCamera(e.clientX,e.clientY):null,open=station?.url||projected?.website_url;pointers.delete(e.pointerId);pinchDistance=distance();dragging=pointers.size>0;if(dragging)last=[...pointers.values()][0];else press=null;if(!moved&&!dragging)hover(e);if(open)window.open(open,'_blank','noopener,noreferrer')}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
+  const pointerUp=(e:PointerEvent)=>{cancelHold();if(!pointers.has(e.pointerId))return;const tap=e.type==='pointerup'&&!moved&&pointers.size===1&&publicOnly;const station=tap?stationCamera(e.clientX,e.clientY):null,projected=!station&&tap?projectedCamera(e.clientX,e.clientY):null,open=station?.url||projected?.website_url;pointers.delete(e.pointerId);pinchDistance=distance();dragging=pointers.size>0;if(dragging)last=[...pointers.values()][0];else press=null;if(tap&&!dragging)hover(e);if(open)window.open(open,'_blank','noopener,noreferrer')}; const wheel=(e:WheelEvent)=>{e.preventDefault();zoom=Math.max(.5,Math.min(8,zoom*Math.exp(-e.deltaY*.001)))};
   canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('wheel',wheel,{passive:false});
   canvas.addEventListener('pointercancel',pointerUp);canvas.addEventListener('lostpointercapture',pointerUp);
   const boundaryBuffer=gl.createBuffer();let boundaryVertices=0;
@@ -432,5 +443,5 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     gl.uniform3f(gl.getUniformLocation(lineProgram,'lineColor'),...color);
     gl.drawArrays(gl.LINES,0,count);
   }drawLayers(w,h);measure();animation=requestAnimationFrame(draw)};draw();
-  return()=>{gl.deleteTexture(sourceMapTexture);gl.deleteTexture(visibilityTexture);window.removeEventListener('keydown',muteKey);perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);compositor.dispose();abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);canvas.removeEventListener('gaia-sunlock',sunLockControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
+  return()=>{cancelHold();canvas.removeEventListener('contextmenu',suppressNativeMenu);canvas.removeEventListener('selectstart',suppressNativeMenu);gl.deleteTexture(sourceMapTexture);gl.deleteTexture(visibilityTexture);window.removeEventListener('keydown',muteKey);perf?.remove();clearSmooth();gl.deleteFramebuffer(smoothFramebuffer);gl.deleteProgram(smoothProgram);tooltip.remove();canvas.removeEventListener('pointermove',hover);canvas.removeEventListener('pointerleave',hideTooltip);compositor.dispose();abort.abort();frameAbort.abort();clearInterval(frameTimer);canvas.removeEventListener('gaia-zoom',zoomControl);canvas.removeEventListener('gaia-sunlock',sunLockControl);for(const layer of layers)gl.deleteBuffer(layer.buffer);for(const g of geometryCache.values())gl.deleteBuffer(g.buffer);for(const t of textureCache.values())gl.deleteTexture(t);cancelAnimationFrame(animation);canvas.removeEventListener('pointerdown',pointerDown);canvas.removeEventListener('pointermove',pointerMove);canvas.removeEventListener('pointerup',pointerUp);canvas.removeEventListener('pointercancel',pointerUp);canvas.removeEventListener('lostpointercapture',pointerUp);canvas.removeEventListener('wheel',wheel)};
 }

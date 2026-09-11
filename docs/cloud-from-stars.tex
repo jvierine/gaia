@@ -18,7 +18,7 @@
 \title{\bfseries Cloud coverage from stellar intensity time series\\[2mm]
 \large Status of the GAIA implementation, and what remains}
 \author{Memo --- GAIA Data Center}
-\date{10 September 2026}
+\date{11 September 2026 \\ \small(revised; first issued 10 September 2026)}
 
 \begin{document}
 \maketitle
@@ -30,8 +30,13 @@ optical depth along that line of sight. This memo records what is implemented
 and verified in GAIA, what is stored, and what remains. The estimation chain is
 complete and pinned against the AIDA reference implementations to
 \SI{1e-6}{\degree} in the ephemeris and \SI{1e-6}{px} in the projection, for all
-six lens models in live use. Storage and both diagnostic plots exist. Three
-things do not: nothing yet writes measurements, the cloud weight is not applied
+six lens models in live use. Since the first issue the photometric model has
+been strengthened where it was weakest: the sky under a star is now a bilinear
+plane rather than a constant, every measurement carries the scatter of its own
+fit residuals so a star can be tested against the frame's own noise instead of
+being trusted blindly, and the solar and lunar state at the station is computed
+and stored per frame. Storage and both diagnostic plots exist. Three things
+still do not: nothing yet writes measurements, the cloud weight is not applied
 to the composite, and the Voronoi cloud-cover output is not built. One
 methodological issue is unresolved and is the main risk to the numbers:
 atmospheric extinction varies with elevation, and a star's clear-sky reference
@@ -39,7 +44,35 @@ taken over a whole night mixes elevations, which alone can imitate an optical
 depth of \num{0.35}.
 \end{abstract}
 
+\section{What changed since the first issue}
+
+Four things, all in the estimation and storage layers; the outstanding items in
+Sec.~\ref{sec:remains} are unchanged in substance.
+
+\begin{enumerate}
+  \item \textbf{Bilinear background.} The fit went from 7 to 10 parameters. The
+    sky under a star is now $b_0+b_xX+b_yY+b_{xy}XY$ about the patch centre,
+    which was the cheap improvement flagged as an open issue in the first issue
+    and is now closed.
+  \item \textbf{Detectability.} Each fit reports the standard deviation of its
+    own residuals and two signal-to-noise ratios built from it, so a peak that
+    is merely noise can be refused rather than fed to the cloud estimate as a
+    clear sky.
+  \item \textbf{Lunar and solar state per frame.} A lunar ephemeris and a
+    \texttt{frame\_sky} table record where the Moon and Sun were, how bright the
+    Moon was, and a geometric moonlight proxy, for every measured frame.
+  \item \textbf{The composite weight chain gained a manual per-camera quality
+    factor}, a power of two from 1 to $1/256$ set by the operator. It is
+    unrelated to cloud, but it settles the question of how an extra per-camera
+    factor enters the sum, and the cloud weight will enter the same way.
+\end{enumerate}
+
 \section{The measurement chain}
+
+Each stage below is a separate, testable step: a catalogue position becomes a
+sky position, a sky position becomes a pixel through that camera's own lens
+model, a pixel patch becomes a flux, and a series of fluxes becomes an optical
+depth. The first four are built; the last is not.
 
 \begin{figure}[h]
 \centering
@@ -51,12 +84,14 @@ depth of \num{0.35}.
  \node[d] (cat) {catalogue\\ \textbf{512 stars}\\ $V_T<4$};
  \node[d,right=of cat] (eph) {ephemeris\\ precess +\\ az/el};
  \node[d,right=of eph] (proj) {lens model\\ az/el $\to$\\ pixel};
- \node[d,right=of proj] (fit) {rotated 2-D\\ Gaussian\\ per channel};
+ \node[d,right=of proj] (fit) {rotated 2-D\\ Gaussian +\\ bilinear sky\\ per channel};
  \node[d,right=of fit] (store) {store row\\ per star,\\ frame, channel};
+ \node[d,above=6mm of store] (sky) {sky state\\ Sun + Moon\\ per frame};
  \node[t,right=of store] (tau) {$\tau$ from\\ own $p_{90}$};
  \node[t,right=of tau] (out) {weight +\\ Voronoi\\ map};
  \draw[a] (cat)--(eph); \draw[a] (eph)--(proj); \draw[a] (proj)--(fit);
  \draw[a] (fit)--(store); \draw[a] (store)--(tau); \draw[a] (tau)--(out);
+ \draw[a] (sky)--(store);
  \node[below=5mm of proj,font=\scriptsize,soft,text width=42mm,align=center]
    {verified against AIDA to \SI{1e-6}{\degree} and \SI{1e-6}{px}};
  \node[below=5mm of tau,font=\scriptsize,todo,text width=40mm,align=center]
@@ -64,14 +99,16 @@ depth of \num{0.35}.
 \end{tikzpicture}
 \caption{Green stages are implemented and tested; orange stages are not built.
 The chain runs entirely from the camera's own calibration, so it needs no
-additional instrumentation.}
+additional instrumentation. The break is at the same place as in the first
+issue: everything up to and including storage exists, everything that turns a
+stored flux into a cloud number does not.}
 \label{fig:chain}
 \end{figure}
 
 \section{What is implemented and verified}
 
 All of the following lives in \texttt{backend/starphot.rs} and is covered by the
-Rust test suite (53 tests at the time of writing).
+Rust test suite (58 tests at the time of writing, 24 of them in this module).
 
 \paragraph{Catalogue.} The AIDA \texttt{WISCAT1} payload is read directly:
 \num{42072} stars, of which \textbf{512} are brighter than $V_T=4$, the
@@ -91,13 +128,46 @@ The camera rotation is built as the explicit $R_y(\alpha)R_x(\beta)R_z(\gamma)$
 product used by the reference; a hand-expanded version was wrong and the golden
 tests caught it.
 
-\paragraph{Photometry.} A rotated elliptical Gaussian over seven parameters
-(Fig.~\ref{fig:gauss}), fitted by Levenberg--Marquardt with an analytic
-Jacobian, started from intensity-weighted second moments. The angle derivative
-is $\propto(\sigma_1/\sigma_2-\sigma_2/\sigma_1)$ and therefore vanishes for a
-round star, so the damping is written to keep that case solvable rather than
-singular. Results are returned in one canonical form, major axis first with the
-angle wrapped to $[-90,90)$.
+\paragraph{Photometry.} A rotated elliptical Gaussian on a bilinear sky, ten
+parameters in all (Fig.~\ref{fig:gauss}), fitted by Levenberg--Marquardt with an
+analytic Jacobian, started from intensity-weighted second moments. The angle
+derivative is $\propto(\sigma_1/\sigma_2-\sigma_2/\sigma_1)$ and therefore
+vanishes for a round star, so the damping is written to keep that case solvable
+rather than singular. Results are returned in one canonical form, major axis
+first with the angle wrapped to $[-90,90)$.
+
+\paragraph{The sky under the star.} The background is now a plane with a
+cross term, about the patch centre,
+\begin{equation}
+  B(X,Y) \;=\; b_0 + b_xX + b_yY + b_{xy}XY ,
+\end{equation}
+rather than a constant. Moonlight, twilight and an auroral arc all slope across
+a patch, and a constant background forced to cover a gradient pushes the
+difference into the amplitude, which is exactly the quantity being measured.
+The tests plant gradients up to \num{2.4} counts per pixel and recover $b_x$ and
+$b_y$ to \num{0.05} and the flux to \SI{2}{\percent}, with the amplitude
+undisturbed. The reported \texttt{background} is the plane evaluated at the
+fitted centroid, i.e.\ the sky actually under the star, while the four
+coefficients are kept so the gradient itself can be examined later.
+
+\paragraph{Detectability.} A fit always returns something; whether it is a star
+is a separate question, and the answer has to come from the frame itself. Each
+fit therefore reports $\sigma_r$, the standard deviation of its own residuals,
+and two ratios against it,
+\begin{equation}
+  \mathrm{SNR}_A = \frac{A}{\sigma_r},
+  \qquad
+  \mathrm{SNR}_F = \frac{F}{\sigma_r\sqrt{4\pi\sigma_1\sigma_2}} ,
+  \label{eq:snr}
+\end{equation}
+the denominator of the second being the noise integrated over the effective
+area of the profile, which is the meaningful uncertainty on a photometric
+point. \texttt{detectable(min\_snr)} requires both. This matters for cloud more
+than for astrometry: under thick cloud a star does not vanish cleanly, it sinks
+into the noise, and a fit to noise returns a small positive flux that
+Eq.~\eqref{eq:tau} would read as \emph{thin} cloud. Refusing those samples is
+the difference between an overcast sky reading as overcast and reading as
+hazy.
 
 Total intensity above background is the analytic integral
 \begin{equation}
@@ -123,6 +193,12 @@ Same, versus observed positions & the file's own residuals & \num{0.7411} vs \nu
 Gaussian flux, noiseless & analytic $2\pi A\sigma_1\sigma_2$ & \SI{2}{\percent} \\
 Gaussian flux, with noise & analytic & \SI{6}{\percent} \\
 Position angle, $-70$ to $+80$\si{\degree} & planted truth & \SI{1}{\degree}, \SI{0.05}{px} \\
+Background gradient, 4 cases & planted plane & \num{0.05} counts/px \\
+Flux under a gradient & analytic & \SI{2}{\percent} \\
+Residual scatter $\sigma_r$ & injected uniform noise & \SI{30}{\percent} \\
+Lunar perigee, apogee over 400 d & \num{356400}--\SI{406700}{\kilo\meter} & bracketed \\
+Lunar ecliptic latitude & orbital inclination \SI{5.3}{\degree} & $<\SI{5.6}{\degree}$ \\
+Synodic month, Sun--Moon beat & \SI{29.53}{d} & \SI{0.4}{d} \\
 \bottomrule
 \end{tabular}
 \caption{Verification of the estimation chain. The fourth row is the strongest:
@@ -148,14 +224,20 @@ that file's published residuals, confirming the \texttt{col}$\leftrightarrow x$,
   \node[font=\small] at (1.62,0.32) {$\theta$};
   \fill (0,0) circle (1.6pt) node[below left,font=\small] {$(c_x,c_y)$};
   \node[font=\small,align=left,anchor=north west] at (3.7,2.0)
-    {7 parameters:\\ background $B$\\ amplitude $A$\\ centroid $c_x,c_y$\\ widths $\sigma_1\ge\sigma_2$\\ angle $\theta$};
-  \node[font=\small,align=left,anchor=south west] at (3.7,-2.0)
-    {$F=2\pi A\sigma_1\sigma_2$\\ invariant under $\theta$};
+    {10 parameters:\\ sky plane $b_0,b_x,b_y,b_{xy}$\\ amplitude $A$\\ centroid $c_x,c_y$\\ widths $\sigma_1\ge\sigma_2$\\ angle $\theta$};
+  \node[font=\small,align=left,anchor=south west] at (3.7,-2.6)
+    {$F=2\pi A\sigma_1\sigma_2$\\ invariant under $\theta$\\[1mm]
+     judged against $\sigma_r$,\\ the residual scatter};
+  \draw[todo,thin,dashed] (-3.1,-2.0) -- (3.1,-0.8);
+  \node[font=\scriptsize,todo,anchor=north] at (0,-2.05) {sloping sky $b_0+b_xX+b_yY+b_{xy}XY$};
+  \path (-3.2,-2.9) rectangle (7.6,2.2);
 \end{tikzpicture}
 \caption{The fitted star image. Rotation is needed because trailing during the
 exposure, off-axis coma and astigmatism, and anisotropic binning all produce
 elongated images. The reported angle is meaningless for a round star, which is
-why \texttt{elongation()} is reported alongside it.}
+why \texttt{elongation()} is reported alongside it. The dashed line indicates
+the sloping sky the star now sits on: a moonlit or auroral patch is not flat,
+and a constant background would move that slope into $A$.}
 \label{fig:gauss}
 \end{figure}
 
@@ -190,6 +272,27 @@ optmod-4 calibration has six such directions inside its frame.
 \label{tab:models}
 \end{table}
 
+\paragraph{The Moon.} A truncated Schlyter-style lunar series gives geocentric
+right ascension, declination and distance, which the same ephemeris code turns
+into azimuth and elevation at the station. From the elongation follow the phase
+angle, the illuminated fraction, and an apparent magnitude by Allen's phase law
+with the inverse-square distance term,
+\begin{equation}
+  m \;=\; -12.73 + 0.026\,|\alpha| + 4\times10^{-9}\,\alpha^4
+          + 5\log_{10}\!\frac{d}{\SI{384400}{\kilo\meter}} ,
+\end{equation}
+$\alpha$ in degrees. A geometric proxy for how much moonlight reaches this
+station's sky, the illuminated fraction times $\sin(\text{elevation})$ and zero
+while the Moon is down, is stored alongside. No ephemeris library is available
+here, so the series is checked against properties of the real orbit rather than
+golden values: distance brackets perigee and apogee, ecliptic latitude stays
+inside the orbital inclination, and the illuminated fraction beats against the
+independently implemented solar longitude at \SI{29.53}{d}. That last test is
+the strong one, because the synodic month only comes out right if both bodies
+are right. It is worth saying plainly what this is for: moonlight raises the
+background and its gradient, and a bright Moon low in the sky is one of the few
+things that can imitate cloud in a stellar photometry series.
+
 \section{What the AIDA calibrations do and do not provide}
 
 The calibration HDF5 files contain \texttt{/selected\_stars}, whose columns are
@@ -214,8 +317,18 @@ colour channel, indexed so one star's series is a single index scan. It retains
 the sky position (azimuth and elevation at the observation time, plus the J2000
 position identifying the star), the image position twice over (predicted by the
 lens model and found by the fit, with their separation), and every fitted
-parameter including the background, both widths, the angle, the amplitude, the
-flux and the residual.
+parameter including the background under the star, its three gradient
+coefficients, both widths, the angle, the amplitude, the flux, the residual
+scatter $\sigma_r$ and the two signal-to-noise ratios of
+Eq.~\eqref{eq:snr}. A later re-measurement of the same star in the same frame
+replaces the row rather than duplicating it.
+
+A second table, \texttt{frame\_sky}, holds one row per camera and frame: the
+solar elevation at the station and the full lunar state, azimuth, elevation,
+illuminated fraction, phase angle, distance, apparent magnitude and the
+moonlight proxy. It is keyed and indexed for the same kind of series scan, so a
+brightness series can be read against the Moon that was up at the time without
+recomputing any ephemeris.
 
 Two choices are deliberate. \texttt{star\_key} is derived from the J2000
 position, because the catalogue carries no identifier. And a star that is
@@ -325,10 +438,19 @@ but the derived optical depths should not be treated as calibrated.
   \item \textbf{Saturation.} Bright stars clip, which truncates the Gaussian and
     biases both amplitude and width, always toward underestimating the flux.
     Clipped patches should be rejected, not fitted.
-  \item \textbf{Moon and twilight} raise the background and its gradient. The
-    fit has a flat background term only; a strong gradient across the patch will
-    leak into the amplitude. A linear background term would be a cheap
-    improvement.
+  \item \textbf{Moonlight is measured but not corrected for.} The gradient it
+    puts across a patch is now part of the fit, and its brightness is recorded
+    per frame, but nothing yet uses that record. A bright Moon raises the sky
+    and therefore the photon noise, so $\sigma_r$ grows and marginal stars stop
+    being detectable --- which is correct behaviour --- but the clear-sky
+    reference itself is still built without regard to how much moonlight each
+    sample had. The stored \texttt{moon\_sky\_brightness} is a geometric proxy,
+    not a scattering model; if moonlight turns out to bias the reference, it is
+    the covariate to regress against first.
+  \item \textbf{Detectability is computed but not yet enforced.}
+    \texttt{detectable()} exists and is tested; \texttt{optical\_depth} does not
+    consult it. The gate belongs at the point where a flux becomes a $\tau$, and
+    until it is there an overcast frame can still read as thin cloud.
   \item \textbf{Rectilinear cameras} see under a third of the sky, so they will
     have far fewer stars and correspondingly sparse Voronoi cells.
   \item \textbf{Cell geometry.} The Voronoi tessellation is specified over star
@@ -342,36 +464,50 @@ but the derived optical depths should not be treated as calibrated.
 \end{itemize}
 
 \section{What remains to be built}
+\label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{A writer.} \texttt{measure\_frame} and \texttt{record\_frame}
-    are implemented and tested but nothing calls them, so the table is empty and
-    the panel shows no data. The pass must decode full-resolution originals,
-    because the \SI{256}{px} globe textures destroy stars, so it belongs in a
-    throttled background job rather than on a request path.
+  \item \textbf{A writer.} This is still the blocking item, and everything below
+    it is idle until it exists. \texttt{measure\_frame},
+    \texttt{record\_frame} and \texttt{record\_sky} are implemented and tested
+    but nothing calls them, so both tables are empty and the panel shows no
+    data. The pass must decode full-resolution originals, because the
+    \SI{256}{px} globe textures destroy stars, so it belongs in a throttled
+    background job rather than on a request path.
   \item \textbf{The clear-sky reference}, per Sec.~\ref{sec:airmass}.
+  \item \textbf{Gate $\tau$ on detectability}, so a fit that is indistinguishable
+    from noise is treated as an absent star rather than a faint one.
   \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:
     $w=\text{floor}+(1-\text{floor})e^{-\tau}$, strictly positive so a single
     contributing camera normalises back to full strength and no hole is punched.
     It is not yet a factor in \texttt{publish.rs}. It multiplies the weight, not
-    the pixel value, unlike the intensity equalization gains.
+    the pixel value, unlike the intensity equalization gains. The composite
+    weight is now a product of five factors --- magnetic axis, zenith taper,
+    mask-edge fade, solar taper and the operator's per-camera quality setting
+    $2^{n}$ --- so the cloud term is a sixth factor of the same kind, and the
+    cache keys must take it the way they now take the quality weights.
+  \item \textbf{Surface the noise in the panel.} $\sigma_r$ and the
+    signal-to-noise ratios are stored and served by the API but not drawn; a
+    brightness series without its noise band cannot be read honestly.
   \item \textbf{Voronoi cloud-cover output}: tessellate with star positions as
     centres, assign each cell its star's optical depth, and feather the cell
     edges with the same $\psi$-based smooth step at \SI{10}{\percent} of cell
     width, then publish the map as a separate image and expose it as an option
     in the browse-history panel.
-  \item \textbf{A server restart} for the two new endpoints, which are live in
-    the code but not in the running process.
+  \item \textbf{A server restart.} The star endpoints, and now the camera
+    settings changes that carry the quality weight, are live in the code but not
+    in the running process.
 \end{enumerate}
 
 \section{Where the code is}
 
 \begin{itemize}
   \item \texttt{backend/starphot.rs} --- catalogue, ephemeris, forward
-    projection, field test, Gaussian fit, percentile, optical depth, cloud
+    projection, field test, Gaussian fit on a bilinear sky, residual scatter and
+    detectability, lunar ephemeris and state, percentile, optical depth, cloud
     weight, storage, variation metric.
-  \item \texttt{backend/schema.sql} --- the \texttt{star\_photometry} table and
-    its indices.
+  \item \texttt{backend/schema.sql} --- the \texttt{star\_photometry} and
+    \texttt{frame\_sky} tables and their indices.
   \item \texttt{backend/main.rs} --- \texttt{GET /api/sources/\{id\}/stars} and
     \texttt{.../stars/series}.
   \item \texttt{app/page.tsx}, \texttt{app/globals.css} --- the Star photometry

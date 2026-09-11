@@ -282,3 +282,28 @@ override the defaults, not to run.
 
 `db::open` now sets a 30 second busy timeout, which affects every process that
 opens the database, the publisher included.
+
+## Independent branding and requested Starvisor access policy (2026-09-11)
+
+Removed GAIA's UiT affiliation and logo from the public and admin About views.
+Retain accurate producer institutions, acknowledgements, and copyrights.
+
+Google login and Starvisor access control are REQUESTED, NOT YET IMPLEMENTED.
+Use exactly the three Google emails in Juha's request, in a server-side
+allowlist outside publicly served assets. The leading asterisk was formatting,
+not a wildcard. Do not publish personal account lists in the public repository.
+
+Required security boundary: re-render anonymous composites with Starvisor
+excluded before blending; protect the full composites, manifests, historical
+assets and direct asset URLs server-side. A dominant-source mask cannot remove
+all blended contributions. Keep the same Rust stitcher and shared WebGL view.
+Google sign-in can use a lightweight local Rust service on juha.no; never proxy
+to Revontuli. Proposed OAuth callback: https://juha.no/gaia/auth/callback.
+Client credentials are not yet supplied; keep any future secret outside Git.
+The serving-cache disk /mnt/gaia-public was full on inspection. Resolve capacity
+or implement reference-aware cache retention before publishing two audiences.
+No access restriction has been deployed by this branding-only change.
+
+Branding deployment verified in the public live Info panel; admin build is served
+directly on Revontuli. Local browser DNS could not resolve revontuli.uit.no during
+this check. Authentication is still pending, not protected by this deployment.

@@ -1,4 +1,4 @@
-import GoogleAccess from './GoogleAccess';
+import GoogleAccess,{AccountInfo} from './GoogleAccess';
 import {liveCutoff,readyFrames,LIVE_DELAY_MINUTES} from './live-time';
 import React,{useEffect,useRef,useState} from 'react';
 import './public-viewer.css';
@@ -6,11 +6,8 @@ import GaiaLogo from './GaiaLogo';
 import GaiaGlobeView from './GaiaGlobeView';
 import {manifestUrl,archiveMode} from './public-manifest';
 
-type LensModel={calibration_id:string;created_utc:string;valid_from_utc?:string|null;valid_to_utc?:string|null;method:string;residual_px?:number|null;format:string;sha256:string;url:string};
-type CameraLens={source_id:string;name:string;producer:string;latitude_deg?:number|null;longitude_deg?:number|null;models:LensModel[]};
 type Camera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;acknowledgement:string;copyright:string;calibrated:boolean;map_index:number|null};
-type Manifest={generated_utc:string;images:{at:string}[];cameras?:Camera[];lens_models?:CameraLens[]};
-const date=(value?:string|null)=>value?new Date(value).toISOString().slice(0,10):'open';
+type Manifest={generated_utc:string;images:{at:string}[];cameras?:Camera[]};
 const location=(camera:Camera)=>camera.latitude_deg==null||camera.longitude_deg==null?'Location unavailable':`${Math.abs(camera.latitude_deg).toFixed(3)}°${camera.latitude_deg>=0?'N':'S'}, ${Math.abs(camera.longitude_deg).toFixed(3)}°${camera.longitude_deg>=0?'E':'W'}`;
 
 export default function PublicViewer(){return <GoogleAccess><PublicContent/></GoogleAccess>}
@@ -30,10 +27,7 @@ function PublicContent(){
       <p>Hover over a projected image to see its institution and station location. Click or tap it to open the originating provider. Gold dots mark contributing camera stations.</p>
       <p>GAIA was inspired in part by the <a href="https://data.phys.ucalgary.ca/" target="_blank" rel="noreferrer">University of Calgary THEMIS All-Sky Imager array</a>, whose continent-scale observations have been enormously influential in auroral research. GAIA is an independent project.</p>
       <p>Drag to rotate the globe. Scroll or pinch to zoom. Press Play to explore recent auroral activity, or Latest to see the newest ready images. Live viewing uses a {LIVE_DELAY_MINUTES}-minute delay to allow cameras to arrive and processing to finish. Tick <strong>Sun up</strong> to hold the sun upwards while Earth rotates. Drag vertically to adjust the viewing tilt.</p>
-      <h2>Camera lens models</h2>
-      <p>Downloadable calibrations are the exact AIDA/WISC HDF5 files used to place camera pixels on the globe. Azimuth is degrees clockwise from geographic north; elevation is degrees above the horizon. Image coordinates are zero-based raw pixel centres.</p>
-      <p>In Python, read <code>/wisc_optpar_with_optmod</code> and the root <code>image_width</code> and <code>image_height</code> attributes with <code>h5py</code>, then pass them with <code>(x, y)</code> to <a href="https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py" target="_blank" rel="noreferrer"><code>pixel_to_az_el</code></a>. For dated images, select the model whose half-open validity interval contains the observation time. Verify the downloaded file against its SHA-256 value.</p>
-      {manifest?.lens_models?.map(camera=><details className="lens-camera" key={camera.source_id}><summary>{camera.name} <span>{camera.models.length} model{camera.models.length===1?'':'s'}</span></summary><p>{camera.producer}{camera.latitude_deg!=null&&camera.longitude_deg!=null?` · ${camera.latitude_deg.toFixed(3)}°, ${camera.longitude_deg.toFixed(3)}°`:''}</p><ul>{camera.models.map(model=><li key={model.calibration_id}><a href={model.url} download>{date(model.valid_from_utc)}–{date(model.valid_to_utc)} · Download HDF5</a>{model.residual_px!=null?` · ${model.residual_px.toFixed(3)} px RMS`:''}<br/><code>SHA-256 {model.sha256}</code></li>)}</ul></details>)}
+      <AccountInfo/>
       <h2>GAIA aggregation and projection service</h2>
       <p>GAIA is an independent image aggregation and geographic projection service developed by Juha Vierinen and Björn Gustavsson. Contributing camera networks remain independently operated, and their images remain the copyright of their respective producers.</p>
       <h2>Camera providers &amp; credits</h2>

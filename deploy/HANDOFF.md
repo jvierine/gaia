@@ -1,5 +1,31 @@
 # GAIA handoff for j and bgu001
 
+## Public credits and account controls (2026-09-11, latest)
+
+For bgu001: About no longer displays lens-model downloads or calibration
+implementation instructions; preserve camera/provider links and institutional
+acknowledgements. Admin calibration tools are unchanged. Signed-in account
+details and Sign out live inside Info, never over the phone globe.
+
+Anonymous manifests MUST retain Starvisor station metadata, coordinates,
+provider links and credits. `imagery_restricted: true` identifies those sources.
+They MUST NOT have a `projection` in the anonymous manifest, including retained
+history. Their lens assets remain excluded. The publisher skips those sources
+before image preparation/history merging; transfer validation rejects restricted
+projections and lens assets, not public metadata. This supersedes older notes
+below saying the anonymous catalogue contains zero Starvisor cameras.
+Google authorization remains server-enforced on juha.no only, with the existing
+allowlist. Revontuli remains without login. Do not loosen protected asset routes.
+
+Verified rollout: 39 anonymous Starvisor station records, all with coordinates,
+zero restricted projections and zero restricted lens models; unauthenticated
+restricted manifest returns 401. Five Rust gateway tests and three publication
+boundary checks passed. Phone-sized 390x844 browser check confirms Sign out
+inside Info and no account banner over the signed-in globe. Both live viewers
+render camera layers. Metadata-only rollout helper `refresh-public-stations.cjs`
+can add public station records to an already verified open manifest without
+copying imagery; normal subsequent publication maintains the same rule.
+
 ## CURRENT CONTRACT: browser composition (2026-09-11)
 
 Verification at approximately 17:09 UTC: both running viewers displayed the

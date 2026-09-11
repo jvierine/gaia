@@ -33,8 +33,8 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
   const zoom=(detail:'in'|'out'|'reset')=>canvas.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail}));
   if(zoomRef)zoomRef.current=zoom;
   return <div className={className}>
-    <canvas ref={canvas} className="gaia-globe-canvas" aria-label="Interactive WebGL Earth with auroral image coverage"/>
-    <div className="gaia-globe-hint">Drag to rotate · Scroll or pinch to zoom · Hover or tap a camera · Press M to mute/show</div>
+    <canvas ref={canvas} className="gaia-globe-canvas" style={{WebkitTouchCallout:'none',WebkitUserSelect:'none',userSelect:'none',touchAction:'none'}} aria-label="Interactive WebGL Earth with auroral image coverage"/>
+    <div className="gaia-globe-hint" style={{WebkitTouchCallout:'none',WebkitUserSelect:'none',userSelect:'none'}}>Drag to rotate · Pinch to zoom · Hold a station or press M to mute/show</div>
     {showTools&&<div className="gaia-globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in" onClick={()=>zoom('in')}>+</button><button type="button" aria-label="Zoom out" onClick={()=>zoom('out')}>−</button><button type="button" aria-label="Reset globe" onClick={()=>zoom('reset')}>◎</button></div>}
     {children}
   </div>;

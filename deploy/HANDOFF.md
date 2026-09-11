@@ -1,5 +1,15 @@
 # GAIA handoff for j and bgu001
 
+## Touch station mute (2026-09-11)
+
+Both viewers share a 550 ms single-finger station hold to toggle browser-only
+mute, using the same function/storage as M. Touch station hit radius is 14 CSS
+pixels; station rendering size is unchanged. Movement beyond 8 pixels, a second
+finger, pointer cancellation, or release cancels the hold. A successful hold
+does not open the provider link on release. Normal taps still open providers;
+pinch/drag remain navigation. Canvas disables iOS touch callout/text selection
+and contextmenu. About text and other page controls remain selectable.
+
 ## Playback identity and buffering fix (2026-09-11)
 
 Concurrent `loadFrames` calls used to replace the shared sources array. Older

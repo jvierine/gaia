@@ -67,6 +67,8 @@ pub struct SourceStatus {
     pub longitude_deg: Option<f64>,
     pub calibrated: bool,
     pub enabled: bool,
+    /// Manual quality weight as a power of two, 0 to -8.
+    pub quality_exponent: i64,
     pub state: String,
     pub timestamp_mode: String,
     pub last_observation_utc: Option<String>,

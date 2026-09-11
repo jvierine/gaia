@@ -11,7 +11,7 @@ type CameraFrame = {id:string;observation_utc:string;width:number|null;height:nu
 type Calibration = {id:string;created_utc:string;valid_from_utc:string|null;valid_to_utc:string|null;method:string;residual_px:number|null;star_count:number|null;selected:boolean};
 // Playback step interval is PLAYBACK_STEP_MS divided by the chosen speed.
 const PLAYBACK_STEP_MS = 150;
-const SPEEDS = [0.25, 0.5, 1, 2, 4] as const;
+const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
 type StarSummary = {star_key:string;vt_mag:number;ra_hours_j2000:number;dec_deg_j2000:number;image_x:number|null;image_y:number|null;elevation_deg:number|null;frames:number;found:number;median_flux:number|null;clear_flux:number|null;median_background:number|null;variation:number|null};
 type StarSample = {at:string;flux:number|null;background:number|null;sigma_major:number|null;sigma_minor:number|null;angle_deg:number|null;centroid_offset_px:number|null;elevation_deg:number};
 const STAR_CHANNELS = ['mean','r','g','b'] as const;

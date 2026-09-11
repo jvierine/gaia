@@ -232,7 +232,7 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
 uniform sampler2D previous;uniform sampler2D target;uniform vec2 size;uniform float amount;
 void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv),texture2D(target,uv),amount);}`);
   const smoothFramebuffer=gl.createFramebuffer();
-  type SmoothState={textures:[WebGLTexture,WebGLTexture];index:number;target:WebGLTexture;changed:number;initialized:boolean;size:[number,number]};
+  type SmoothState={textures:[WebGLTexture,WebGLTexture];index:number;target:WebGLTexture;geometry:Geometry;changed:number;initialized:boolean;size:[number,number]};
   const smoothStates=new Map<number,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
   let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number}[]=[];
@@ -255,7 +255,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}
     addLayer(sites);
     if(!publicOnly)cameraSites=sources.filter(s=>s.enabled&&s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{source_id:s.id,label:`Camera: ${s.name}\nOperator: ${s.producer}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
-    let lastMinute=-1,lastRefresh=0;
+    let lastMinute=-1,lastRefresh=0,selection=0;
+    const cameraOrders=new Map<string,number>();
+    const cameraOrder=(id:string)=>{if(!cameraOrders.has(id))cameraOrders.set(id,cameraOrders.size);return cameraOrders.get(id)!};
     type Asset={geometry_url:string;texture_url:string;vertex_count:number;weight_scale?:number};
     type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string;source_map_url?:string;geometry_url?:string;vertex_count?:number;weight_scale?:number}[]};
     const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
@@ -266,16 +268,19 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       }return c.value;
     };
     const pending=new Map<number,Promise<typeof frames>>(),ready=new Map<number,typeof frames>(),requests=new Map<number,AbortController>();
+    const geometryDownloads=new Map<string,Promise<ArrayBuffer>>(),textureDownloads=new Map<string,Promise<Blob>>();
+    const sharedDownload=<T,>(cache:Map<string,Promise<T>>,url:string,load:()=>Promise<T>)=>{let p=cache.get(url);if(!p){p=load().finally(()=>cache.delete(url));cache.set(url,p)}return p};
     abort.signal.addEventListener('abort',()=>{for(const c of requests.values())c.abort()},{once:true});
     const loadFrames=async(epoch:number,request:AbortController)=>{
       const nextFrames:typeof frames=[];
-      if(browserLayers){const m=await published();sources=m.cameras.filter((c:PublicCamera)=>c.projection).map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}));}
-      const queue=sources.filter(s=>s.enabled&&s.calibrated);
+      const snapshot=browserLayers?await published():null;
+      const selectedSources=snapshot?snapshot.cameras.filter((c:PublicCamera)=>c.projection).map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:true,enabled:true})):sources;
+      const queue=selectedSources.filter(s=>s.enabled&&s.calibrated).map(s=>({...s,order:cameraOrder(s.id)}));
       const at=new Date(epoch).toISOString();
-      await Promise.all([0,1,2,3].map(async()=>{while(queue.length&&!request.signal.aborted){
+      await Promise.all([0,1,2,3,4,5].map(async()=>{while(queue.length&&!request.signal.aborted){
         const s=queue.shift()!;
         try{
-          const cat=await catalogue(s.id);if(!cat)continue;
+          const cat:Catalogue|null=snapshot?snapshot.cameras.find((c:PublicCamera)=>c.source_id===s.id)?.projection:await catalogue(s.id);if(!cat)continue;
           let frame:Catalogue['images'][number]|undefined;
           for(let i=cat.images.length-1;i>=0;i--){if(Date.parse(cat.images[i].at)<=epoch){frame=cat.images[i];break}}
           // Retain the latest published frame during live delivery delays.
@@ -289,8 +294,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           }
           let geometry=geometryCache.get(asset.geometry_url),texture=textureCache.get(asset.texture_url);
           const [bytes,blob]=await Promise.all([
-            geometry?null:fetch(asset.geometry_url,{signal:request.signal}).then(r=>{if(!r.ok)throw new Error('Geometry unavailable');return r.arrayBuffer()}),
-            texture?null:fetch(asset.texture_url,{signal:request.signal}).then(async r=>{if(!r.ok)r=await fetch(asset.texture_url,{cache:'reload',signal:request.signal});if(!r.ok)throw new Error('Texture unavailable');return r.blob()})
+            geometry?null:sharedDownload(geometryDownloads,asset.geometry_url,()=>fetch(asset.geometry_url,{signal:abort.signal}).then(r=>{if(!r.ok)throw new Error('Geometry unavailable');return r.arrayBuffer()})),
+            texture?null:sharedDownload(textureDownloads,asset.texture_url,()=>fetch(asset.texture_url,{signal:abort.signal}).then(async r=>{if(!r.ok)r=await fetch(asset.texture_url,{cache:'reload',signal:abort.signal});if(!r.ok)throw new Error('Texture unavailable');return r.blob()}))
           ]);
           if(request.signal.aborted||abort.signal.aborted)return;
           geometry=geometryCache.get(asset.geometry_url)||geometry;
@@ -312,34 +317,36 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           }
           // Never display an image with the preceding frame's camera map.
           if(frame.source_map_url)await loadAttribution(frame.source_map_url);
-          const camera=layerManifest?.cameras?.find((c:PublicCamera)=>c.source_id===s.id);
-          const weightScale=browserLayers&&camera&&layerManifest?.stitching?.rules?cameraWeightScale(camera,epoch,layerManifest.stitching.rules):asset.weight_scale;
-          if(geometry&&texture)nextFrames.push({geometry,texture,order:sources.indexOf(s),sourceMapUrl:frame.source_map_url,at:frame.at,sourceId:s.id,weightScale});
+          const camera=snapshot?.cameras?.find((c:PublicCamera)=>c.source_id===s.id);
+          const weightScale=browserLayers&&camera&&snapshot?.stitching?.rules?cameraWeightScale(camera,epoch,snapshot.stitching.rules):asset.weight_scale;
+          if(geometry&&texture)nextFrames.push({geometry,texture,order:s.order,sourceMapUrl:frame.source_map_url,at:frame.at,sourceId:s.id,weightScale});
         }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
       }}));
       return nextFrames.sort((a,b)=>a.order-b.order);
     };
     const prepare=(epoch:number)=>{
       const minute=Math.floor(epoch/60000);let p=pending.get(minute);
-      if(!p){const request=new AbortController();requests.set(minute,request);p=loadFrames(epoch,request).then(result=>{if(!request.signal.aborted&&pending.has(minute))ready.set(minute,result);return result});pending.set(minute,p)}return p;
+      if(!p){const request=new AbortController();requests.set(minute,request);p=loadFrames(minute*60000,request).then(result=>{if(!request.signal.aborted&&requests.get(minute)===request)ready.set(minute,result);return result}).catch(e=>{if(!request.signal.aborted)console.warn('Frame preparation failed',e);if(requests.get(minute)===request){pending.delete(minute);ready.delete(minute)}return []});pending.set(minute,p)}return p;
     };
     const updateFrames=async()=>{
       const epoch=getEpochMillis(),minute=Math.floor(epoch/60000),refresh=Date.now()-lastRefresh>=30000;
       if(minute===lastMinute&&!refresh)return;
-      if(refresh){lastRefresh=Date.now();catalogues.clear();for(const c of requests.values())c.abort();requests.clear();pending.clear();ready.clear();}
+      if(refresh){lastRefresh=Date.now();catalogues.clear();if(minute===lastMinute){requests.get(minute)?.abort();requests.delete(minute);pending.delete(minute);ready.delete(minute)}}
       lastMinute=minute;
-      for(const key of pending.keys())if(key<minute||key>minute+3){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key)}
+      const ticket=++selection;
+      for(const key of pending.keys())if(key<minute-2||key>minute+8){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key)}
       onLoading(!ready.has(minute));
       const next=await prepare(epoch);
-      if(lastMinute===minute&&!abort.signal.aborted){
+      if(selection===ticket&&Math.floor(getEpochMillis()/60000)===minute&&!abort.signal.aborted){
         if(epoch<displayEpoch||Math.abs(epoch-displayEpoch)>600000){clearSmooth();displayEpoch=epoch}
         if(next.length||Math.abs(liveCutoff()-epoch)>=120000)frames=next;
+        canvas.dataset.selectedEpoch=String(minute*60000);
+        canvas.dataset.cameraOrderUnique=String(new Set(frames.map(f=>f.order)).size===frames.length);
         const shownAt=frames[0]?.at;
         if(shownAt){canvas.dataset.observationUtc=shownAt;canvas.dataset.delayed=String(epoch-Date.parse(shownAt)>600000);observationStatus.textContent=`Image ${new Date(shownAt).toISOString().slice(11,16)} UTC${epoch-Date.parse(shownAt)>600000?' · delayed':''}`;}
         const sourceMapUrl=frames[0]?.sourceMapUrl;if(sourceMapUrl)void loadAttribution(sourceMapUrl).then(value=>{if(frames[0]?.sourceMapUrl===value.url)attribution=value}).catch(console.warn);else attribution=null;
-        for(const key of pending.keys())if(key<minute||key>minute+3){pending.delete(key);ready.delete(key)}
-        // Decode the next three minutes ahead of playback, not on each tick.
-        if(epoch<Date.now()-240000)for(let i=1;i<=3;i++)void prepare(epoch+i*60000);
+        // Decode ahead without destroying the buffer on every catalogue refresh.
+        if(epoch<Date.now()-540000)for(let i=1;i<=8;i++)void prepare(epoch+i*60000);
         const protectedFrames=[...frames,...[...ready.values()].flat()];
         // Keep a bounded GPU cache; HTTP caching retains older frame assets.
         for(const [key,t] of textureCache){if(textureCache.size<=(browserLayers?(mobilePublic?160:320):(mobilePublic?3:publicOnly?6:96)))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
@@ -347,7 +354,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         onLoading(false);
       }
     };
-    void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),50);
+    void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),16);
   }).catch(console.error);
   // Final overlay pass: measured image colors are unlit and opaque, above both
   // the Earth's night shading and IGRF lines. The shader still hides the far side.
@@ -363,10 +370,10 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     for(const frame of frames){
       const size=textureSizes.get(frame.texture);if(!size){displayTextures.set(frame.order,frame.texture);continue}
       let state=smoothStates.get(frame.order);
-      if(state&&(state.size[0]!==size[0]||state.size[1]!==size[1])){for(const t of state.textures)gl.deleteTexture(t);smoothStates.delete(frame.order);state=undefined}
+      if(state&&(state.geometry!==frame.geometry||state.size[0]!==size[0]||state.size[1]!==size[1])){for(const t of state.textures)gl.deleteTexture(t);smoothStates.delete(frame.order);state=undefined}
       if(!state){
         const textures=[0,1].map(()=>{const t=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size[0],size[1],0,gl.RGBA,gl.UNSIGNED_BYTE,null);return t}) as [WebGLTexture,WebGLTexture];
-        state={textures,index:0,target:frame.texture,changed:now,initialized:false,size};smoothStates.set(frame.order,state);
+        state={textures,index:0,target:frame.texture,geometry:frame.geometry,changed:now,initialized:false,size};smoothStates.set(frame.order,state);
       }
       if(state.target!==frame.texture){state.target=frame.texture;state.changed=now}
       if(state.initialized&&now-state.changed>600){displayTextures.set(frame.order,frame.texture);continue}

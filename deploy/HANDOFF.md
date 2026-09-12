@@ -20,6 +20,15 @@ normal incremental publishers do not lose history. The old full-JPEG transfer
 was stopped to unblock compact publication; gaia-publish.timer must be resumed
 after verification. No originals were deleted. Data transfer remains rsync;
 code release remains Git push/pull only. Build gaia-overview alongside gaia-server.
+Publication timer has been resumed after verified compact transfer. Public live
+browser also completed 15.006-second and repeated 15.003-second loops with all
+120 samples ready. Home-key scrubbing immediately selected the oldest frame,
+32 camera layers, no progress bar. Both viewers passed this check. Public
+restricted manifest still returns 401 without a session. Two Rust tests verify
+station identity rejection and red/green contact-sheet tile/time placement.
+The browser freezes its history catalogue while exploring buffered data so a
+live refresh cannot shift indices beneath a retained sequence.
+
 Measured on live Revontuli browser: 120 frames GPU-ready, 15.003 sec loop,
 unique camera identities, no WebGL errors. Camera sheets total 3.26 MB open /
 5.11 MB full. Geometry downloads are additional. Date-gated archive selection

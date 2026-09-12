@@ -2,6 +2,14 @@
 
 ## Full-day GPU-buffered overview (2026-09-12)
 
+Final deployed source: 5b893ed; public release branch commit 26e227a.
+Final live check: public 15.002-second loop; admin 15.003-second loop.
+All 120 samples GPU-resident, no per-frame buffering. Public slider End
+immediately selected 07:00 UTC with 37 station layers; source observation
+time remained separately 06:57 UTC. Timeline now binds to the exact buffered
+manifest snapshot, not a separately refreshed catalogue. Unauthorized Starvisor
+sheet returned 401 under restricted and 404 under open.
+
 Supersedes per-frame loading: gaia-overview is a Rust packer using up to 16
 workers. It generates 120 twelve-minute samples spanning the rolling day,
 station-separated 96px JPEG contact sheets, with source IDs and original

@@ -36,7 +36,8 @@ for lookback in $stages; do
 export GAIA_PUBLISH_LOOKBACK_SECONDS="$lookback"
 echo "GAIA calibration rebuild revision=$revision lookback_seconds=$lookback (newest first)"
 /mnt/data/juha/gaia-build/release/gaia-server --publish
-cp "/mnt/data/juha/gaia/public/$manifest_name" "$snapshot/manifest.json"
+/mnt/data/juha/gaia-build/release/gaia-overview "/mnt/data/juha/gaia/public/$manifest_name"
+node deploy/overview-viewer.cjs "/mnt/data/juha/gaia/public/$manifest_name" "$snapshot/manifest.json"
 
 node deploy/layer-assets.cjs "$snapshot/manifest.json" /mnt/data/juha/gaia/public/assets public > "$snapshot/assets.txt"
 # juha.no stores every serving asset under /mnt/shovel/gaia by user request.

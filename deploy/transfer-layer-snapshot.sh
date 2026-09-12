@@ -41,7 +41,7 @@ cp "$snapshot/assets.txt" "$receipt.pending"
 mv "$receipt.pending" "$receipt"
 printf '%s\n' "$next_token" > "$token"
 if test "$manifest_name" = manifest.json; then
-    cp "$snapshot/manifest.json" "/mnt/data/juha/gaia/$audience/verified-manifest.pending"
+    cp "/mnt/data/juha/gaia/$audience/$manifest_name" "/mnt/data/juha/gaia/$audience/verified-manifest.pending"
     mv "/mnt/data/juha/gaia/$audience/verified-manifest.pending" "/mnt/data/juha/gaia/$audience/verified-manifest.json"
 fi
 rm "$snapshot/new-assets.txt" "$snapshot"/chunk-*

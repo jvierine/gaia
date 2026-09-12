@@ -14,6 +14,7 @@ export default function PublicViewer(){return <GoogleAccess><PublicContent/></Go
 function PublicContent(){
   const epoch=useRef(liveCutoff()),loading=useRef(false),selectedAt=useRef<number|null>(null);
   const [speed,setSpeed]=useState(1);
+  useEffect(()=>{const pause=()=>setPlay(false);window.addEventListener('gaia-pause-playback',pause);return()=>window.removeEventListener('gaia-pause-playback',pause)},[]);
   const [manifest,setManifest]=useState<Manifest>(),[index,setIndex]=useState(-1),[play,setPlay]=useState(false),[credits,setCredits]=useState(false),[error,setError]=useState(''),[sunLock,setSunLock]=useState(false);
   useEffect(()=>{const controller=new AbortController();const refresh=()=>fetch(manifestUrl,{cache:'no-store',signal:controller.signal}).then(r=>{if(!r.ok)throw Error('Published images unavailable');return r.json()}).then(m=>{const images=readyFrames(m.images);if(selectedAt.current!==null){const at=selectedAt.current;const next=images.findIndex(f=>Date.parse(f.at)>=at);setIndex(next<0?Math.max(0,images.length-1):next)}setManifest({...m,images});setError('')}).catch(e=>{if(!controller.signal.aborted)setError(String(e.message))});void refresh();const timer=setInterval(refresh,60000);return()=>{controller.abort();clearInterval(timer)}},[]);
   useEffect(()=>{if(manifest?.images.length)epoch.current=Date.parse(manifest.images[index<0?manifest.images.length-1:Math.min(index,manifest.images.length-1)].at)},[manifest,index]);

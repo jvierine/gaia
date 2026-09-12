@@ -1,5 +1,8 @@
 # GAIA handoff for j and bgu001
 
+Header branding: display GAIA with Global Auroral Image Aggregator beneath it; no Data Center subtitle (user request, 2026-09-12).
+
+
 ## Camera-use permission notice (2026-09-12)
 
 Shared About text on both sites explicitly states: Scientific and commercial use requires permission from the camera operators. GAIA access grants no reuse permission. Existing copyrights, provider terms, Google/Starvisor access controls, and imagery processing remain unchanged.

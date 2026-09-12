@@ -28,8 +28,15 @@ Eight dates found initially: 2026-04-13, 2026-09-01, 2026-09-02, and September
 8 through 12. The three early dates contain only 2, 5, and 1 stored images;
 raw presence does not imply calibrated coverage. Unit tests cover anonymous
 rejection, ordinary/allowlisted audience separation, unsafe paths, and source
-identity/contact-sheet tile placement. Check gaia-publish-days.service for the
-in-progress all-day deployment before claiming every date has completed.
+identity/contact-sheet tile placement. All eight dates completed verified publication at 07:39:56 UTC. Both audiences
+are under their YYYY-DD-MM folders; original data were not moved or deleted.
+Public Google sign-in and day selection were verified live for September 11:
+00:00–23:48 UTC samples, all 120 GPU-ready, 15.000-second loop without buffering.
+Revontuli also passed archive playback (15.007 seconds). Anonymous catalogue
+and day-manifest endpoints returned 401. Sparse dates explicitly show no
+calibrated coverage when none can be projected. The day picker refreshes its
+catalogue every minute. publish-days.cjs can be rerun under the lock to refresh
+all dates after more data/calibrations arrive; this bulk job is not a new timer.
 
 ## Full-day GPU-buffered overview (2026-09-12)
 

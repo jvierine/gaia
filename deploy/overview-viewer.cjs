@@ -1,0 +1,1 @@
+const fs=require('fs');const [input,output]=process.argv.slice(2);const m=JSON.parse(fs.readFileSync(input));if(!m.overview)throw Error('Missing buffered overview');m.cameras=m.overview.cameras;m.images=m.overview.images;fs.writeFileSync(output,JSON.stringify(m));

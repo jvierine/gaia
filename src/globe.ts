@@ -113,7 +113,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const observationStatus=document.createElement('div');
   observationStatus.style.cssText='position:absolute;left:18px;top:56px;color:#a8c6bf;font:11px monospace;pointer-events:none';
   observationStatus.setAttribute('role','status');canvas.parentElement?.appendChild(observationStatus);
-  const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Full archive';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';canvas.parentElement?.appendChild(archiveLink);
+  const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Full archive';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';if(import.meta.env.VITE_GAIA_PUBLIC!=='1'||manifestUrl.startsWith('/gaia/restricted/'))canvas.parentElement?.appendChild(archiveLink);
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null;projection?:any;calibrated?:boolean};
   let browserLayers=false,layerManifest:any=null,manifestRefresh:Promise<any>|null=null,manifestFetched=0;
   const compositor=cameraCompositor(gl);
@@ -258,7 +258,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const vertex=(angle:number)=>{const radius=.0045,x=center[0]+radius*(Math.cos(angle)*east[0]+Math.sin(angle)*north[0]),y=center[1]+radius*(Math.cos(angle)*east[1]+Math.sin(angle)*north[1]),z=center[2]+radius*(Math.cos(angle)*east[2]+Math.sin(angle)*north[2]),length=Math.hypot(x,y,z);return[x/length,y/length,z/length]};
     for(let i=0;i<8;i++)values.push(...center,...color,...vertex(i*Math.PI/4),...color,...vertex((i+1)*Math.PI/4),...color);
   };
-  const reportBuffer=(detail:{active:boolean;done:number;total:number;failed:number;message?:string})=>canvas.dispatchEvent(new CustomEvent('gaia-buffer-progress',{detail}));
+  const reportBuffer=(detail:{active:boolean;done:number;total:number;failed:number;message?:string;unit?:string})=>canvas.dispatchEvent(new CustomEvent('gaia-buffer-progress',{detail}));
   reportBuffer({active:true,done:0,total:0,failed:0,message:'Loading camera catalogue…'});
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
   abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
@@ -280,8 +280,10 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         c={expires:Date.now()+60000,value:fetch(publicOnly?manifestUrl:`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');const cat=await r.json() as Catalogue & {cameras?:PublicCamera[]};if(cat.cameras){publicCameras=new Map(cat.cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));visibilityDirty=true;}return cat})};catalogues.set(id,c);
       }return c.value;
     };
+    let overview:any=null,warming=false,overviewActive=false,overviewComplete=false,playAnimation=0,warmRequest:AbortController|null=null;
+    const sheetImages=new Map<string,Promise<HTMLImageElement>>();
     const progress=new Map<number,{done:number;total:number;failed:number}>();
-    const emitProgress=(minute:number)=>{if(minute===Math.floor(getEpochMillis()/60000))reportBuffer({active:true,...(progress.get(minute)||{done:0,total:0,failed:0})})};
+    const emitProgress=(minute:number)=>{if(!warming&&!overviewActive&&minute===Math.floor(getEpochMillis()/60000))reportBuffer({active:true,...(progress.get(minute)||{done:0,total:0,failed:0})})};
     const pending=new Map<number,Promise<typeof frames>>(),ready=new Map<number,typeof frames>(),requests=new Map<number,AbortController>();
     const geometryDownloads=new Map<string,Promise<ArrayBuffer>>(),textureDownloads=new Map<string,Promise<Blob>>();
     const sharedDownload=<T,>(cache:Map<string,Promise<T>>,url:string,load:()=>Promise<T>)=>{let p=cache.get(url);if(!p){p=load().finally(()=>cache.delete(url));cache.set(url,p)}return p};
@@ -290,7 +292,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       activeLoads++;
       try {
       const nextFrames:typeof frames=[];
-      const snapshot=browserLayers?await published():null;
+      const snapshot=overviewActive?overview:browserLayers?await published():null;
       const selectedSources=snapshot?snapshot.cameras.filter((c:PublicCamera)=>c.projection).map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:true,enabled:true})):sources;
       const queue=selectedSources.filter(s=>s.enabled&&s.calibrated).map(s=>({...s,order:cameraOrder(s.id)}));
       const progressMinute=Math.floor(epoch/60000),state={done:0,total:queue.length,failed:0};
@@ -312,14 +314,24 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
             const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
             if(r.status===404)continue;if(!r.ok)throw new Error(await r.text());asset=await r.json();
           }
-          let geometry=geometryCache.get(asset.geometry_url),texture=textureCache.get(asset.texture_url);
+          const rect=(frame as any).texture_rect as number[]|undefined;
+          const textureKey=asset.texture_url+(rect?'#'+rect.join(','):'');
+          let geometry=geometryCache.get(asset.geometry_url),texture=textureCache.get(textureKey);
           const [bytes,blob]=await Promise.all([
             geometry?null:sharedDownload(geometryDownloads,asset.geometry_url,()=>fetch(asset.geometry_url,{signal:abort.signal}).then(r=>{if(!r.ok)throw new Error('Geometry unavailable');return r.arrayBuffer()})),
-            texture?null:sharedDownload(textureDownloads,asset.texture_url,()=>fetch(asset.texture_url,{signal:abort.signal}).then(async r=>{if(!r.ok)r=await fetch(asset.texture_url,{cache:'reload',signal:abort.signal});if(!r.ok)throw new Error('Texture unavailable');return r.blob()}))
+            texture||rect?null:sharedDownload(textureDownloads,asset.texture_url,()=>fetch(asset.texture_url,{signal:abort.signal}).then(async r=>{if(!r.ok)r=await fetch(asset.texture_url,{cache:'reload',signal:abort.signal});if(!r.ok)throw new Error('Texture unavailable');return r.blob()}))
           ]);
           if(request.signal.aborted||abort.signal.aborted)return;
           geometry=geometryCache.get(asset.geometry_url)||geometry;
           if(!geometry&&bytes){const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);geometry={buffer:b,count:bytes.byteLength/(browserLayers?24:20)};geometryCache.set(asset.geometry_url,geometry)}
+          if(!texture&&rect){
+            let decoded=sheetImages.get(asset.texture_url);
+            if(!decoded){decoded=fetch(asset.texture_url,{signal:request.signal}).then(async r=>{if(!r.ok)throw Error('Overview sheet unavailable');const url=URL.createObjectURL(await r.blob()),im=new Image();try{await new Promise<void>((resolve,reject)=>{im.onload=()=>resolve();im.onerror=()=>reject(Error('Overview decode failed'));im.src=url});return im}finally{URL.revokeObjectURL(url)}});sheetImages.set(asset.texture_url,decoded);decoded.catch(()=>sheetImages.delete(asset.texture_url))}
+            const im=await decoded;if(request.signal.aborted)return;
+            texture=textureCache.get(textureKey);
+            if(!texture){const tile=document.createElement('canvas');tile.width=64;tile.height=64;tile.getContext('2d')!.drawImage(im,rect[0],rect[1],rect[2],rect[3],0,0,64,64);
+              texture=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,tile);textureCache.set(textureKey,texture);textureSizes.set(texture,[64,64]);}
+          }
           if(!texture&&blob){
             const url=URL.createObjectURL(blob),im=new Image();
             try{await new Promise<void>((resolve,reject)=>{im.onload=()=>resolve();im.onerror=()=>reject(new Error('Texture decode failed'));im.src=url});
@@ -351,6 +363,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       if(!p){const request=new AbortController();requests.set(minute,request);p=loadFrames(minute*60000,request).then(result=>{if(!request.signal.aborted&&requests.get(minute)===request)ready.set(minute,result);return result}).catch(e=>{if(!request.signal.aborted)console.warn('Frame preparation failed',e);if(requests.get(minute)===request){pending.delete(minute);ready.delete(minute)}return []});pending.set(minute,p)}return p;
     };
     const updateFrames=async()=>{
+      if(warming)return;
       // In-flight loads hold local GPU references across asynchronous decode.
       // Never delete those objects: binding a deleted texture can leave the
       // preceding camera's binding active and display that camera's image.
@@ -359,17 +372,17 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         for(const [key,t] of textureCache){if(textureCache.size<=(browserLayers?(mobilePublic?384:768):96))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
         for(const [key,g] of geometryCache){if(geometryCache.size<=256)break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
       }
-      const epoch=getEpochMillis(),minute=Math.floor(epoch/60000),refresh=Date.now()-lastRefresh>=30000;
+      const requestedEpoch=getEpochMillis(),epoch=overviewActive&&overviewComplete?overview.images.map((f:any)=>Date.parse(f.at)).reduce((a:number,b:number)=>Math.abs(a-requestedEpoch)<Math.abs(b-requestedEpoch)?a:b):requestedEpoch,minute=Math.floor(epoch/60000),refresh=!overviewActive&&Date.now()-lastRefresh>=30000;
       if(minute===lastMinute&&!refresh)return;
       if(refresh){lastRefresh=Date.now();catalogues.clear();if(minute===lastMinute){requests.get(minute)?.abort();requests.delete(minute);pending.delete(minute);ready.delete(minute)}}
       lastMinute=minute;
       const ticket=++selection;
-      for(const key of pending.keys())if(key<minute-2||key>minute+8){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key);progress.delete(key)}
+      for(const key of pending.keys())if(!overviewActive&&key!==minute){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key);progress.delete(key)}
       onLoading(!ready.has(minute));
       if(!ready.has(minute))emitProgress(minute);
       const next=await prepare(epoch);
-      if(selection===ticket&&Math.floor(getEpochMillis()/60000)===minute&&!abort.signal.aborted){
-        if(epoch<displayEpoch||Math.abs(epoch-displayEpoch)>600000){clearSmooth();displayEpoch=epoch}
+      if(selection===ticket&&Math.floor(getEpochMillis()/60000)===Math.floor(requestedEpoch/60000)&&!abort.signal.aborted){
+        if(epoch<displayEpoch||(!overviewActive&&Math.abs(epoch-displayEpoch)>600000)){clearSmooth();displayEpoch=epoch}
         if(next.length||Math.abs(liveCutoff()-epoch)>=120000)frames=next;
         canvas.dataset.selectedEpoch=String(minute*60000);
         canvas.dataset.cameraOrderUnique=String(new Set(frames.map(f=>f.order)).size===frames.length);
@@ -377,15 +390,56 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         if(shownAt){canvas.dataset.observationUtc=shownAt;canvas.dataset.delayed=String(epoch-Date.parse(shownAt)>600000);observationStatus.textContent=`Image ${new Date(shownAt).toISOString().slice(11,16)} UTC${epoch-Date.parse(shownAt)>600000?' · delayed':''}`;}
         const sourceMapUrl=frames[0]?.sourceMapUrl;if(sourceMapUrl)void loadAttribution(sourceMapUrl).then(value=>{if(frames[0]?.sourceMapUrl===value.url)attribution=value}).catch(console.warn);else attribution=null;
         // Decode ahead without destroying the buffer on every catalogue refresh.
-        if(epoch<Date.now()-540000)for(let i=1;i<=8;i++)void prepare(epoch+i*60000);
+        // Whole-day overview is already GPU resident; no per-frame downloads or speculative minute loads.
         onLoading(false);
         const status=progress.get(minute)||{done:0,total:0,failed:0};
-        reportBuffer({active:false,...status});
+        if(!warming)reportBuffer({active:false,...status});
       }
     };
-    const cancelBuffer=()=>{selection++;for(const request of requests.values())request.abort();requests.clear();pending.clear();ready.clear();progress.clear();onLoading(false);reportBuffer({active:false,done:0,total:0,failed:0})};
+    const cancelBuffer=()=>{cancelAnimationFrame(playAnimation);warmRequest?.abort();warming=false;overviewActive=false;overviewComplete=false;sheetImages.clear();selection++;for(const request of requests.values())request.abort();requests.clear();pending.clear();ready.clear();progress.clear();onLoading(false);reportBuffer({active:false,done:0,total:0,failed:0})};
     canvas.addEventListener('gaia-cancel-buffer',cancelBuffer);
     abort.signal.addEventListener('abort',()=>canvas.removeEventListener('gaia-cancel-buffer',cancelBuffer),{once:true});
+    const playOverview=async(event:Event)=>{
+      const {active,speed=32}=(event as CustomEvent).detail;
+      cancelAnimationFrame(playAnimation);
+      if(!active){if(warming){warmRequest?.abort();warming=false;overviewComplete=false;overviewActive=false;lastMinute=-1;reportBuffer({active:false,done:0,total:0,failed:0})}return}
+      try{
+        if(!overviewComplete){
+          warmRequest?.abort();const request=new AbortController();warmRequest=request;warming=true;
+          selection++;for(const r of requests.values())r.abort();requests.clear();pending.clear();ready.clear();progress.clear();
+          reportBuffer({active:true,done:0,total:120,failed:0,unit:'overview frames',message:'Buffering the entire 24-hour overview…'});
+          const manifest=await published();if(!manifest.overview)throw Error('Full-day overview is not published yet. Please retry shortly.');
+          overview=manifest.overview;overviewActive=true;
+          const times=overview.images.map((f:any)=>Date.parse(f.at));
+          canvas.dataset.overviewReady='false';
+          for(let i=0;i<times.length;i++){
+            if(request.signal.aborted||abort.signal.aborted)return;
+            const epoch=times[i],minute=Math.floor(epoch/60000),result=await loadFrames(epoch,request);
+            if(request.signal.aborted||abort.signal.aborted)return;
+            if(progress.get(minute)?.failed)throw Error('Some overview images failed to load. Retry buffering; playback has not started.');
+            ready.set(minute,result);pending.set(minute,Promise.resolve(result));
+            reportBuffer({active:true,done:i+1,total:times.length,failed:0,unit:'overview frames',message:'Buffering the entire 24-hour overview…'});
+            await new Promise(resolve=>setTimeout(resolve,0));
+          }
+          sheetImages.clear();warming=false;overviewComplete=true;lastMinute=-1;
+          canvas.dataset.overviewReady='true';canvas.dataset.overviewFrames=String(times.length);canvas.dataset.overviewTexturePixels='64';
+          reportBuffer({active:false,done:times.length,total:times.length,failed:0});
+        }
+        const times=overview.images.map((f:any)=>Date.parse(f.at)),duration=15000*32/Math.max(.25,speed),start=performance.now();let previous=-1,loops=0;
+        canvas.dataset.playbackStarted=String(start);canvas.dataset.playbackDuration=String(duration);
+        const tick=(now:number)=>{if(abort.signal.aborted)return;const elapsed=now-start,loop=Math.floor(elapsed/duration),i=Math.min(times.length-1,Math.floor(elapsed%duration/duration*times.length));
+          if(loop>loops){canvas.dataset.playbackLoopMs=String(elapsed/loop);loops=loop}
+          if(i!==previous){previous=i;window.dispatchEvent(new CustomEvent('gaia-overview-epoch',{detail:times[i]}))}
+          playAnimation=requestAnimationFrame(tick);
+        };playAnimation=requestAnimationFrame(tick);
+      }catch(error){warming=false;overviewActive=false;overviewComplete=false;lastMinute=-1;reportBuffer({active:false,done:0,total:0,failed:1,message:String((error as Error).message)});window.dispatchEvent(new Event('gaia-pause-playback'))}
+    };
+    const leaveOverview=()=>{cancelAnimationFrame(playAnimation);overviewActive=false;overviewComplete=false;warmRequest?.abort();warming=false;pending.clear();ready.clear();lastMinute=-1};
+    const scrubOverview=(event:Event)=>{if(!overviewComplete)return;const wanted=(event as CustomEvent).detail;const t=overview.images.map((f:any)=>Date.parse(f.at)).reduce((a:number,b:number)=>Math.abs(a-wanted)<Math.abs(b-wanted)?a:b);window.dispatchEvent(new CustomEvent('gaia-overview-epoch',{detail:t}))};
+    window.addEventListener('gaia-scrub-overview',scrubOverview);
+    abort.signal.addEventListener('abort',()=>window.removeEventListener('gaia-scrub-overview',scrubOverview),{once:true});
+    window.addEventListener('gaia-run-overview',playOverview);window.addEventListener('gaia-leave-overview',leaveOverview);
+    abort.signal.addEventListener('abort',()=>{cancelAnimationFrame(playAnimation);warmRequest?.abort();window.removeEventListener('gaia-run-overview',playOverview);window.removeEventListener('gaia-leave-overview',leaveOverview)},{once:true});
     void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),16);
   }).catch(error=>{console.error(error);onLoading(false);reportBuffer({active:false,done:0,total:0,failed:1,message:'Camera data could not be loaded. Please retry.'})});
   // Final overlay pass: measured image colors are unlit and opaque, above both

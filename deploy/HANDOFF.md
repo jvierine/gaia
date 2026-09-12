@@ -1,5 +1,30 @@
 # GAIA handoff for j and bgu001
 
+## Full-day GPU-buffered overview (2026-09-12)
+
+Supersedes per-frame loading: gaia-overview is a Rust packer using up to 16
+workers. It generates 120 twelve-minute samples spanning the rolling day,
+station-separated 96px JPEG contact sheets, with source IDs and original
+observation_at retained. Source masks/mesh/calibrations and all browser weighting
+rules remain unchanged. These are overview samples, not every archived minute.
+Browser preloads and decodes ALL samples into 64px GPU camera textures before
+starting; pause/scrub then reuse the whole resident sequence. 32x is default:
+15 seconds per day; slower speeds scale the wall-clock duration. No per-frame
+network request or decode is needed after buffering. Anonymous sheets exclude
+Starvisor; their catalogue points and provider credits remain. Auth remounts
+clear all protected GPU textures on logout. Anonymous full-archive link removed.
+
+publish-public.sh and publish-open.sh pack before transferring compact viewer
+manifests. Local verified manifests MUST retain the original minute archive so
+normal incremental publishers do not lose history. The old full-JPEG transfer
+was stopped to unblock compact publication; gaia-publish.timer must be resumed
+after verification. No originals were deleted. Data transfer remains rsync;
+code release remains Git push/pull only. Build gaia-overview alongside gaia-server.
+Measured on live Revontuli browser: 120 frames GPU-ready, 15.003 sec loop,
+unique camera identities, no WebGL errors. Camera sheets total 3.26 MB open /
+5.11 MB full. Geometry downloads are additional. Date-gated archive selection
+and migration of dated data into YYYY-DD-MM folders remain outstanding.
+
 ## Git-only code delivery and visible buffering (2026-09-12)
 
 User requires ALL code delivery through Git push/pull, including the built

@@ -21,6 +21,18 @@ for another selected time. Cancel playback pauses the shell and invalidates
 pending frame selection, so stale completion cannot replace the selected view.
 Full-sequence preload, date selection and 24h-in-15s default remain pending.
 
+Deployment verified: source eb394d0, public release 6d0c2bd; admin asset
+index-DiFjMt4Y.js, public index-CDeiuH4X.js. Live browser showed admin
+1/63 then 54/63 camera checks, public 46/47; cancel stopped admin playback
+while retaining 43 rendered camera layers with unique camera IDs. Public
+rendered 38 camera layers with unique IDs. Git clone on shovel's CIFS mount
+requires sudo (unprivileged Git cannot chmod config.lock); use sudo git -C
+/mnt/shovel/gaia/viewer-release pull --ff-only for subsequent releases.
+Only Git fetched code across hosts; install copied files locally on shovel.
+Previous public index is retained in legacy/index-before-eb394d0.html.
+The JPEG history rebuild was still active at this check; its publish timer
+remains stopped until the job's EXIT trap resumes it. Do not duplicate jobs.
+
 ## Compact JPEG and station-safe GPU resources (2026-09-12)
 
 New browser camera textures are RGB JPEG quality 80, maximum dimension 256.

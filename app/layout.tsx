@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'GAIA — Global Auroral Image Archive',
+  title: 'GAIA — Global Auroral Image Aggregator',
   description: 'UiT data center for calibrated, quality-controlled global auroral imagery.',
 };
 

@@ -117,7 +117,8 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null;projection?:any;calibrated?:boolean};
   let browserLayers=false,layerManifest:any=null,manifestRefresh:Promise<any>|null=null,manifestFetched=0;
   const compositor=cameraCompositor(gl);
-  const published=()=>{if(!manifestRefresh||Date.now()-manifestFetched>30000){manifestFetched=Date.now();manifestRefresh=fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw Error('Camera layers unavailable');layerManifest=await r.json();browserLayers=layerManifest.composition==='browser-layers-v1';return layerManifest}).catch(e=>{manifestRefresh=null;throw e})}return manifestRefresh};
+  const compressedGeometry=new Map<string,string>();
+  const published=()=>{if(!manifestRefresh||Date.now()-manifestFetched>30000){manifestFetched=Date.now();manifestRefresh=fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw Error('Camera layers unavailable');layerManifest=await r.json();browserLayers=layerManifest.composition==='browser-layers-v1';for(const c of layerManifest.overview?.cameras||[]){const p=c.projection;if(p)for(const f of p.images||[])if(f.geometry_gzip_url)compressedGeometry.set(f.geometry_url||p.geometry_url,f.geometry_gzip_url)}return layerManifest}).catch(e=>{manifestRefresh=null;throw e})}return manifestRefresh};
   let cameraSites:{source_id?:string;label:string;url?:string;world:number[]}[]=[],publicCameras=new Map<number,PublicCamera>();
   type Attribution={url:string;width:number;height:number;data:Uint8ClampedArray};
   let attribution:Attribution|null=null;
@@ -314,11 +315,14 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
             const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
             if(r.status===404)continue;if(!r.ok)throw new Error(await r.text());asset=await r.json();
           }
-          const rect=(frame as any).texture_rect as number[]|undefined;
+          const preview=!overviewActive&&(frame as any).preview_texture_url;
+          if(preview)asset.texture_url=preview;
+          const rect=preview?undefined:(frame as any).texture_rect as number[]|undefined;
+          const packedGeometry=typeof DecompressionStream!=='undefined'?((frame as any).geometry_gzip_url||compressedGeometry.get(asset.geometry_url)):undefined;
           const textureKey=asset.texture_url+(rect?'#'+rect.join(','):'');
           let geometry=geometryCache.get(asset.geometry_url),texture=textureCache.get(textureKey);
           const [bytes,blob]=await Promise.all([
-            geometry?null:sharedDownload(geometryDownloads,asset.geometry_url,()=>fetch(asset.geometry_url,{signal:abort.signal}).then(r=>{if(!r.ok)throw new Error('Geometry unavailable');return r.arrayBuffer()})),
+            geometry?null:sharedDownload(geometryDownloads,asset.geometry_url,async()=>{if(packedGeometry){try{const r=await fetch(packedGeometry,{signal:abort.signal});if(!r.ok||!r.body)throw Error('Compressed geometry unavailable');return await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()}catch(e){if(abort.signal.aborted)throw e}}const r=await fetch(asset.geometry_url,{signal:abort.signal});if(!r.ok)throw Error('Geometry unavailable');return r.arrayBuffer()}),
             texture||rect?null:sharedDownload(textureDownloads,asset.texture_url,()=>fetch(asset.texture_url,{signal:abort.signal}).then(async r=>{if(!r.ok)r=await fetch(asset.texture_url,{cache:'reload',signal:abort.signal});if(!r.ok)throw new Error('Texture unavailable');return r.blob()}))
           ]);
           if(request.signal.aborted||abort.signal.aborted)return;

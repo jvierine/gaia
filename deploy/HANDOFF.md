@@ -1,5 +1,12 @@
 # GAIA handoff for j and bgu001
 
+## Aggregator identity and initial-load transport (2026-09-12)
+
+Visible name is Global Auroral Image Aggregator. Shared ProviderContacts.tsx explains overview-only service, directs original/high-resolution archive requests to provider PIs/operators, and records source-linked confirmed roles. Network contacts are not asserted to own every station. Old per-camera credits and copyrights remain.
+
+Initial latest selection now uses 96px standalone JPEG previews for the newest three overview samples per station, not whole-day contact sheets. Play still loads the complete station-separated sheets and buffers 120 frames before advancing. Rust gaia-overview also publishes losslessly gzip-compressed meshes; the shared browser uses DecompressionStream with original-mesh fallback. No geometry, lens, mask, UV or weighting values change. Existing older archive packages remain compatible; new publication adds the optimized files automatically. Generic recursive asset validation includes the new URLs, with unchanged audience separation and Git-only code deployment.
+
+
 ## Authenticated calendar-day archives (2026-09-12)
 
 Public date picker requires a Google session; ordinary signed-in users receive

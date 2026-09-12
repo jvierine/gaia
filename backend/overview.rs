@@ -27,7 +27,20 @@ fn station(mut c:Value,times:&[i64],root:&Path,prefix:&str)->Result<Value>{
   for (i,f) in selected.iter().enumerate(){let im=image::open(asset(root,f["texture_url"].as_str().context("texture url")?)?)?.resize_exact(side,side,FilterType::Triangle).to_rgb8();image::imageops::replace(&mut sheet,&im,(i as u32%columns*side) as i64,(i as u32/columns*side) as i64)}
   let pending=target.with_extension("pending");let mut file=fs::File::create(&pending)?;JpegEncoder::new_with_quality(&mut file,80).encode_image(&sheet)?;fs::rename(pending,&target)?;
  }
- for (i,f) in selected.iter_mut().enumerate(){f["texture_url"]=json!(format!("{prefix}{name}"));f["texture_rect"]=json!([i as u32%columns*side,i as u32/columns*side,side,side]);}
+ // Newest samples have independent previews; full sheets are only needed for Play.
+ // Gzip preserves every geometry coordinate, UV and magnetic weight exactly.
+ let count=selected.len();
+ for (i,f) in selected.iter_mut().enumerate(){
+  let geometry=f["geometry_url"].as_str().or_else(||p["geometry_url"].as_str());
+  if let Some(url)=geometry {let src=asset(root,url)?;let gz=src.with_extension("bin.gz");
+   if !gz.exists(){use std::io::Write;let pending=gz.with_extension("pending");let mut encoder=flate2::write::GzEncoder::new(fs::File::create(&pending)?,flate2::Compression::default());encoder.write_all(&fs::read(&src)?)?;encoder.finish()?;fs::rename(pending,&gz)?;}
+   f["geometry_gzip_url"]=json!(format!("{prefix}{}",gz.file_name().unwrap().to_str().unwrap()));
+  }
+  if i+3>=count {let original=f["texture_url"].as_str().context("preview input")?;let name=format!("preview-{:x}.jpg",Sha256::digest(format!("96-q80-{source}-{original}")));let path=root.join("assets").join(&name);
+   if !path.exists(){let im=image::open(asset(root,original)?)?.resize_exact(96,96,FilterType::Triangle).to_rgb8();let pending=path.with_extension("pending");JpegEncoder::new_with_quality(fs::File::create(&pending)?,80).encode_image(&im)?;fs::rename(pending,path)?;}
+   f["preview_texture_url"]=json!(format!("{prefix}{name}"));
+  }
+ f["texture_url"]=json!(format!("{prefix}{name}"));f["texture_rect"]=json!([i as u32%columns*side,i as u32/columns*side,side,side]);}
  c["projection"]["images"]=json!(selected);Ok(c)
 }
 fn main()->Result<()>{
@@ -56,6 +69,17 @@ fn main()->Result<()>{
   let t=epoch(&json!("2026-09-11T00:00:00Z")).unwrap();let result=station(camera,&[t,t+720],dir.path(),"/gaia/open/assets/").unwrap();
   assert_eq!(result["copyright"],"Producer retains copyright");let frames=result["projection"]["images"].as_array().unwrap();assert_eq!(frames.len(),2);assert_eq!(frames[1]["texture_rect"],json!([96,0,96,96]));
   let sheet=image::open(asset(dir.path(),frames[0]["texture_url"].as_str().unwrap()).unwrap()).unwrap().to_rgb8();assert!(sheet.get_pixel(48,48)[0]>240);assert!(sheet.get_pixel(144,48)[1]>240);assert_eq!(frames[1]["source_id"],"station-a");
+ }
+ #[test] fn compressed_mesh_and_preview_match_original(){
+  use std::io::Read;
+  let dir=tempfile::tempdir().unwrap();fs::create_dir(dir.path().join("assets")).unwrap();
+  let mesh:Vec<u8>=(0..1024).map(|i|(i%251) as u8).collect();fs::write(dir.path().join("assets/mesh.bin"),&mesh).unwrap();
+  RgbImage::from_pixel(8,8,image::Rgb([0,255,0])).save(dir.path().join("assets/green.png")).unwrap();
+  let t=epoch(&json!("2026-09-11T00:00:00Z")).unwrap();
+  let c=json!({"source_id":"a","projection":{"geometry_url":"/gaia/open/assets/mesh.bin","images":[{"source_id":"a","at":"2026-09-11T00:00:00Z","texture_url":"/gaia/open/assets/green.png"}]}});
+  let c=station(c,&[t],dir.path(),"/gaia/open/assets/").unwrap();let f=&c["projection"]["images"][0];
+  let mut decoded=Vec::new();flate2::read::GzDecoder::new(fs::File::open(asset(dir.path(),f["geometry_gzip_url"].as_str().unwrap()).unwrap()).unwrap()).read_to_end(&mut decoded).unwrap();assert_eq!(decoded,mesh);
+  let preview=image::open(asset(dir.path(),f["preview_texture_url"].as_str().unwrap()).unwrap()).unwrap().to_rgb8();assert_eq!(preview.dimensions(),(96,96));assert!(preview.get_pixel(48,48)[1]>240);
  }
  #[test] fn wrong_station_is_rejected(){let dir=tempfile::tempdir().unwrap();let c=json!({"source_id":"a","projection":{"images":[{"source_id":"b","at":"2026-09-11T00:00:00Z"}]}});assert!(station(c,&[epoch(&json!("2026-09-11T00:00:00Z")).unwrap()],dir.path(),"/gaia/open/assets/").is_err())}
 }

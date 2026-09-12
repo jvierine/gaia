@@ -26,19 +26,8 @@
 - Björn's SSH account on `juha.no` is `bgu001`. His dedicated deployment key stays on Revontuli at `/home/bgu001/.ssh/gaia_juha_no_ed25519`; only its public key is installed on juha.no. This is separate from the GitHub key. Never copy or print the private key.
 - From Revontuli as `bgu001`, connect without a password using `ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.no`. The account has group write access to `/var/www/html/gaia` through `gaia-deploy`; deploying the static GUI needs no sudo or service restart.
 - Develop and commit in `/mnt/data/juha/gaia/code`, coordinate builds with `j` because this is a shared checkout, and push to `jvierine/gaia`. Both users must preserve group write permissions on deployed files. Do not run simultaneous builds/deployments.
-- Build the public bundle in a separate output directory so the live admin build is not overwritten:
+- Code delivery is Git-only by explicit user instruction. Build on Revontuli and commit/push source to main. Commit the public static build to the codex/public-viewer release branch, then git pull that branch on juha.no under /mnt/shovel/gaia/viewer-release. Install files locally from that checkout into www (assets first, index.html atomically last). Never scp or rsync code, frontend bundles or executables. Image/projection/manifest data may continue using rsync. Keep old hashed assets for active viewers. Git push necessarily precedes remote deployment; verify both live viewers after deployment.
 
-```sh
-cd /mnt/data/juha/gaia/code
-umask 002
-VITE_GAIA_PUBLIC=1 npm run build:static -- --outDir public-dist
-ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.no 'mkdir -p /home/bgu001/gaia-deploy-backups; cp -a /var/www/html/gaia/index.html /home/bgu001/gaia-deploy-backups/index-$(date -u +%Y%m%dT%H%M%SZ).html'
-rsync -r --chmod=D2775,F664 --exclude=index.html -e 'ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes' public-dist/ bgu001@juha.no:/var/www/html/gaia/
-rsync -r --chmod=F664 -e 'ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes' public-dist/index.html bgu001@juha.no:/var/www/html/gaia/index.pending
-ssh -i /home/bgu001/.ssh/gaia_juha_no_ed25519 -o IdentitiesOnly=yes bgu001@juha.no 'mv /var/www/html/gaia/index.pending /var/www/html/gaia/index.html'
-```
-
-- Upload assets first and atomically replace the entry HTML last. Retain previous hashed assets for existing viewers and rollback; do not use `rsync --delete`. Backups of the entry HTML live in `/home/bgu001/gaia-deploy-backups` on juha.no.
 - For shared-view changes, build the matching admin target with `npm run build:static` (without `VITE_GAIA_PUBLIC`) from the same commit; its `web-dist` directory is served directly on Revontuli. Verify both live pages, asset hashes, station interaction, playback, and WebGL errors.
 - On juha.no `/gaia/public/` is DENIED: use anonymous `/gaia/open/` or Google-protected `/gaia/restricted/`. Prepared assets live under `/mnt/shovel/gaia/serving/{open,public}`. `/var/www/gaia-public`, `/var/www/gaia-open` and `/var/www/html/gaia` are compatibility symlinks into shovel. Both collaborators use their own SSH identities. One automated publisher runs as `j` on Revontuli; never enable a duplicate. Transfer immutable assets first and verify them before replacing manifests. If assets are externally deleted or restored, remove the audience receipt-token to force full verification.
 - Authentication check: run the SSH command above with `-o BatchMode=yes` and `id`. Deployment permission check: create and remove a temporary file inside `/var/www/html/gaia` before uploading. Keys from another workstation must be authorized separately.

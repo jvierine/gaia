@@ -258,6 +258,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const vertex=(angle:number)=>{const radius=.0045,x=center[0]+radius*(Math.cos(angle)*east[0]+Math.sin(angle)*north[0]),y=center[1]+radius*(Math.cos(angle)*east[1]+Math.sin(angle)*north[1]),z=center[2]+radius*(Math.cos(angle)*east[2]+Math.sin(angle)*north[2]),length=Math.hypot(x,y,z);return[x/length,y/length,z/length]};
     for(let i=0;i<8;i++)values.push(...center,...color,...vertex(i*Math.PI/4),...color,...vertex((i+1)*Math.PI/4),...color);
   };
+  const reportBuffer=(detail:{active:boolean;done:number;total:number;failed:number;message?:string})=>canvas.dispatchEvent(new CustomEvent('gaia-buffer-progress',{detail}));
+  reportBuffer({active:true,done:0,total:0,failed:0,message:'Loading camera catalogue…'});
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
   abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
   abort.signal.addEventListener('abort',()=>archiveLink.remove(),{once:true});
@@ -278,6 +280,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         c={expires:Date.now()+60000,value:fetch(publicOnly?manifestUrl:`/gaia/api/sources/${encodeURIComponent(id)}/projection?format=timeline`,{cache:'no-store',signal:abort.signal}).then(async r=>{if(r.status===404)return null;if(!r.ok)throw new Error('Playback catalogue unavailable');const cat=await r.json() as Catalogue & {cameras?:PublicCamera[]};if(cat.cameras){publicCameras=new Map(cat.cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));visibilityDirty=true;}return cat})};catalogues.set(id,c);
       }return c.value;
     };
+    const progress=new Map<number,{done:number;total:number;failed:number}>();
+    const emitProgress=(minute:number)=>{if(minute===Math.floor(getEpochMillis()/60000))reportBuffer({active:true,...(progress.get(minute)||{done:0,total:0,failed:0})})};
     const pending=new Map<number,Promise<typeof frames>>(),ready=new Map<number,typeof frames>(),requests=new Map<number,AbortController>();
     const geometryDownloads=new Map<string,Promise<ArrayBuffer>>(),textureDownloads=new Map<string,Promise<Blob>>();
     const sharedDownload=<T,>(cache:Map<string,Promise<T>>,url:string,load:()=>Promise<T>)=>{let p=cache.get(url);if(!p){p=load().finally(()=>cache.delete(url));cache.set(url,p)}return p};
@@ -289,6 +293,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       const snapshot=browserLayers?await published():null;
       const selectedSources=snapshot?snapshot.cameras.filter((c:PublicCamera)=>c.projection).map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:true,enabled:true})):sources;
       const queue=selectedSources.filter(s=>s.enabled&&s.calibrated).map(s=>({...s,order:cameraOrder(s.id)}));
+      const progressMinute=Math.floor(epoch/60000),state={done:0,total:queue.length,failed:0};
+      progress.set(progressMinute,state);emitProgress(progressMinute);
       const at=new Date(epoch).toISOString();
       await Promise.all([0,1,2,3,4,5].map(async()=>{while(queue.length&&!request.signal.aborted){
         const s=queue.shift()!;
@@ -334,7 +340,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           const camera=snapshot?.cameras?.find((c:PublicCamera)=>c.source_id===s.id);
           const weightScale=browserLayers&&camera&&snapshot?.stitching?.rules?cameraWeightScale(camera,epoch,snapshot.stitching.rules):asset.weight_scale;
           if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,order:s.order,sourceMapUrl:frame.source_map_url,at:frame.at,sourceId:s.id,weightScale});
-        }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
+        }catch(e){if(!request.signal.aborted){state.failed++;console.error(`Projection ${s.name}`,e)}}
+        finally{state.done++;if(!request.signal.aborted)emitProgress(progressMinute)}
       }}));
       return nextFrames.sort((a,b)=>a.order-b.order);
       } finally {activeLoads--}
@@ -357,8 +364,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       if(refresh){lastRefresh=Date.now();catalogues.clear();if(minute===lastMinute){requests.get(minute)?.abort();requests.delete(minute);pending.delete(minute);ready.delete(minute)}}
       lastMinute=minute;
       const ticket=++selection;
-      for(const key of pending.keys())if(key<minute-2||key>minute+8){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key)}
+      for(const key of pending.keys())if(key<minute-2||key>minute+8){requests.get(key)?.abort();requests.delete(key);pending.delete(key);ready.delete(key);progress.delete(key)}
       onLoading(!ready.has(minute));
+      if(!ready.has(minute))emitProgress(minute);
       const next=await prepare(epoch);
       if(selection===ticket&&Math.floor(getEpochMillis()/60000)===minute&&!abort.signal.aborted){
         if(epoch<displayEpoch||Math.abs(epoch-displayEpoch)>600000){clearSmooth();displayEpoch=epoch}
@@ -371,10 +379,15 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         // Decode ahead without destroying the buffer on every catalogue refresh.
         if(epoch<Date.now()-540000)for(let i=1;i<=8;i++)void prepare(epoch+i*60000);
         onLoading(false);
+        const status=progress.get(minute)||{done:0,total:0,failed:0};
+        reportBuffer({active:false,...status});
       }
     };
+    const cancelBuffer=()=>{selection++;for(const request of requests.values())request.abort();requests.clear();pending.clear();ready.clear();progress.clear();onLoading(false);reportBuffer({active:false,done:0,total:0,failed:0})};
+    canvas.addEventListener('gaia-cancel-buffer',cancelBuffer);
+    abort.signal.addEventListener('abort',()=>canvas.removeEventListener('gaia-cancel-buffer',cancelBuffer),{once:true});
     void updateFrames();frameTimer=window.setInterval(()=>void updateFrames(),16);
-  }).catch(console.error);
+  }).catch(error=>{console.error(error);onLoading(false);reportBuffer({active:false,done:0,total:0,failed:1,message:'Camera data could not be loaded. Please retry.'})});
   // Final overlay pass: measured image colors are unlit and opaque, above both
   // the Earth's night shading and IGRF lines. The shader still hides the far side.
   const drawLayers=(w:number,h:number)=>{

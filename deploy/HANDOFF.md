@@ -1,5 +1,26 @@
 # GAIA handoff for j and bgu001
 
+## Git-only code delivery and visible buffering (2026-09-12)
+
+User requires ALL code delivery through Git push/pull, including the built
+viewer. Never scp or rsync source files or frontend bundles between hosts.
+Image assets, projection meshes and JSON observation manifests remain data and
+may continue using the verified rsync publication pipeline.
+Public static releases use branch codex/public-viewer in jvierine/gaia; build
+on Revontuli, commit generated static files there, push, then pull on juha.no
+under /mnt/shovel/gaia/viewer-release. Copy assets locally into www first and
+replace index.html last. No builds or data caches on juha.no's system disk.
+Retain old hashed assets for open browsers. This supersedes all older code-rsync
+instructions below and in AGENTS.md.
+
+Shared GaiaGlobeView shows an accessible buffering progress bar for the selected
+frame on both sites. Counts are completed camera checks (including unavailable
+observations), not invented bytes or a claim that the entire day is cached.
+Camera failures are shown separately. Background prefetch cannot move the bar
+for another selected time. Cancel playback pauses the shell and invalidates
+pending frame selection, so stale completion cannot replace the selected view.
+Full-sequence preload, date selection and 24h-in-15s default remain pending.
+
 ## Compact JPEG and station-safe GPU resources (2026-09-12)
 
 New browser camera textures are RGB JPEG quality 80, maximum dimension 256.

@@ -1,5 +1,10 @@
 # GAIA handoff for j and bgu001
 
+## Camera-use permission notice (2026-09-12)
+
+Shared About text on both sites explicitly states: Scientific and commercial use requires permission from the camera operators. GAIA access grants no reuse permission. Existing copyrights, provider terms, Google/Starvisor access controls, and imagery processing remain unchanged.
+
+
 ## Aggregator identity and initial-load transport (2026-09-12)
 
 Deployed source 423a37b / public release b1667e6. Both live titles, About panels, source contacts and image canvases were checked in-browser. Public full-day playback was 15.008 seconds, 120 frames resident, with no browser errors; admin also reached 120 buffered frames and rendered correctly. Anonymous protected manifest remains HTTP 401. For the then-current 45-camera open catalogue: sheets 3,264,127 bytes versus previews 82,330 bytes; meshes 62,370,288 bytes versus compressed 12,259,719 bytes. Every tested compressed mesh round-tripped byte-for-byte. These are asset-size measurements, not a universal wall-clock speed guarantee. Three Rust overview tests pass (station identity, tile/timestamp mapping, preview and lossless geometry).

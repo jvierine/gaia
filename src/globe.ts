@@ -409,7 +409,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           selection++;for(const r of requests.values())r.abort();requests.clear();pending.clear();ready.clear();progress.clear();
           reportBuffer({active:true,done:0,total:120,failed:0,unit:'overview frames',message:'Buffering the entire 24-hour overview…'});
           const manifest=await published();if(!manifest.overview)throw Error('Full-day overview is not published yet. Please retry shortly.');
-          overview=manifest.overview;overviewActive=true;
+          overview=manifest.overview;overviewActive=true;window.dispatchEvent(new CustomEvent('gaia-overview-catalogue',{detail:overview.images}));
           const times=overview.images.map((f:any)=>Date.parse(f.at));
           canvas.dataset.overviewReady='false';
           for(let i=0;i<times.length;i++){

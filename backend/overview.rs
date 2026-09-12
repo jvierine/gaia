@@ -36,7 +36,7 @@ fn main()->Result<()>{
  if m["composition"]!="browser-layers-v1"{bail!("independent layers required")}
  let images=m["images"].as_array().context("frames")?;
  let end=images.iter().filter_map(|v|epoch(&v["at"])).max().context("empty period")?;
- let end=end/720*720;let times:Vec<i64>=(0..120).map(|i|end-(119-i)*720).collect();
+ let end=end/720*720;let day=m["date"].as_str().map(|s|chrono::NaiveDate::parse_from_str(s,"%Y-%m-%d")).transpose()?;let times:Vec<i64>=if let Some(day)=day{let start=day.and_hms_opt(0,0,0).unwrap().and_utc().timestamp();(0..120).map(|i|start+i*720).collect()}else{(0..120).map(|i|end-(119-i)*720).collect()};
  let cameras=m["cameras"].as_array().context("cameras")?;let prefix=if m["audience"]=="anonymous-no-starvisor"{"/gaia/open/assets/"}else{"/gaia/public/assets/"};
  let next=AtomicUsize::new(0);let output=Mutex::new(Vec::new());
  std::thread::scope(|scope|{for _ in 0..16{let next=&next;let output=&output;let times=&times;scope.spawn(move||{loop{let i=next.fetch_add(1,Ordering::Relaxed);if i>=cameras.len(){break}let value=station(cameras[i].clone(),times,root,prefix);output.lock().unwrap().push((i,value));}});}});

@@ -1,5 +1,37 @@
 # GAIA handoff for j and bgu001
 
+## Compact JPEG and station-safe GPU resources (2026-09-12)
+
+New browser camera textures are RGB JPEG quality 80, maximum dimension 256.
+Fixed crop/mask/edge feather remain in the reusable 100 km mesh and IGRF weights,
+not in JPEG alpha; raw lens coordinates and scientific weighting are unchanged.
+Texture addresses include source ID, observation timestamp and archive path.
+Every newly published/retained layer frame carries source_id; browser rejects a
+frame declaring a different station. Temporal smoothing and compositor texture
+maps now use source IDs, not numeric slots. In-flight frame loads pin GPU caches;
+eviction only happens when none are loading. Invalid GPU textures/buffers are
+omitted before binding, never allowed to leave another station's binding active.
+
+Camera accumulation is capped at 1024 pixels on its long side; the Earth,
+coastlines, political boundaries, IGRF lines and labels retain full resolution.
+Picking uses the identical reduced raster coordinates. Normal publication updates
+newest JPEG frames first; GAIA_REBUILD_HISTORY=1 deploy/publish-public.sh then
+rebuilds the rolling day without modifying camera/calibration state. Existing PNG
+assets remain valid while a verified JPEG history replacement is transferred.
+
+Validation: 20 real-GPU cases passed at 32px and 1536px output, on half-float
+and portable paths: weighted overlap, mute, tiny weights, station-keyed texture
+lookup and deleted-texture exclusion. Verified 819 published JPEG URLs against
+the database source ID, timestamp and archive path (zero mismatches). First
+100-file JPEG sample averaged 5524 bytes; a live public JPEG returned image/jpeg,
+7075 bytes, 256x222. These are observations, not a claim of constant playback FPS.
+At 06:22 UTC the j-user gaia-jpeg-history.service was rebuilding the rolling day
+with up to 16 workers after delivering a newest-first preview. It holds the
+publication lock; its EXIT trap restarts gaia-publish.timer. Do not start a
+second publisher. Verify completion and timer resumption before claiming the
+whole public day is JPEG. The small juha Google gateway was rebuilt for JPEG MIME
+and restarted; sessions from before that restart require sign-in again.
+
 ## Touch station mute (2026-09-11)
 
 Both viewers share a 550 ms single-finger station hold to toggle browser-only

@@ -246,6 +246,8 @@ async fn asset(
         "application/json"
     } else if path.ends_with(".png") {
         "image/png"
+    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "image/jpeg"
     } else if path.ends_with(".webp") {
         "image/webp"
     } else {

@@ -102,18 +102,18 @@ pub fn assets(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Res
         rusqlite::params![id,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
     let cal_stamp=std::fs::metadata(cal)?.modified()?;
     let geometry_key=format!("{:x}",Sha256::digest(format!("geometry-v3-seasonal-adaptive4-256-100km:{key}:{cal_stamp:?}")));
-    let texture_key=format!("{:x}",Sha256::digest(format!("texture-v1-256:{path}")));
+    let texture_key=format!("{:x}",Sha256::digest(format!("texture-v2-jpeg80-256:{id}:{utc}:{path}")));
     let dir=s.archive_root.join("projection-cache");std::fs::create_dir_all(&dir)?;
-    let geometry=dir.join(format!("{geometry_key}.bin"));let texture=dir.join(format!("{texture_key}.png"));
+    let geometry=dir.join(format!("{geometry_key}.bin"));let texture=dir.join(format!("{texture_key}.jpg"));
     if !geometry.exists(){
         let p=build(s,id,at)?;let bytes=compact_geometry(&p);
         let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));std::fs::write(&tmp,bytes)?;std::fs::rename(tmp,&geometry)?;
     }
     if !texture.exists(){
         let im=image::open(&path)?.thumbnail(256,256).to_rgb8();
-        let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));im.save_with_format(&tmp,image::ImageFormat::Png)?;std::fs::rename(tmp,&texture)?;
+        let tmp=dir.join(format!("{}.tmp",uuid::Uuid::new_v4()));image::codecs::jpeg::JpegEncoder::new_with_quality(std::fs::File::create(&tmp)?,80).encode_image(&im)?;std::fs::rename(tmp,&texture)?;
     }
-    Ok(json!({"source_id":id,"observation_utc":utc,"calibration_id":calibration_id,"geometry_url":format!("/gaia/api/projection-assets/{geometry_key}.bin"),"texture_url":format!("/gaia/api/projection-assets/{texture_key}.png"),"vertex_count":std::fs::metadata(geometry)?.len()/20}))
+    Ok(json!({"source_id":id,"observation_utc":utc,"calibration_id":calibration_id,"geometry_url":format!("/gaia/api/projection-assets/{geometry_key}.bin"),"texture_url":format!("/gaia/api/projection-assets/{texture_key}.jpg"),"vertex_count":std::fs::metadata(geometry)?.len()/20}))
 }
 
 /// One catalogue request replaces per-camera projection queries on every tick.

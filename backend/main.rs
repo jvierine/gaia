@@ -481,7 +481,7 @@ async fn projection_asset(
     };
     if key.len() != 64
         || !key.bytes().all(|b| b.is_ascii_hexdigit())
-        || !matches!(ext, "bin" | "png")
+        || !matches!(ext, "bin" | "png" | "jpg")
     {
         return Err((StatusCode::BAD_REQUEST, "invalid asset".into()));
     }
@@ -494,6 +494,8 @@ async fn projection_asset(
                 header::CONTENT_TYPE,
                 if ext == "png" {
                     "image/png"
+                } else if ext == "jpg" {
+                    "image/jpeg"
                 } else {
                     "application/octet-stream"
                 },

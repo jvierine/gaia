@@ -1,5 +1,36 @@
 # GAIA handoff for j and bgu001
 
+## Authenticated calendar-day archives (2026-09-12)
+
+Public date picker requires a Google session; ordinary signed-in users receive
+open (non-Starvisor) archives, and only allowlisted users receive full archives.
+The Rust /gaia/history/ gateway enforces this selection on EVERY manifest/asset
+request. It never forwards to Revontuli. Anonymous users remain on the rolling
+day, even if a date query is entered manually. Revontuli remains login-free.
+GAIA_PUBLISH_DATE=YYYY-MM-DD builds a midnight-to-midnight UTC day as 120 slots;
+raw files are unchanged and missing/unprojectable observations remain gaps.
+All DB dates are inventoried by deploy/publish-days.cjs, including sparse dates.
+Each day is advertised only after both audience packages have been verified.
+
+juha dated storage is /mnt/shovel/gaia/YYYY-DD-MM/{full,open}/ with assets/ and
+manifest.json. Public URLs retain ISO YYYY-MM-DD; the gateway converts safely.
+/mnt/shovel/gaia/archive-days.json is the verified day list. These folders have
+NO public Apache alias. API and identity integration stays local to juha.no.
+Revontuli serves /gaia/public/days.json and days/YYYY-MM-DD/manifest.json.
+Run publish-days.cjs under .publication.lock, up to 16 cores, never concurrently
+with regular publication. Existing raw/minute data and rolling files are retained.
+New gaia-server and gaia-overview binaries are required for date publication;
+juha's small gateway needs the updated musl binary and history proxy location.
+Deploy ALL code/binaries via the Git release branch, not rsync/scp. Only archive
+data goes by rsync. Gateway restart invalidates old sessions (sign in again).
+
+Eight dates found initially: 2026-04-13, 2026-09-01, 2026-09-02, and September
+8 through 12. The three early dates contain only 2, 5, and 1 stored images;
+raw presence does not imply calibrated coverage. Unit tests cover anonymous
+rejection, ordinary/allowlisted audience separation, unsafe paths, and source
+identity/contact-sheet tile placement. Check gaia-publish-days.service for the
+in-progress all-day deployment before claiming every date has completed.
+
 ## Full-day GPU-buffered overview (2026-09-12)
 
 Final deployed source: 5b893ed; public release branch commit 26e227a.

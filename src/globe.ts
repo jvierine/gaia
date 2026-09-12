@@ -2,7 +2,7 @@ import {shellTextureCoordinates} from './source-map-coordinates';
 import {cameraCompositor} from './camera-compositor';
 import {cameraWeightScale} from './composition-rules';
 import {liveCutoff} from './live-time';
-import {manifestUrl,archiveMode} from './public-manifest';
+import {manifestUrl,archiveMode,canBrowseArchive} from './public-manifest';
 const VERTEX = `
 attribute vec2 position;
 void main(){ gl_Position=vec4(position,0.0,1.0); }
@@ -113,7 +113,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const observationStatus=document.createElement('div');
   observationStatus.style.cssText='position:absolute;left:18px;top:56px;color:#a8c6bf;font:11px monospace;pointer-events:none';
   observationStatus.setAttribute('role','status');canvas.parentElement?.appendChild(observationStatus);
-  const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Full archive';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';if(import.meta.env.VITE_GAIA_PUBLIC!=='1'||manifestUrl.startsWith('/gaia/restricted/'))canvas.parentElement?.appendChild(archiveLink);
+  const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Choose archive day';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';if(canBrowseArchive)canvas.parentElement?.appendChild(archiveLink);
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null;projection?:any;calibrated?:boolean};
   let browserLayers=false,layerManifest:any=null,manifestRefresh:Promise<any>|null=null,manifestFetched=0;
   const compositor=cameraCompositor(gl);

@@ -258,6 +258,29 @@ async fn asset(
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
     Ok(r)
 }
+
+fn archive_date(value:&str)->Option<chrono::NaiveDate>{if value.len()!=10{return None}let d=chrono::NaiveDate::parse_from_str(value,"%Y-%m-%d").ok()?;if d.to_string()!=value{return None}Some(d)}
+async fn history(State(s):State<App>,h:HeaderMap,Path(path):Path<String>)->Result<Response,Error>{
+ let email=identity(&s,&h).await.ok_or_else(denied)?;
+ let base=s.root.parent().and_then(|p|p.parent()).ok_or((StatusCode::INTERNAL_SERVER_ERROR,"Invalid archive root"))?;
+ let (root,file,date)=if path=="days.json"{(base.to_path_buf(),"archive-days.json".to_string(),None)}else{
+  let (day,file)=path.split_once('/').ok_or((StatusCode::NOT_FOUND,"Not found"))?;
+  let date=archive_date(day).ok_or((StatusCode::NOT_FOUND,"Not found"))?;
+  if file!="manifest.json"&&!file.strip_prefix("assets/").is_some_and(|_|safe_path(file)){return Err((StatusCode::NOT_FOUND,"Not found"))}
+  (base.join(date.format("%Y-%d-%m").to_string()).join(if s.allowed.contains(&email){"full"}else{"open"}),file.to_string(),Some(day.to_string()))
+ };
+ let root=tokio::fs::canonicalize(root).await.map_err(|_|(StatusCode::NOT_FOUND,"Not found"))?;
+ let dest=tokio::fs::canonicalize(root.join(&file)).await.map_err(|_|(StatusCode::NOT_FOUND,"Not found"))?;
+ if !dest.starts_with(&root){return Err((StatusCode::NOT_FOUND,"Not found"))}
+ let mut bytes=tokio::fs::read(dest).await.map_err(|_|(StatusCode::NOT_FOUND,"Not found"))?;
+ let mime=if file.ends_with(".json"){
+  let mut value:serde_json::Value=serde_json::from_slice(&bytes).map_err(|_|(StatusCode::SERVICE_UNAVAILABLE,"Invalid archive"))?;
+  fn urls(v:&mut serde_json::Value,day:&str){match v{serde_json::Value::String(s)=>{for prefix in ["/gaia/public/assets/","/gaia/open/assets/"]{if let Some(name)=s.strip_prefix(prefix){*s=format!("/gaia/history/{day}/assets/{name}");break}}},serde_json::Value::Array(a)=>for v in a{urls(v,day)},serde_json::Value::Object(m)=>for v in m.values_mut(){urls(v,day)},_=>()}}
+  if let Some(day)=date{urls(&mut value,&day)}bytes=serde_json::to_vec(&value).unwrap();"application/json"
+ }else if file.ends_with(".jpg"){"image/jpeg"}else if file.ends_with(".png"){"image/png"}else{"application/octet-stream"};
+ let mut response=private(bytes.into_response());response.headers_mut().insert(header::CONTENT_TYPE,HeaderValue::from_static(mime));Ok(response)
+}
+
 fn rewrite(v: &mut serde_json::Value) {
     match v {
         serde_json::Value::String(s) => {
@@ -308,6 +331,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/gaia/auth/google", post(login))
         .route("/gaia/auth/logout", post(logout))
         .route("/gaia/restricted/{*path}", get(asset))
+        .route("/gaia/history/{*path}", get(history))
         .layer(DefaultBodyLimit::max(20000))
         .with_state(s);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:18766").await?;
@@ -343,6 +367,18 @@ mod tests {
         h.insert(header::ORIGIN, HeaderValue::from_static("https://juha.no"));
         assert!(same_origin(&h));
     }
+
+    #[tokio::test]
+    async fn history_requires_login_and_separates_starvisor(){
+      let dir=tempfile::tempdir().unwrap();let root=dir.path().join("serving/public");std::fs::create_dir_all(&root).unwrap();
+      for flavor in ["open","full"]{let p=dir.path().join("2026-11-09").join(flavor);std::fs::create_dir_all(&p).unwrap();std::fs::write(p.join("manifest.json"),serde_json::to_vec(&json!({"flavor":flavor,"image":"/gaia/public/assets/example.jpg"})).unwrap()).unwrap()}
+      let s=App{client_id:"test".into(),allowed:HashSet::from(["allowed@example.test".into()]),root,http:reqwest::Client::new(),sessions:Default::default(),challenges:Default::default(),certs:Default::default()};
+      assert_eq!(history(State(s.clone()),HeaderMap::new(),Path("2026-09-11/manifest.json".into())).await.unwrap_err().0,StatusCode::UNAUTHORIZED);
+      let mut h=HeaderMap::new();h.insert(header::COOKIE,HeaderValue::from_static("__Secure-gaia-session=test"));
+      for (email,expected) in [("ordinary@example.test","open"),("allowed@example.test","full")]{s.sessions.lock().await.insert("test".into(),(Instant::now(),email.into()));let response=history(State(s.clone()),h.clone(),Path("2026-09-11/manifest.json".into())).await.unwrap();let body=axum::body::to_bytes(response.into_body(),10000).await.unwrap();let m:serde_json::Value=serde_json::from_slice(&body).unwrap();assert_eq!(m["flavor"],expected);assert_eq!(m["image"],"/gaia/history/2026-09-11/assets/example.jpg")}
+      for p in ["2026-09-11/../manifest.json","2026-09-11/assets/../../secret","2026-99-99/manifest.json"]{assert!(history(State(s.clone()),h.clone(),Path(p.into())).await.is_err())}
+    }
+
     #[test]
     fn restricted_urls() {
         let mut m = json!({"images":[{"texture_url":"/gaia/public/assets/a.webp"}]});

@@ -204,28 +204,30 @@ pub fn run(s: &AppState) -> Result<()> {
         camera["imagery_restricted"] = json!(restricted.contains(camera["source_id"].as_str().unwrap()));
     }
     let full = std::env::var("GAIA_PUBLISH_ALL").as_deref() == Ok("1");
-    let filename = if full {
-        "archive-manifest.json"
+    let day=std::env::var("GAIA_PUBLISH_DATE").ok().map(|v|chrono::NaiveDate::parse_from_str(&v,"%Y-%m-%d")).transpose()?;
+    let day_start=day.map(|d|d.and_hms_opt(0,0,0).unwrap().and_utc().timestamp());
+    let filename = if let Some(day)=day {format!("day-{day}.json")} else if full {
+        "archive-manifest.json".to_string()
     } else {
-        "manifest.json"
+        "manifest.json".to_string()
     };
     // Never make a live preview wait for an interrupted, not-yet-delivered
     // historical publication. Retain only the last verified public snapshot.
     let previous: Value = std::fs::read(root.join(if full {
-        filename
+        filename.as_str()
     } else {
         "verified-manifest.json"
     }))
     .ok()
     .and_then(|b| serde_json::from_slice(&b).ok())
     .unwrap_or(Value::Null);
-    let end = Utc::now().timestamp() / 60 * 60;
+    let end = day_start.map(|t|t+86400-1).unwrap_or_else(||Utc::now().timestamp() / 60 * 60);
     let lookback = std::env::var("GAIA_PUBLISH_LOOKBACK_SECONDS")
         .ok()
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(86400)
         .clamp(60, 86400);
-    let start = if full { 0 } else { end - lookback };
+    let start = day_start.unwrap_or_else(||if full { 0 } else { end - lookback });
     let next = std::sync::atomic::AtomicUsize::new(0);
     let workers = std::env::var("GAIA_PREPROCESS_WORKERS")
         .ok()
@@ -242,12 +244,13 @@ pub fn run(s: &AppState) -> Result<()> {
             if anonymous && restricted.contains(&id) {out.push(camera);continue;}
             let (Some(lat),Some(lon),Some(true))=(camera["latitude_deg"].as_f64(),camera["longitude_deg"].as_f64(),camera["calibrated"].as_bool())else{out.push(camera);continue};
             let mut query=conn.prepare("SELECT MAX(observation_utc) FROM images WHERE source_id=?1 AND CAST(strftime('%s',observation_utc) AS INTEGER)>=?2 AND CAST(strftime('%s',observation_utc) AS INTEGER)<=?3 GROUP BY CAST(strftime('%s',observation_utc) AS INTEGER)/60 ORDER BY MAX(observation_utc) DESC")?;
-            let times=query.query_map(rusqlite::params![id,start-600,end],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;let mut images=vec![];
+            let mut times=query.query_map(rusqlite::params![id,start-600,end],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;let mut images=vec![];
+            if let Some(start)=day_start {let selected:BTreeSet<String>=(0..120).filter_map(|i|{let slot=start+i*720;times.iter().find(|t|chrono::DateTime::parse_from_rfc3339(t).ok().is_some_and(|t|{let t=t.timestamp();t<=slot&&slot-t<=600})).cloned()}).collect();times.retain(|t|selected.contains(t));}
             for time in times{let at=chrono::DateTime::parse_from_rfc3339(&time)?.with_timezone(&Utc);match projection::assets(s,&id,Some(at)){Ok(a)=>{
                 let (mesh,count)=weighted_mesh(s,&id,&a,lat,lon,camera["altitude_m"].as_f64().unwrap_or(0.),&assets,&rules)?;let texture=a["texture_url"].as_str().unwrap().rsplit('/').next().unwrap();copy(&s.archive_root.join("projection-cache").join(texture),&assets.join(texture))?;
                 images.push(json!({"source_id":id,"at":a["observation_utc"],"geometry_url":format!("/gaia/{audience}/assets/{mesh}"),"texture_url":format!("/gaia/{audience}/assets/{texture}"),"vertex_count":count,"calibration_id":a["calibration_id"]}));
             },Err(e)=>tracing::debug!(%id,%time,%e,"No calibrated projection")}}
-            if !full&&lookback<86400&&previous["composition"]=="browser-layers-v1"{if let Some(old)=previous["cameras"].as_array().and_then(|cs|cs.iter().find(|c|c["source_id"]==id)).and_then(|c|c["projection"]["images"].as_array()){for f in old{if let Some(t)=f["at"].as_str().and_then(|s|chrono::DateTime::parse_from_rfc3339(s).ok()){if t.timestamp()>=end-86400&&t.timestamp()<start-600{images.push(f.clone())}}}}}
+            if day.is_none()&&!full&&lookback<86400&&previous["composition"]=="browser-layers-v1"{if let Some(old)=previous["cameras"].as_array().and_then(|cs|cs.iter().find(|c|c["source_id"]==id)).and_then(|c|c["projection"]["images"].as_array()){for f in old{if let Some(t)=f["at"].as_str().and_then(|s|chrono::DateTime::parse_from_rfc3339(s).ok()){if t.timestamp()>=end-86400&&t.timestamp()<start-600{images.push(f.clone())}}}}}
             for frame in &mut images {frame["source_id"]=json!(id);}
             images.sort_by(|a,b|a["at"].as_str().cmp(&b["at"].as_str()));images.dedup_by(|a,b|a["at"]==b["at"]);
             camera["projection"]=json!({"stride":24,"images":images});out.push(camera);
@@ -278,9 +281,10 @@ pub fn run(s: &AppState) -> Result<()> {
         }
     }
     anyhow::ensure!(
-        !epochs.is_empty(),
+        !epochs.is_empty()||day.is_some(),
         "No camera layers available; retaining previous manifest"
     );
+    if let Some(start)=day_start {epochs=(0..120).map(|i|start+i*720).collect();}
     let images: Vec<Value> = epochs
         .into_iter()
         .map(|t| json!({"at":Utc.timestamp_opt(t,0).unwrap().to_rfc3339(),"contributors":[]}))
@@ -318,7 +322,7 @@ pub fn run(s: &AppState) -> Result<()> {
         &assets.join(&igrf),
     )
     .or_else(|_| atomic(&assets.join(&igrf), &s.igrf))?;
-    let manifest = json!({"composition":"browser-layers-v1","generated_utc":Utc::now().to_rfc3339(),"audience":if anonymous{"anonymous-no-starvisor"}else{"full"},"cameras":cameras,"images":images,"lens_models":lenses,"igrf_url":format!("/gaia/{audience}/assets/{igrf}"),"stitching":{"location":"browser WebGL","model":"IGRF-14 magnetic-axis Laplacian blend","rules":rules,"weight":"exp(-abs(theta_B)/S) * zenith_taper * mask_edge_fade * solar_taper * 2^quality_exponent","normalization":"sum(weight * RGB) / sum(weight); omit nonpositive weights","solar_time":"selected composition epoch, not camera acquisition epoch","altitude_km":100,"maximum_camera_texture_dimension":256,"geometry_stride_bytes":24}});
+    let manifest = json!({"composition":"browser-layers-v1","date":day.map(|d|d.to_string()),"generated_utc":Utc::now().to_rfc3339(),"audience":if anonymous{"anonymous-no-starvisor"}else{"full"},"cameras":cameras,"images":images,"lens_models":lenses,"igrf_url":format!("/gaia/{audience}/assets/{igrf}"),"stitching":{"location":"browser WebGL","model":"IGRF-14 magnetic-axis Laplacian blend","rules":rules,"weight":"exp(-abs(theta_B)/S) * zenith_taper * mask_edge_fade * solar_taper * 2^quality_exponent","normalization":"sum(weight * RGB) / sum(weight); omit nonpositive weights","solar_time":"selected composition epoch, not camera acquisition epoch","altitude_km":100,"maximum_camera_texture_dimension":256,"geometry_stride_bytes":24}});
     atomic(&root.join(filename), &serde_json::to_vec(&manifest)?)?;
     tracing::info!(
         workers,

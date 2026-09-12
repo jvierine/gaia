@@ -351,7 +351,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           if(frame.source_map_url)await loadAttribution(frame.source_map_url);
           const camera=snapshot?.cameras?.find((c:PublicCamera)=>c.source_id===s.id);
           const weightScale=browserLayers&&camera&&snapshot?.stitching?.rules?cameraWeightScale(camera,epoch,snapshot.stitching.rules):asset.weight_scale;
-          if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,order:s.order,sourceMapUrl:frame.source_map_url,at:frame.at,sourceId:s.id,weightScale});
+          if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,order:s.order,sourceMapUrl:frame.source_map_url,at:(frame as any).observation_at||frame.at,sourceId:s.id,weightScale});
         }catch(e){if(!request.signal.aborted){state.failed++;console.error(`Projection ${s.name}`,e)}}
         finally{state.done++;if(!request.signal.aborted)emitProgress(progressMinute)}
       }}));
@@ -368,9 +368,9 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       // Never delete those objects: binding a deleted texture can leave the
       // preceding camera's binding active and display that camera's image.
       if(activeLoads===0&&Date.now()-lastPrune>5000){lastPrune=Date.now();
-        const protectedFrames=[...frames,...[...ready.values()].flat()];
-        for(const [key,t] of textureCache){if(textureCache.size<=(browserLayers?(mobilePublic?384:768):96))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
-        for(const [key,g] of geometryCache){if(geometryCache.size<=256)break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
+        const protectedFrames=[...frames,...[...ready.values()].flat()],protectedTextures=new Set(protectedFrames.map(f=>f.texture)),protectedGeometry=new Set(protectedFrames.map(f=>f.geometry));
+        for(const [key,t] of textureCache){if(textureCache.size<=(browserLayers?(mobilePublic?384:768):96))break;if(!protectedTextures.has(t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
+        for(const [key,g] of geometryCache){if(geometryCache.size<=256)break;if(!protectedGeometry.has(g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
       }
       const requestedEpoch=getEpochMillis(),epoch=overviewActive&&overviewComplete?overview.images.map((f:any)=>Date.parse(f.at)).reduce((a:number,b:number)=>Math.abs(a-requestedEpoch)<Math.abs(b-requestedEpoch)?a:b):requestedEpoch,minute=Math.floor(epoch/60000),refresh=!overviewActive&&Date.now()-lastRefresh>=30000;
       if(minute===lastMinute&&!refresh)return;
@@ -383,7 +383,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
       const next=await prepare(epoch);
       if(selection===ticket&&Math.floor(getEpochMillis()/60000)===Math.floor(requestedEpoch/60000)&&!abort.signal.aborted){
         if(epoch<displayEpoch||(!overviewActive&&Math.abs(epoch-displayEpoch)>600000)){clearSmooth();displayEpoch=epoch}
-        if(next.length||Math.abs(liveCutoff()-epoch)>=120000)frames=next;
+        if(overviewActive||next.length||Math.abs(liveCutoff()-epoch)>=120000)frames=next;
         canvas.dataset.selectedEpoch=String(minute*60000);
         canvas.dataset.cameraOrderUnique=String(new Set(frames.map(f=>f.order)).size===frames.length);
         const shownAt=frames[0]?.at;

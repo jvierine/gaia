@@ -245,9 +245,10 @@ pub fn run(s: &AppState) -> Result<()> {
             let times=query.query_map(rusqlite::params![id,start-600,end],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;let mut images=vec![];
             for time in times{let at=chrono::DateTime::parse_from_rfc3339(&time)?.with_timezone(&Utc);match projection::assets(s,&id,Some(at)){Ok(a)=>{
                 let (mesh,count)=weighted_mesh(s,&id,&a,lat,lon,camera["altitude_m"].as_f64().unwrap_or(0.),&assets,&rules)?;let texture=a["texture_url"].as_str().unwrap().rsplit('/').next().unwrap();copy(&s.archive_root.join("projection-cache").join(texture),&assets.join(texture))?;
-                images.push(json!({"at":a["observation_utc"],"geometry_url":format!("/gaia/{audience}/assets/{mesh}"),"texture_url":format!("/gaia/{audience}/assets/{texture}"),"vertex_count":count,"calibration_id":a["calibration_id"]}));
+                images.push(json!({"source_id":id,"at":a["observation_utc"],"geometry_url":format!("/gaia/{audience}/assets/{mesh}"),"texture_url":format!("/gaia/{audience}/assets/{texture}"),"vertex_count":count,"calibration_id":a["calibration_id"]}));
             },Err(e)=>tracing::debug!(%id,%time,%e,"No calibrated projection")}}
             if !full&&lookback<86400&&previous["composition"]=="browser-layers-v1"{if let Some(old)=previous["cameras"].as_array().and_then(|cs|cs.iter().find(|c|c["source_id"]==id)).and_then(|c|c["projection"]["images"].as_array()){for f in old{if let Some(t)=f["at"].as_str().and_then(|s|chrono::DateTime::parse_from_rfc3339(s).ok()){if t.timestamp()>=end-86400&&t.timestamp()<start-600{images.push(f.clone())}}}}}
+            for frame in &mut images {frame["source_id"]=json!(id);}
             images.sort_by(|a,b|a["at"].as_str().cmp(&b["at"].as_str()));images.dedup_by(|a,b|a["at"]==b["at"]);
             camera["projection"]=json!({"stride":24,"images":images});out.push(camera);
         }Ok(out)

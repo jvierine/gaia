@@ -28,6 +28,7 @@ completed=$(sqlite3 -cmd '.timeout 10000' "$GAIA_DB_PATH" 'SELECT completed FROM
 stages=1200
 if test "$manifest_name" = archive-manifest.json; then stages=86400; fi
 if test "$manifest_name" = manifest.json && test "$revision" != "$completed"; then stages='1200 86400'; fi
+if test "${GAIA_REBUILD_HISTORY:-0}" = 1; then stages='1200 86400'; fi
 snapshot=$(mktemp -d /mnt/data/juha/gaia/.publication.XXXXXX)
 render_pid=''
 trap 'if test -n "$render_pid"; then wait "$render_pid" || true; fi; rm -f "$snapshot/manifest.json" "$snapshot/assets.txt"; rmdir "$snapshot"' EXIT

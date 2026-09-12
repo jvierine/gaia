@@ -244,7 +244,7 @@ uniform sampler2D previous;uniform sampler2D target;uniform vec2 size;uniform fl
 void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv),texture2D(target,uv),amount);}`);
   const smoothFramebuffer=gl.createFramebuffer();
   type SmoothState={textures:[WebGLTexture,WebGLTexture];index:number;target:WebGLTexture;geometry:Geometry;changed:number;initialized:boolean;size:[number,number]};
-  const smoothStates=new Map<number,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
+  const smoothStates=new Map<string,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
   let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number}[]=[];
   const layers:{buffer:WebGLBuffer;count:number}[]=[];
@@ -266,11 +266,11 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}
     addLayer(sites);
     if(!publicOnly)cameraSites=sources.filter(s=>s.enabled&&s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{source_id:s.id,label:`Camera: ${s.name}\nOperator: ${s.producer}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
-    let lastMinute=-1,lastRefresh=0,selection=0;
+    let lastMinute=-1,lastRefresh=0,selection=0,activeLoads=0,lastPrune=0;
     const cameraOrders=new Map<string,number>();
     const cameraOrder=(id:string)=>{if(!cameraOrders.has(id))cameraOrders.set(id,cameraOrders.size);return cameraOrders.get(id)!};
     type Asset={geometry_url:string;texture_url:string;vertex_count:number;weight_scale?:number};
-    type Catalogue=Asset&{width:number;height:number;images:{at:string;width:number;height:number;texture_url:string;source_map_url?:string;geometry_url?:string;vertex_count?:number;weight_scale?:number}[]};
+    type Catalogue=Asset&{width:number;height:number;images:{source_id?:string;at:string;width:number;height:number;texture_url:string;source_map_url?:string;geometry_url?:string;vertex_count?:number;weight_scale?:number}[]};
     const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
     const catalogue=(id:string)=>{
       let c=catalogues.get(id);if(!c||c.expires<Date.now()){
@@ -283,6 +283,8 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const sharedDownload=<T,>(cache:Map<string,Promise<T>>,url:string,load:()=>Promise<T>)=>{let p=cache.get(url);if(!p){p=load().finally(()=>cache.delete(url));cache.set(url,p)}return p};
     abort.signal.addEventListener('abort',()=>{for(const c of requests.values())c.abort()},{once:true});
     const loadFrames=async(epoch:number,request:AbortController)=>{
+      activeLoads++;
+      try {
       const nextFrames:typeof frames=[];
       const snapshot=browserLayers?await published():null;
       const selectedSources=snapshot?snapshot.cameras.filter((c:PublicCamera)=>c.projection).map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:true,enabled:true})):sources;
@@ -298,6 +300,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           // Historical playback still preserves real observation gaps.
           const live=publicOnly&&Math.abs(liveCutoff()-epoch)<120000;
           if(!frame||((browserLayers||!live)&&epoch-Date.parse(frame.at)>600000))continue;
+          if(frame.source_id&&frame.source_id!==s.id)throw Error('Rejected frame belonging to another station');
           let asset:Asset={...cat,...frame,texture_url:frame.texture_url} as Asset;
           if(!browserLayers&&(frame.width!==cat.width||frame.height!==cat.height)){
             const r=await fetch(`/gaia/api/sources/${encodeURIComponent(s.id)}/projection?format=assets&at=${encodeURIComponent(at)}`,{cache:'no-store',signal:request.signal});
@@ -330,16 +333,25 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           if(frame.source_map_url)await loadAttribution(frame.source_map_url);
           const camera=snapshot?.cameras?.find((c:PublicCamera)=>c.source_id===s.id);
           const weightScale=browserLayers&&camera&&snapshot?.stitching?.rules?cameraWeightScale(camera,epoch,snapshot.stitching.rules):asset.weight_scale;
-          if(geometry&&texture)nextFrames.push({geometry,texture,order:s.order,sourceMapUrl:frame.source_map_url,at:frame.at,sourceId:s.id,weightScale});
+          if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,order:s.order,sourceMapUrl:frame.source_map_url,at:frame.at,sourceId:s.id,weightScale});
         }catch(e){if(!request.signal.aborted)console.error(`Projection ${s.name}`,e)}
       }}));
       return nextFrames.sort((a,b)=>a.order-b.order);
+      } finally {activeLoads--}
     };
     const prepare=(epoch:number)=>{
       const minute=Math.floor(epoch/60000);let p=pending.get(minute);
       if(!p){const request=new AbortController();requests.set(minute,request);p=loadFrames(minute*60000,request).then(result=>{if(!request.signal.aborted&&requests.get(minute)===request)ready.set(minute,result);return result}).catch(e=>{if(!request.signal.aborted)console.warn('Frame preparation failed',e);if(requests.get(minute)===request){pending.delete(minute);ready.delete(minute)}return []});pending.set(minute,p)}return p;
     };
     const updateFrames=async()=>{
+      // In-flight loads hold local GPU references across asynchronous decode.
+      // Never delete those objects: binding a deleted texture can leave the
+      // preceding camera's binding active and display that camera's image.
+      if(activeLoads===0&&Date.now()-lastPrune>5000){lastPrune=Date.now();
+        const protectedFrames=[...frames,...[...ready.values()].flat()];
+        for(const [key,t] of textureCache){if(textureCache.size<=(browserLayers?(mobilePublic?384:768):96))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
+        for(const [key,g] of geometryCache){if(geometryCache.size<=256)break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
+      }
       const epoch=getEpochMillis(),minute=Math.floor(epoch/60000),refresh=Date.now()-lastRefresh>=30000;
       if(minute===lastMinute&&!refresh)return;
       if(refresh){lastRefresh=Date.now();catalogues.clear();if(minute===lastMinute){requests.get(minute)?.abort();requests.delete(minute);pending.delete(minute);ready.delete(minute)}}
@@ -358,10 +370,6 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         const sourceMapUrl=frames[0]?.sourceMapUrl;if(sourceMapUrl)void loadAttribution(sourceMapUrl).then(value=>{if(frames[0]?.sourceMapUrl===value.url)attribution=value}).catch(console.warn);else attribution=null;
         // Decode ahead without destroying the buffer on every catalogue refresh.
         if(epoch<Date.now()-540000)for(let i=1;i<=8;i++)void prepare(epoch+i*60000);
-        const protectedFrames=[...frames,...[...ready.values()].flat()];
-        // Keep a bounded GPU cache; HTTP caching retains older frame assets.
-        for(const [key,t] of textureCache){if(textureCache.size<=(browserLayers?(mobilePublic?160:320):(mobilePublic?3:publicOnly?6:96)))break;if(!protectedFrames.some(f=>f.texture===t)){gl.deleteTexture(t);textureSizes.delete(t);textureCache.delete(key)}}
-        for(const [key,g] of geometryCache){if(geometryCache.size<=(browserLayers?128:32))break;if(!protectedFrames.some(f=>f.geometry===g)){gl.deleteBuffer(g.buffer);geometryCache.delete(key)}}
         onLoading(false);
       }
     };
@@ -373,26 +381,27 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const depthTest=gl.isEnabled(gl.DEPTH_TEST),blend=gl.isEnabled(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);
     const now=performance.now(),dt=Math.min(100,now-lastSmoothTime);lastSmoothTime=now;
-    const amount=1-Math.exp(-dt/65),displayTextures=new Map<number,WebGLTexture>();
-    for(const [order,s] of smoothStates)if(!frames.some(f=>f.order===order)){for(const t of s.textures)gl.deleteTexture(t);smoothStates.delete(order)}
+    const amount=1-Math.exp(-dt/65),displayTextures=new Map<string,WebGLTexture>();
+    const stationKey=(frame:typeof frames[number])=>frame.sourceId??String(frame.order);
+    for(const [key,s] of smoothStates)if(!frames.some(f=>stationKey(f)===key)){for(const t of s.textures)gl.deleteTexture(t);smoothStates.delete(key)}
     resetAttributes();gl.useProgram(smoothProgram);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
     const a=gl.getAttribLocation(smoothProgram,'position');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
     gl.uniform1i(gl.getUniformLocation(smoothProgram,'previous'),0);gl.uniform1i(gl.getUniformLocation(smoothProgram,'target'),1);
     for(const frame of frames){
-      const size=textureSizes.get(frame.texture);if(!size){displayTextures.set(frame.order,frame.texture);continue}
-      let state=smoothStates.get(frame.order);
-      if(state&&(state.geometry!==frame.geometry||state.size[0]!==size[0]||state.size[1]!==size[1])){for(const t of state.textures)gl.deleteTexture(t);smoothStates.delete(frame.order);state=undefined}
+      const size=textureSizes.get(frame.texture);if(!size){displayTextures.set(stationKey(frame),frame.texture);continue}
+      let state=smoothStates.get(stationKey(frame));
+      if(state&&(state.geometry!==frame.geometry||state.size[0]!==size[0]||state.size[1]!==size[1])){for(const t of state.textures)gl.deleteTexture(t);smoothStates.delete(stationKey(frame));state=undefined}
       if(!state){
         const textures=[0,1].map(()=>{const t=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size[0],size[1],0,gl.RGBA,gl.UNSIGNED_BYTE,null);return t}) as [WebGLTexture,WebGLTexture];
-        state={textures,index:0,target:frame.texture,geometry:frame.geometry,changed:now,initialized:false,size};smoothStates.set(frame.order,state);
+        state={textures,index:0,target:frame.texture,geometry:frame.geometry,changed:now,initialized:false,size};smoothStates.set(stationKey(frame),state);
       }
       if(state.target!==frame.texture){state.target=frame.texture;state.changed=now}
-      if(state.initialized&&now-state.changed>600){displayTextures.set(frame.order,frame.texture);continue}
+      if(state.initialized&&now-state.changed>600){displayTextures.set(stationKey(frame),frame.texture);continue}
       const next=1-state.index;
       gl.bindFramebuffer(gl.FRAMEBUFFER,smoothFramebuffer);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,state.textures[next],0);gl.viewport(0,0,...size);
       gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,state.textures[state.index]);gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,frame.texture);
       gl.uniform2f(gl.getUniformLocation(smoothProgram,'size'),...size);gl.uniform1f(gl.getUniformLocation(smoothProgram,'amount'),!state.initialized||now-state.changed>500?1:amount);gl.drawArrays(gl.TRIANGLES,0,3);
-      state.initialized=true;state.index=next;displayTextures.set(frame.order,state.textures[next]);
+      state.initialized=true;state.index=next;displayTextures.set(stationKey(frame),state.textures[next]);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);
     resetAttributes();gl.useProgram(imageProgram);
@@ -409,7 +418,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     gl.disableVertexAttribArray(rgbAttr);gl.enableVertexAttribArray(worldAttr);gl.enableVertexAttribArray(uvAttr);
     if(browserLayers){canvas.dataset.composition=compositor.draw(w,h,yaw,pitch,zoom,frames,displayTextures,mutedSources);canvas.dataset.cameraLayers=String(frames.length);canvas.dataset.muteApplied=String(mutedSources.size>0);resetAttributes();gl.useProgram(imageProgram);gl.activeTexture(gl.TEXTURE0);gl.enableVertexAttribArray(worldAttr);}
     if(publicOnly&&!browserLayers){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);}
-    for(const frame of browserLayers?[]:frames){const applyMute=mutedSources.size>0&&attribution?.url===frame.sourceMapUrl;gl.uniform1i(gl.getUniformLocation(imageProgram,'applyMute'),applyMute?1:0);canvas.dataset.muteApplied=String(applyMute);gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(frame.order)||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
+    for(const frame of browserLayers?[]:frames){const applyMute=mutedSources.size>0&&attribution?.url===frame.sourceMapUrl;gl.uniform1i(gl.getUniformLocation(imageProgram,'applyMute'),applyMute?1:0);canvas.dataset.muteApplied=String(applyMute);gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(stationKey(frame))||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
     if(publicOnly)gl.disable(gl.BLEND);
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),0);gl.disableVertexAttribArray(uvAttr);
     for(const layer of layers){

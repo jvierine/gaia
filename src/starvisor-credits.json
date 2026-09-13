@@ -1,0 +1,554 @@
+[
+  {
+    "source_id": "starvisor-alkeevskiy",
+    "camera": "Alkeevskiy",
+    "page_url": "https://starvisor.net/vkl/",
+    "credit": "Camera was installed by Dmitry Gerasimov",
+    "links": [
+      {
+        "name": "Dmitry Gerasimov",
+        "url": "https://vk.com/dima_gerasimov_2021"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:42.257Z"
+  },
+  {
+    "source_id": "starvisor-almetyevsk",
+    "camera": "Almetyevsk",
+    "page_url": "https://starvisor.net/alme/",
+    "credit": "Camera was installed by Sergey Nagornov (RA4PTJ)",
+    "links": [
+      {
+        "name": "Sergey Nagornov (RA4PTJ)",
+        "url": "https://vk.com/ra4ptj"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:43.561Z"
+  },
+  {
+    "source_id": "starvisor-aykhal",
+    "camera": "Aykhal",
+    "page_url": "https://starvisor.net/aykh/",
+    "credit": "Camera was installed by Denis Saperov",
+    "links": [
+      {
+        "name": "Denis Saperov",
+        "url": "https://vk.com/djalligator"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:44.715Z"
+  },
+  {
+    "source_id": "starvisor-azevo",
+    "camera": "Azevo",
+    "page_url": "https://starvisor.net/azevo/",
+    "credit": "Camera was installed by Ilsur Abdullin",
+    "links": [
+      {
+        "name": "Ilsur Abdullin",
+        "url": "https://vk.com/azevo_spotter"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:45.908Z"
+  },
+  {
+    "source_id": "starvisor-bagdarin",
+    "camera": "Bagdarin",
+    "page_url": "https://starvisor.net/bagd/",
+    "credit": "Camera was installed by Denis Maksimov",
+    "links": [
+      {
+        "name": "Denis Maksimov",
+        "url": "https://vk.com/id1023256"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:47.115Z"
+  },
+  {
+    "source_id": "starvisor-berezniki",
+    "camera": "Berezniki",
+    "page_url": "https://starvisor.net/bere/",
+    "credit": "Camera was installed by Roman Zemenyuk",
+    "links": [
+      {
+        "name": "Roman Zemenyuk",
+        "url": "https://vk.com/id180818012"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:48.274Z"
+  },
+  {
+    "source_id": "starvisor-chelyabinsk",
+    "camera": "Chelyabinsk",
+    "page_url": "https://starvisor.net/chel/",
+    "credit": "Camera was installed by Dmitry Moskin",
+    "links": [
+      {
+        "name": "Dmitry Moskin",
+        "url": "https://vk.com/darkbyte"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:49.526Z"
+  },
+  {
+    "source_id": "starvisor-gulkevichi",
+    "camera": "Gulkevichi",
+    "page_url": "https://starvisor.net/gulk/",
+    "credit": "Camera was installed by Denis Zinoviev",
+    "links": [
+      {
+        "name": "Denis Zinoviev",
+        "url": "https://vk.com/id92501022"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:50.693Z"
+  },
+  {
+    "source_id": "starvisor-irbit",
+    "camera": "Irbit",
+    "page_url": "https://starvisor.net/irb1/",
+    "credit": "Camera was installed by Project STARVISOR | Night Sky Patrol",
+    "links": [
+      {
+        "name": "Project STARVISOR | Night Sky Patrol",
+        "url": "https://starvisor.net/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:51.924Z"
+  },
+  {
+    "source_id": "starvisor-kaliningrad",
+    "camera": "Kaliningrad",
+    "page_url": "https://starvisor.net/klng/",
+    "credit": "Camera was installed by Kaliningrad Magnetic and Ionospheric Observatory of the Pushkov Institute of Terrestrial Magnetism, Ionosphere and Radiowave Propagation of the Russian Academy of Sciences (IZMIRAN)",
+    "links": [
+      {
+        "name": "Kaliningrad Magnetic and Ionospheric Observatory of the Pushkov Institute of Terrestrial Magnetism, Ionosphere and Radiowave Propagation of the Russian Academy of Sciences (IZMIRAN)",
+        "url": "https://izmiran.ru/index.shtml?LANG=en"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:53.115Z"
+  },
+  {
+    "source_id": "starvisor-kaluga",
+    "camera": "Kaluga",
+    "page_url": "https://starvisor.net/klga/",
+    "credit": "Camera was installed by Oleg Ugolnikov",
+    "links": [
+      {
+        "name": "Oleg Ugolnikov",
+        "url": "https://vk.com/id1119513"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:54.275Z"
+  },
+  {
+    "source_id": "starvisor-kamensk-uralsky",
+    "camera": "Kamensk-Uralsky",
+    "page_url": "https://starvisor.net/kmur/",
+    "credit": "Camera was installed by Vadim Lymar",
+    "links": [
+      {
+        "name": "Vadim Lymar",
+        "url": "https://vk.com/id275460049"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:55.426Z"
+  },
+  {
+    "source_id": "starvisor-klin",
+    "camera": "Klin",
+    "page_url": "https://starvisor.net/zkh/",
+    "credit": "Camera was installed by Artyom Maslov",
+    "links": [
+      {
+        "name": "Artyom Maslov",
+        "url": "https://vk.com/rn3ajk"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:56.577Z"
+  },
+  {
+    "source_id": "starvisor-krasnodar",
+    "camera": "Krasnodar",
+    "page_url": "https://starvisor.net/novo/",
+    "credit": "Camera was installed by Konstantin Kuznetsov",
+    "links": [
+      {
+        "name": "Konstantin Kuznetsov",
+        "url": "https://vk.com/id94195563"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:57.872Z"
+  },
+  {
+    "source_id": "starvisor-lebedevka",
+    "camera": "Lebedevka",
+    "page_url": "https://starvisor.net/leb/",
+    "credit": "Camera was installed by Project STARVISOR | Night Sky Patrol",
+    "links": [
+      {
+        "name": "Project STARVISOR | Night Sky Patrol",
+        "url": "https://starvisor.net/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:13:59.012Z"
+  },
+  {
+    "source_id": "starvisor-moscow",
+    "camera": "Moscow",
+    "page_url": "https://starvisor.net/moscow/",
+    "credit": "Camera was installed by Scientific Travel Club \"Astrovert\"",
+    "links": [
+      {
+        "name": "Scientific Travel Club \"Astrovert\"",
+        "url": "https://astrovert.ru/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:00.215Z"
+  },
+  {
+    "source_id": "starvisor-murmansk",
+    "camera": "Murmansk",
+    "page_url": "https://starvisor.net/mrm/",
+    "credit": "Camera was installed by Maxim Letovaltsev",
+    "links": [
+      {
+        "name": "Maxim Letovaltsev",
+        "url": "https://vk.com/maxletovatsev"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:01.399Z"
+  },
+  {
+    "source_id": "starvisor-nu-rnberg",
+    "camera": "Nürnberg",
+    "page_url": "https://starvisor.net/nrn/",
+    "credit": "Camera was installed by Nürnberg SKY project",
+    "links": [
+      {
+        "name": "Nürnberg SKY",
+        "url": "https://xsxx.ru/557/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:02.809Z"
+  },
+  {
+    "source_id": "starvisor-ostrolensky",
+    "camera": "Ostrolensky",
+    "page_url": "https://starvisor.net/ostr/",
+    "credit": "Camera was installed by Denis Saperov",
+    "links": [
+      {
+        "name": "Denis Saperov",
+        "url": "https://vk.com/djalligator"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:03.938Z"
+  },
+  {
+    "source_id": "starvisor-perm",
+    "camera": "Perm",
+    "page_url": "https://starvisor.net/perm/",
+    "credit": "Camera was installed by Arthur Shmakov",
+    "links": [
+      {
+        "name": "Arthur Shmakov",
+        "url": "https://vk.com/shmakov_arthur"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:05.033Z"
+  },
+  {
+    "source_id": "starvisor-popovo",
+    "camera": "Popovo",
+    "page_url": "https://starvisor.net/pop/",
+    "credit": "Camera was installed by Anatoliy Morozov",
+    "links": [
+      {
+        "name": "Anatoliy Morozov",
+        "url": "https://vk.com/anatoliimorozov"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:06.112Z"
+  },
+  {
+    "source_id": "starvisor-provideniya",
+    "camera": "Provideniya",
+    "page_url": "https://starvisor.net/pro/",
+    "credit": "Camera was installed by Anton Balatskiy and Astronomy Club \"Chukotskiye Nablyudateli",
+    "links": [
+      {
+        "name": "Anton Balatskiy",
+        "url": "https://vk.com/id345174675"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:07.336Z"
+  },
+  {
+    "source_id": "starvisor-pyatireche",
+    "camera": "Pyatireche",
+    "page_url": "https://starvisor.net/pya/",
+    "credit": "Camera was installed by GoAurora community",
+    "links": [
+      {
+        "name": "GoAurora",
+        "url": "https://t.me/AuroraSaintP"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:08.517Z"
+  },
+  {
+    "source_id": "starvisor-russkoye",
+    "camera": "Russkoye",
+    "page_url": "https://starvisor.net/russ/",
+    "credit": "Camera was installed by Sergey Tarantsov",
+    "links": [
+      {
+        "name": "Sergey Tarantsov",
+        "url": "https://vk.com/sergey_tarantsov"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:09.628Z"
+  },
+  {
+    "source_id": "starvisor-ryazan",
+    "camera": "Ryazan",
+    "page_url": "https://starvisor.net/ryaz/",
+    "credit": "Camera was installed by Natalia Andrievskaya and \"Rznastro\"",
+    "links": [
+      {
+        "name": "Natalia Andrievskaya",
+        "url": "https://vk.com/ptax13"
+      },
+      {
+        "name": "\"Rznastro\"",
+        "url": "https://vk.com/rznastro"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:10.783Z"
+  },
+  {
+    "source_id": "starvisor-shchuchyn",
+    "camera": "Shchuchyn",
+    "page_url": "https://starvisor.net/shch/",
+    "credit": "Camera was installed by Dmitry Nikiforov",
+    "links": [
+      {
+        "name": "Dmitry Nikiforov",
+        "url": "https://vk.ru/neman1les2"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:11.996Z"
+  },
+  {
+    "source_id": "starvisor-solovetsky",
+    "camera": "Solovetsky",
+    "page_url": "https://starvisor.net/sln/",
+    "credit": "The camera was installed by technical specialist Maxim Kravnikov and \"Moscow Meridian\" project coordinator Natalya Kozlova at the Solovetsky Secondary School .",
+    "links": [
+      {
+        "name": "Solovetsky Secondary School",
+        "url": "http://solovkischool.ru/index.php"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:13.296Z"
+  },
+  {
+    "source_id": "starvisor-st-petersburg",
+    "camera": "St.Petersburg",
+    "page_url": "https://starvisor.net/stpbd/",
+    "credit": "Camera was installed by Damir Yalyshev and \"Aurora hunters\" community",
+    "links": [
+      {
+        "name": "Damir Yalyshev",
+        "url": "https://vk.com/damirlano"
+      },
+      {
+        "name": "\"Aurora hunters\"",
+        "url": "https://vk.com/aurora_hunters"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:14.580Z"
+  },
+  {
+    "source_id": "starvisor-strezhevoy",
+    "camera": "Strezhevoy",
+    "page_url": "https://starvisor.net/strz/",
+    "credit": "Camera was installed by \"Aurora hunters\" and \"Strezhevoy Northern Lights Shop\"",
+    "links": [
+      {
+        "name": "\"Aurora hunters\"",
+        "url": "https://vk.com/aurora_hunters"
+      },
+      {
+        "name": "\"Strezhevoy Northern Lights Shop\"",
+        "url": "https://t.me/aurora_hunter_strezhi"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:15.817Z"
+  },
+  {
+    "source_id": "starvisor-the-coastal-fort-reef",
+    "camera": "The Coastal Fort «Reef»",
+    "page_url": "https://starvisor.net/reef/",
+    "credit": "Camera was installed by GoAurora community with the assistance of The Coastal Fort «Reef»",
+    "links": [
+      {
+        "name": "GoAurora",
+        "url": "https://t.me/AuroraSaintP"
+      },
+      {
+        "name": "The Coastal Fort «Reef»",
+        "url": "https://fortreef.ru/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:16.978Z"
+  },
+  {
+    "source_id": "starvisor-tula",
+    "camera": "Tula",
+    "page_url": "https://starvisor.net/tul/",
+    "credit": "Camera was installed by \"Astroteatr\" and ASTROGLAMP\"",
+    "links": [
+      {
+        "name": "\"Astroteatr\"",
+        "url": "https://vk.com/astroteatr"
+      },
+      {
+        "name": "ASTROGLAMP\"",
+        "url": "https://astroglamp.ru/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:18.242Z"
+  },
+  {
+    "source_id": "starvisor-uglich",
+    "camera": "Uglich",
+    "page_url": "https://starvisor.net/ugch/",
+    "credit": "Camera was installed by Victor Kasatykh",
+    "links": [
+      {
+        "name": "Victor Kasatykh",
+        "url": "https://vk.com/id27562621"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:19.408Z"
+  },
+  {
+    "source_id": "starvisor-utkino",
+    "camera": "Utkino",
+    "page_url": "https://starvisor.net/utkino/",
+    "credit": "Camera was installed by Nikolay Fomichev and Andromeda Project of Yaroslavl Demidov State University",
+    "links": [
+      {
+        "name": "Nikolay Fomichev",
+        "url": "https://vk.com/fomichev_n"
+      },
+      {
+        "name": "Yaroslavl Demidov State University",
+        "url": "https://fiz.uniyar.ac.ru/projects/andromeda/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:20.777Z"
+  },
+  {
+    "source_id": "starvisor-vologda",
+    "camera": "Vologda",
+    "page_url": "https://starvisor.net/vlgd/",
+    "credit": "Camera was installed by \"OZERKI ASTRO TOURS\"",
+    "links": [
+      {
+        "name": "\"OZERKI ASTRO TOURS\"",
+        "url": "https://vk.com/astroozerki"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:22.619Z"
+  },
+  {
+    "source_id": "starvisor-vologda-east",
+    "camera": "Vologda-East",
+    "page_url": "https://starvisor.net/vlgde/",
+    "credit": "Camera was installed by \"OZERKI ASTRO TOURS\"",
+    "links": [
+      {
+        "name": "\"OZERKI ASTRO TOURS\"",
+        "url": "https://vk.com/astroozerki"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:23.806Z"
+  },
+  {
+    "source_id": "starvisor-vologda-west",
+    "camera": "Vologda-West",
+    "page_url": "https://starvisor.net/vlgdw/",
+    "credit": "Camera was installed by \"Aurora hunters\" and \"OZERKI ASTRO TOURS\"",
+    "links": [
+      {
+        "name": "\"Aurora hunters\"",
+        "url": "https://vk.com/aurora_hunters"
+      },
+      {
+        "name": "\"OZERKI ASTRO TOURS\"",
+        "url": "https://vk.com/astroozerki"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:24.978Z"
+  },
+  {
+    "source_id": "starvisor-vorkuta",
+    "camera": "Vorkuta",
+    "page_url": "https://starvisor.net/vrkt/",
+    "credit": "Camera was installed by Project STARVISOR | Night Sky Patrol",
+    "links": [
+      {
+        "name": "Project STARVISOR | Night Sky Patrol",
+        "url": "https://starvisor.net/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:26.110Z"
+  },
+  {
+    "source_id": "starvisor-yaroslavl",
+    "camera": "Yaroslavl",
+    "page_url": "https://starvisor.net/yars/",
+    "credit": "Camera was installed by Yuriy Stepanychev and Yaroslavl Demidov State University",
+    "links": [
+      {
+        "name": "Yuriy Stepanychev",
+        "url": "https://vk.com/id187230402"
+      },
+      {
+        "name": "Yaroslavl Demidov State University",
+        "url": "https://fiz.uniyar.ac.ru/projects/andromeda/"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:27.247Z"
+  },
+  {
+    "source_id": "starvisor-yurga",
+    "camera": "Yurga",
+    "page_url": "https://starvisor.net/yurg/",
+    "credit": "Camera was installed by Natalia Nikishkina",
+    "links": [
+      {
+        "name": "Natalia Nikishkina",
+        "url": "https://vk.com/greeneyesgalaxy"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:14:28.338Z"
+  },
+  {
+    "source_id": "starvisor-page-irbm",
+    "camera": "Irbit (NIR, 700 nm)",
+    "page_url": "https://starvisor.net/irbm/",
+    "credit": "Camera was installed by Project STARVISOR | Night Sky Patrol",
+    "links": [
+      {
+        "name": "Project STARVISOR | Night Sky Patrol",
+        "url": "https://starvisor.net"
+      }
+    ],
+    "checked_utc": "2026-09-13T19:15:17.463Z"
+  }
+]

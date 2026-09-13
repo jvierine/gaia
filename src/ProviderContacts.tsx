@@ -1,4 +1,5 @@
 import React from 'react';
+import starvisorCredits from './starvisor-credits.json';
 export function ServiceDescription(){return <><p>GAIA — Global Auroral Image Aggregator — compiles low-resolution views from publicly available auroral cameras. Its goal is to provide a global overview of available cameras and easy access to the provider web pages offering high-resolution imagery.</p><p><strong>We do not provide high-resolution images or an archival image service.</strong> Playback here is a low-resolution overview, not an archive of original camera observations. Contact the principal investigators (PIs) or operators of the individual cameras for access to high-resolution archival images. Follow the camera links below or click imagery on the globe to visit the originating provider.</p><p><strong>Scientific and commercial use requires permission from the camera operators.</strong> Contact the operators of the individual cameras before using their imagery. Access through GAIA does not grant permission to reuse images; copyright and provider terms remain with the originating producers.</p></>}
 const contacts=[
 ["Narsarsuaq","DTU Space and Tromsø Geophysical Observatory, UiT","Magnar Gullikstad Johnsen — responsible editor on the camera page; contact the operating institutions for data.","https://fox.phys.uit.no/ASC/NAQ.html"],
@@ -54,7 +55,7 @@ const contacts=[
   [
     "STARVISOR Night Sky Patrol",
     "Independent station operators and the STARVISOR network",
-    "See each station link for its operator. Individual operator and PI names have not yet been independently verified. Camera links remain public; protected images require authorization.",
+    "Camera-specific installation credits and original profile links are listed below, as published by STARVISOR. These roles do not establish ownership or PI status. Camera links remain public; protected images require authorization.",
     "https://starvisor.net/"
   ],
   [
@@ -64,4 +65,4 @@ const contacts=[
     "https://hornsund.igf.edu.pl/index.php/en/cameras-2/?lang=en"
   ]
 ];
-export function ProviderContacts(){return <section aria-label="Camera investigators and operators"><h2>Investigators &amp; operators</h2><p>Provider-confirmed roles and data-access links, checked September 2026. A network contact is not necessarily the PI or owner of every camera. Copyright and provider terms remain with the originating producers.</p>{contacts.map(([name,institution,role,url])=><details key={name}><summary>{name}</summary><p><strong>{institution}</strong><br/>{role}<br/><a href={url} target="_blank" rel="noreferrer">Provider information &amp; contact ↗</a></p></details>)}</section>}
+export function ProviderContacts(){return <section aria-label="Camera investigators and operators"><h2>Investigators &amp; operators</h2><p>Provider-confirmed roles and data-access links, checked September 2026. A network contact is not necessarily the PI or owner of every camera. Copyright and provider terms remain with the originating producers.</p>{contacts.map(([name,institution,role,url])=><details key={name}><summary>{name}</summary><p><strong>{institution}</strong><br/>{role}<br/><a href={url} target="_blank" rel="noreferrer">Provider information &amp; contact ↗</a></p></details>)}<h3>STARVISOR camera credits</h3><p>Installation credits published on the individual station pages. Names, organizations and roles are attributed to STARVISOR; original profile and station links are retained. Scientific and commercial use requires permission from camera operators.</p>{starvisorCredits.map(camera=><article key={camera.source_id}><h4><a href={camera.page_url} target="_blank" rel="noopener noreferrer">{camera.camera} ↗</a></h4><p>{camera.credit||'No camera-specific credit was found on the station page.'}</p>{camera.links.length>0&&<p>{camera.links.map((link,index)=><React.Fragment key={link.url+index}>{index>0?' · ':''}<a href={link.url} target="_blank" rel="noopener noreferrer">{link.name} ↗</a></React.Fragment>)}</p>}</article>)}</section>}

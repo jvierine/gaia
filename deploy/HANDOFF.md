@@ -700,3 +700,6 @@ Deployment verification: acdca48 pushed to GAIA main; Rust release and admin fro
 
 ## 2026-09-13 STARVISOR camera-specific credits
 Scraped all 40 homepage station pages (39 registered GAIA sources plus separate Irbit NIR). src/starvisor-credits.json preserves each cam-info attribution, checked timestamp, station URL and contributor profile links. Shared ProviderContacts renders these on admin and public info/credits pages regardless of image authorization. These are installation credits, NOT invented PI or ownership claims. sources/starvisor.json acknowledgements updated for all 39 registered sources; source identity, calibration, ingestion settings and copyright statements unchanged. Refresh with node deploy/scrape-starvisor-credits.mjs from the repo: sequential polite requests, homepage discovery, no image downloads. Review generated diff before deploying; missing credit is explicit, not fabricated. STARVISOR Google allowlist/image restrictions unchanged.
+
+## 2026-09-13 Remove public Starvisor login notice
+Removed the top-level Starvisor imagery requires an authorized Google account sentence. Google sign-in remains; access still requires membership in the existing three-person allowlist, not merely Google login. No authentication, authorization, audience selection or restricted-file checks changed.

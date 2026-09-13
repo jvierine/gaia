@@ -185,25 +185,34 @@ async fn history(State(s): State<AppState>) -> ApiResult<Json<Vec<String>>> {
     Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
 }
 
+#[derive(Deserialize, Default)]
+struct FrameHistoryRequest { date: Option<String> }
+fn frame_history_bounds(date: Option<&str>) -> Result<(String,String), String> {
+    if let Some(value)=date {
+        let day=chrono::NaiveDate::parse_from_str(value,"%Y-%m-%d").map_err(|_|"Date must be YYYY-MM-DD".to_string())?;
+        if day.format("%Y-%m-%d").to_string()!=value {return Err("Date must be YYYY-MM-DD".into());}
+        let next=day.succ_opt().ok_or("Date is out of range")?;
+        Ok((day.and_hms_opt(0,0,0).unwrap().and_utc().to_rfc3339(),next.and_hms_opt(0,0,0).unwrap().and_utc().to_rfc3339()))
+    } else {let now=Utc::now();Ok(((now-chrono::Duration::hours(24)).to_rfc3339(),now.to_rfc3339()))}
+}
 async fn source_frames(
-    Path(id): Path<String>,
-    State(s): State<AppState>,
+    Path(id): Path<String>, State(s): State<AppState>, Query(request): Query<FrameHistoryRequest>,
 ) -> ApiResult<Json<Vec<Value>>> {
-    let conn = db::open(&s.db_path).map_err(internal)?;
-    let mut query = conn
-        .prepare("SELECT id,observation_utc,width,height FROM images WHERE source_id=?1 AND julianday(observation_utc)>=julianday('now','-1 day') ORDER BY observation_utc")
-        .map_err(internal)?;
-    let rows = query
-        .query_map([id], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "observation_utc": row.get::<_, String>(1)?,
-                "width": row.get::<_, Option<i64>>(2)?,
-                "height": row.get::<_, Option<i64>>(3)?,
-            }))
-        })
-        .map_err(internal)?;
-    Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
+    let (start,end)=frame_history_bounds(request.date.as_deref()).map_err(|e|(StatusCode::BAD_REQUEST,e))?;
+    let conn=db::open(&s.db_path).map_err(internal)?;
+    let mut query=conn.prepare("SELECT id,observation_utc,width,height FROM images WHERE source_id=?1 AND julianday(observation_utc)>=julianday(?2) AND julianday(observation_utc)<julianday(?3) ORDER BY julianday(observation_utc),id").map_err(internal)?;
+    let rows=query.query_map(rusqlite::params![id,start,end],|row|Ok(json!({"id":row.get::<_,String>(0)?,"observation_utc":row.get::<_,String>(1)?,"width":row.get::<_,Option<i64>>(2)?,"height":row.get::<_,Option<i64>>(3)?}))).map_err(internal)?;
+    Ok(Json(rows.collect::<Result<Vec<_>,_>>().map_err(internal)?))
+}
+#[cfg(test)] mod frame_history_tests {
+    #[test] fn utc_day_bounds_and_invalid_dates(){
+        let (start,end)=super::frame_history_bounds(Some("2026-09-09")).unwrap();
+        assert_eq!(start,"2026-09-09T00:00:00+00:00");assert_eq!(end,"2026-09-10T00:00:00+00:00");
+        assert!(super::frame_history_bounds(Some("2026-02-30")).is_err());
+        assert!(super::frame_history_bounds(Some("2026-9-9")).is_err());
+        let (start,end)=super::frame_history_bounds(None).unwrap();
+        assert_eq!((chrono::DateTime::parse_from_rfc3339(&end).unwrap()-chrono::DateTime::parse_from_rfc3339(&start).unwrap()).num_hours(),24);
+    }
 }
 
 #[derive(Deserialize)]

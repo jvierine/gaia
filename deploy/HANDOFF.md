@@ -718,3 +718,6 @@ STARVISOR credits rechecked from all homepage station pages. Added a direct came
 
 ## Camera hover credits
 Shared globe station-marker and projected-image hover now use src/starvisor-credits.json by exact source_id, the same data as Info. Displays the original installation credit (not a falsely inferred owner/PI title). Non-Starvisor cameras retain their producer label. Applies equally to anonymous station points and authorized/history images. Tooltip wraps and clamps to viewport; no imagery access changes.
+
+## Camera frame history UTC date selection
+Admin camera history now has a UTC date picker plus Last 24 hours reset. GET /api/sources/{id}/frames?date=YYYY-MM-DD selects that whole UTC day (inclusive midnight, exclusive following midnight); default retains rolling 24h. Strict date validation returns 400. Loading/empty/error states explicit, aborted stale requests cannot replace selected-date frames. Original selected-image AIDA links retained. This is admin raw-image browsing only, not a public archive access change.

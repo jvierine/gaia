@@ -1,5 +1,10 @@
 # GAIA handoff for j and bgu001
 
+## Camera registry loading (2026-09-13)
+
+Removed the misleading two-camera fallback rows. Cameras tab now has an indeterminate progress bar throughout the real registry request (server returns one JSON array, no measurable percentage), explicit empty/error states, 45-second timeout and Retry. No swallowed registry errors or fake camera count; thumbnails remain lazy-loaded separately.
+
+
 Header branding: display GAIA with Global Auroral Image Aggregator beneath it; no Data Center subtitle (user request, 2026-09-12).
 
 

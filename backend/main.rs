@@ -11,6 +11,7 @@ mod model;
 mod norsk_meteor;
 mod pixel_mask;
 mod projection;
+mod processing;
 mod publish;
 mod publish_layers;
 mod quality;
@@ -138,7 +139,7 @@ async fn credits(State(s): State<AppState>) -> ApiResult<Json<Vec<Value>>> {
 
 async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
-    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled,COALESCE(cs.quality_exponent,0) FROM sources s JOIN producers p ON p.id=s.producer_id LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.name").map_err(internal)?;
+    let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled,COALESCE(cs.quality_exponent,0),MAX(COALESCE(cs.updated_utc,''),COALESCE((SELECT MAX(created_utc) FROM calibrations c WHERE c.source_id=s.id),'')) FROM sources s JOIN producers p ON p.id=s.producer_id LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.name").map_err(internal)?;
     let rows = q
         .query_map([], |r| {
             let last: Option<String> = r.get(4)?;
@@ -156,6 +157,7 @@ async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>
                 latitude_deg: r.get(9)?,
                 longitude_deg: r.get(10)?,
                 calibrated: r.get(11)?,
+                processing: processing::read(&s,&r.get::<_,String>(0)?,r.get::<_,Option<String>>(14)?.as_deref()),
                 enabled: r.get(12)?,
                 quality_exponent: r.get(13)?,
                 state: state.into(),
@@ -673,6 +675,7 @@ async fn calibration(
     tx.execute("INSERT INTO calibrations(id,source_id,created_utc,valid_from_utc,method,hdf5_path,residual_px,submitted_by,star_count) VALUES(?1,?2,?3,?4,'AIDA/WISC',?5,?6,?7,?8)",rusqlite::params![id,source,Utc::now().to_rfc3339(),valid_from,path.to_string_lossy(),residual_px,submitter,stars]).map_err(internal)?;
     tx.execute("INSERT INTO camera_settings(source_id,updated_utc,selected_calibration_id) VALUES(?1,?2,?3) ON CONFLICT(source_id) DO UPDATE SET updated_utc=excluded.updated_utc,selected_calibration_id=excluded.selected_calibration_id",rusqlite::params![source,Utc::now().to_rfc3339(),id]).map_err(internal)?;
     tx.commit().map_err(internal)?;
+    processing::kick();
 
     Ok((
         StatusCode::CREATED,

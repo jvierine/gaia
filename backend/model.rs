@@ -66,6 +66,7 @@ pub struct SourceStatus {
     pub latitude_deg: Option<f64>,
     pub longitude_deg: Option<f64>,
     pub calibrated: bool,
+    pub processing: serde_json::Value,
     pub enabled: bool,
     /// Manual quality weight as a power of two, 0 to -8.
     pub quality_exponent: i64,

@@ -669,3 +669,5 @@ This replaces the earlier background full-day stage on EVERY normal cycle.
 Google login was verified in the browser as Juha's approved account, including
 visible protected imagery; anonymous direct restricted URLs returned 401 and
 legacy mixed public URLs returned 403. No Google client changes were needed.
+
+2026-09-13 registry query optimization: added covering images(source_id, downloaded_utc DESC) index for latest-download and 24-hour counts. Apply the tracked index to the live Revontuli database; it changes no images or source records.

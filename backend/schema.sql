@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS suggestions(
 );
 CREATE INDEX IF NOT EXISTS idx_images_observation ON images(observation_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_images_source_observation ON images(source_id, observation_utc DESC);
+-- Cover registry latest-download and 24-hour count queries without image-table scans.
+CREATE INDEX IF NOT EXISTS idx_images_source_download ON images(source_id, downloaded_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_images_pending ON images(processing_state, observation_utc) WHERE processing_state != 'complete';
 CREATE INDEX IF NOT EXISTS idx_crawler_runs_source ON crawler_runs(source_id, started_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_mosaics_observation ON mosaics(observation_utc DESC);

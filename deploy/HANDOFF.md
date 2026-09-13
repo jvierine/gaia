@@ -703,3 +703,6 @@ Scraped all 40 homepage station pages (39 registered GAIA sources plus separate 
 
 ## 2026-09-13 Remove public Starvisor login notice
 Removed the top-level Starvisor imagery requires an authorized Google account sentence. Google sign-in remains; access still requires membership in the existing three-person allowlist, not merely Google login. No authentication, authorization, audience selection or restricted-file checks changed.
+
+## Header sign-in placement
+Google sign-in now renders beside Info & credits via SignInContext, using the official Google button at 144x40 pixels, matching Info. Header wraps on phones. Removed the separate account bar and height observer. Signed-in account/sign-out remain inside Info; allowlist and backend auth unchanged.

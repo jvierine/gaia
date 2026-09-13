@@ -1,5 +1,5 @@
 import {ServiceDescription,ProviderContacts} from './ProviderContacts';
-import GoogleAccess,{AccountInfo} from './GoogleAccess';
+import GoogleAccess,{AccountInfo,SignInButton} from './GoogleAccess';
 import {liveCutoff,readyFrames,LIVE_DELAY_MINUTES} from './live-time';
 import React,{useEffect,useRef,useState} from 'react';
 import './public-viewer.css';
@@ -27,7 +27,7 @@ function PublicContent(){
   const frames=manifest?.images||[],at=playbackAt!==null?new Date(playbackAt).toISOString():frames[index<0?frames.length-1:Math.min(index,frames.length-1)]?.at;
   selectedAt.current=index<0?null:(at?Date.parse(at):null);
   return <main className="gaia-public">
-    <header className="public-header"><div className="public-brand"><GaiaLogo/><div><h1>GAIA</h1><p>Global Auroral Image Aggregator</p></div></div><button aria-expanded={credits} onClick={()=>setCredits(!credits)}>ⓘ <span>Info &amp; credits</span></button></header>
+    <header className="public-header"><div className="public-brand"><GaiaLogo/><div><h1>GAIA</h1><p>Global Auroral Image Aggregator</p></div></div><div className="public-header-actions"><button aria-expanded={credits} onClick={()=>setCredits(!credits)}>ⓘ <span>Info &amp; credits</span></button><SignInButton/></div></header>
     <GaiaGlobeView className="public-globe" getEpochMillis={()=>epoch.current} onLoading={value=>{loading.current=value}} sunLock={sunLock}>
     {credits&&<section className="public-info" role="dialog" aria-label="Information and credits">
       <div className="public-info-heading"><h2>About GAIA</h2><button onClick={()=>setCredits(false)} aria-label="Close information">✕</button></div>

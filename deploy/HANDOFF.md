@@ -671,3 +671,7 @@ visible protected imagery; anonymous direct restricted URLs returned 401 and
 legacy mixed public URLs returned 403. No Google client changes were needed.
 
 2026-09-13 registry query optimization: added covering images(source_id, downloaded_utc DESC) index for latest-download and 24-hour counts. Apply the tracked index to the live Revontuli database; it changes no images or source records.
+
+## AIDA calibration masking (2026-09-13)
+
+AIDA latest and selected-history imports request ?calibration=true from GAIA image endpoints. Rust paints outside crop and inside enabled obstruction polygons black using the same conservative pixel-coverage rule as globe projection, keeping full original dimensions and coordinates. PNG avoids JPEG bleeding into black pixels. Metadata headers remain unchanged, originals are untouched, and no-store ensures mask edits apply on reopening. Disabled masks are ignored but crop remains active, matching projection. Standalone AIDA files are an existing non-Git installation; the narrowly scoped/idempotent deployment patch is tracked in GAIA at deploy/aida-calibration-mask.cjs and applied on Revontuli to /home/j/src/widefield-star-calibrator. The patch also updates the app.js cache version. Code changes are made on Revontuli and delivered via Git.

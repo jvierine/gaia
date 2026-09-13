@@ -715,3 +715,6 @@ Player parity correction: BOTH shells now import src/PlaybackToolbar.tsx and src
 Globe gesture hint removed from shared GaiaGlobeView. Instructions now live in shared Info/About ServiceDescription. Shared playback dock moved down to a 14px safe-area-aware bottom inset instead of reserving 58px for instructions. Keep mobile viewing free of persistent instructional text.
 
 STARVISOR credits rechecked from all homepage station pages. Added a direct camera-by-camera credits jump link near the top of Info on both shells; section displays total camera count. Original station and contributor links retained. Live public browser verified individual attributions, including Provideniya and Popovo.
+
+## Camera hover credits
+Shared globe station-marker and projected-image hover now use src/starvisor-credits.json by exact source_id, the same data as Info. Displays the original installation credit (not a falsely inferred owner/PI title). Non-Starvisor cameras retain their producer label. Applies equally to anonymous station points and authorized/history images. Tooltip wraps and clamps to viewport; no imagery access changes.

@@ -1,3 +1,6 @@
+import starvisorCredits from './starvisor-credits.json';
+const stationCredits=new Map(starvisorCredits.map(c=>[c.source_id,c.credit]));
+function cameraCredit(id:string,producer:string){return stationCredits.get(id)||`Operator: ${producer}`;}
 import {shellTextureCoordinates} from './source-map-coordinates';
 import {cameraCompositor} from './camera-compositor';
 import {cameraWeightScale} from './composition-rules';
@@ -150,7 +153,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
       const distance=Math.hypot(clientX-r.left-r.width/2-xx*zoom*side/2,clientY-r.top-r.height/2+yy*zoom*side/2);if(distance<best){best=distance;match=site}
     }return match;
   };
-  const tooltip=document.createElement('div');tooltip.style.cssText='position:absolute;display:none;pointer-events:none;z-index:5;background:#04111eee;color:white;padding:6px 9px;border:1px solid #54756a;border-radius:4px;font:12px sans-serif';canvas.parentElement?.appendChild(tooltip);
+  const tooltip=document.createElement('div');tooltip.style.cssText='position:absolute;display:none;pointer-events:none;z-index:5;background:#04111eee;color:white;padding:6px 9px;border:1px solid #54756a;border-radius:4px;font:12px sans-serif;max-width:min(360px,calc(100% - 24px));overflow-wrap:anywhere;box-sizing:border-box';canvas.parentElement?.appendChild(tooltip);
   // Mute is local display state on BOTH sites, never the acquisition switch.
   const mutedSources=new Set<string>();
   try{const saved=JSON.parse(localStorage.getItem('gaia-muted-cameras')||'[]');if(Array.isArray(saved))for(const id of saved)if(typeof id==='string')mutedSources.add(id);}catch{}
@@ -177,10 +180,10 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
     tooltip.style.display='none';muteTarget=null;if(dragging)return;
     const r=canvas.getBoundingClientRect();let label='',url:string|undefined;
     const station=stationCamera(e.clientX,e.clientY),projected=station?null:projectedCamera(e.clientX,e.clientY);
-    if(station){label=station.label;url=station.url}else if(projected){label=`Camera: ${projected.name}\nOperator: ${projected.producer}\n${locationLabel(projected)}\nClick for originating provider`;url=projected.website_url}
+    if(station){label=station.label;url=station.url}else if(projected){label=`Camera: ${projected.name}\n${cameraCredit(projected.source_id,projected.producer)}\n${locationLabel(projected)}\nClick for originating provider`;url=projected.website_url}
     const targetId=station?.source_id||projected?.source_id;
     if(targetId){muteTarget={id:targetId,name:station?station.label.split('\n')[0].replace('Camera: ',''):projected!.name};label+='\nPress "M" to '+(mutedSources.has(targetId)?'show':'mute')+' this camera';}
-    if(label){tooltip.textContent=label;tooltip.dataset.url=url||'';tooltip.style.whiteSpace='pre-line';tooltip.style.display='block';tooltip.style.left=`${e.clientX-r.left+12}px`;tooltip.style.top=`${e.clientY-r.top+12}px`;}
+    if(label){tooltip.textContent=label;tooltip.dataset.url=url||'';tooltip.style.whiteSpace='pre-line';tooltip.style.display='block';tooltip.style.left=`${e.clientX-r.left+12}px`;tooltip.style.top=`${e.clientY-r.top+12}px`;tooltip.style.left=`${Math.max(4,Math.min(e.clientX-r.left+12,r.width-tooltip.offsetWidth-4))}px`;tooltip.style.top=`${Math.max(4,Math.min(e.clientY-r.top+12,r.height-tooltip.offsetHeight-4))}px`;}
   };
   const hideTooltip=()=>{tooltip.style.display='none'};
   canvas.addEventListener('pointermove',hover);canvas.addEventListener('pointerleave',hideTooltip);
@@ -264,11 +267,11 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
   abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
   abort.signal.addEventListener('abort',()=>archiveLink.remove(),{once:true});
-  void (publicOnly?published().then(async manifest=>{const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{source_id:c.source_id,label:`Camera: ${c.name}\nOperator: ${c.producer}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return browserLayers?cameras.map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:!!c.projection,enabled:true,latitude_deg:null,longitude_deg:null})):[{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
+  void (publicOnly?published().then(async manifest=>{const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{source_id:c.source_id,label:`Camera: ${c.name}\n${cameraCredit(c.source_id,c.producer)}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return browserLayers?cameras.map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:!!c.projection,enabled:true,latitude_deg:null,longitude_deg:null})):[{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}
     addLayer(sites);
-    if(!publicOnly)cameraSites=sources.filter(s=>s.enabled&&s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{source_id:s.id,label:`Camera: ${s.name}\nOperator: ${s.producer}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
+    if(!publicOnly)cameraSites=sources.filter(s=>s.enabled&&s.latitude_deg!==null&&s.longitude_deg!==null).map(s=>{const lat=s.latitude_deg!*Math.PI/180,lon=s.longitude_deg!*Math.PI/180;return{source_id:s.id,label:`Camera: ${s.name}\n${cameraCredit(s.id,s.producer)}`,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});
     let lastMinute=-1,lastRefresh=0,selection=0,activeLoads=0,lastPrune=0;
     const cameraOrders=new Map<string,number>();
     const cameraOrder=(id:string)=>{if(!cameraOrders.has(id))cameraOrders.set(id,cameraOrders.size);return cameraOrders.get(id)!};

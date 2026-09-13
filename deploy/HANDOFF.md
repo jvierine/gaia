@@ -706,3 +706,6 @@ Removed the top-level Starvisor imagery requires an authorized Google account se
 
 ## Header sign-in placement
 Google sign-in now renders beside Info & credits via SignInContext, using the official Google button at 144x40 pixels, matching Info. Header wraps on phones. Removed the separate account bar and height observer. Signed-in account/sign-out remain inside Info; allowlist and backend auth unchanged.
+
+## Public playback dock parity
+juha.no now uses the compact Revontuli-style overlay dock: circular play, minus/plus speed controls, Sun up, timestamp and timeline ticks. Public signed-in date selection and latest action remain, and auth rules are unchanged. Speeds now match Revontuli (0.25x through 32x). Both frontends built from the same source; compositor and buffering unchanged.

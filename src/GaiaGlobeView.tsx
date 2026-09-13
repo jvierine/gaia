@@ -40,7 +40,6 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
   if(zoomRef)zoomRef.current=zoom;
   return <div className={className}>
     <canvas ref={canvas} className="gaia-globe-canvas" style={{WebkitTouchCallout:'none',WebkitUserSelect:'none',userSelect:'none',touchAction:'none'}} aria-label="Interactive WebGL Earth with auroral image coverage"/>
-    <div className="gaia-globe-hint" style={{WebkitTouchCallout:'none',WebkitUserSelect:'none',userSelect:'none'}}>Drag to rotate · Pinch to zoom · Hold a station or press M to mute/show</div>
     {showTools&&<div className="gaia-globe-tools" aria-label="Map controls"><button type="button" aria-label="Zoom in" onClick={()=>zoom('in')}>+</button><button type="button" aria-label="Zoom out" onClick={()=>zoom('out')}>−</button><button type="button" aria-label="Reset globe" onClick={()=>zoom('reset')}>◎</button></div>}
     {(buffer.active||buffer.failed>0)&&<div role="status" style={{position:'absolute',zIndex:30,left:'50%',top:70,transform:'translateX(-50%)',width:'min(360px, calc(100% - 24px))',padding:12,borderRadius:10,background:'#101d29f2',color:'#fff',boxShadow:'0 2px 12px #0008',fontSize:14}}>
       <div>{buffer.active?(buffer.message||'Buffering camera images…'):buffer.message||`${buffer.failed} camera images unavailable; omitted from this frame.`}</div>

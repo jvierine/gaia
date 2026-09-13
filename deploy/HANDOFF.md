@@ -711,3 +711,5 @@ Google sign-in now renders beside Info & credits via SignInContext, using the of
 juha.no now uses the compact Revontuli-style overlay dock: circular play, minus/plus speed controls, Sun up, timestamp and timeline ticks. Public signed-in date selection and latest action remain, and auth rules are unchanged. Speeds now match Revontuli (0.25x through 32x). Both frontends built from the same source; compositor and buffering unchanged.
 
 Player parity correction: BOTH shells now import src/PlaybackToolbar.tsx and src/playback-toolbar.css. No separate public/admin toolbar markup or styling. Shared component owns speed steps, control labels, time display, Sun up and slider events. Shells only adapt their existing timeline state and supply access-controlled archive choices. Shared globe/compositor/buffering remains unchanged. Do not fork this component by deployment.
+
+Globe gesture hint removed from shared GaiaGlobeView. Instructions now live in shared Info/About ServiceDescription. Shared playback dock moved down to a 14px safe-area-aware bottom inset instead of reserving 58px for instructions. Keep mobile viewing free of persistent instructional text.

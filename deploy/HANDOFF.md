@@ -679,3 +679,10 @@ AIDA latest and selected-history imports request ?calibration=true from GAIA ima
 Verified live AIDA Kiruna handoff: masked PNG loaded, 482x482 dimensions and observation/site fields preserved, latest and selected-history endpoints both no-store. Two Rust mask tests passed. Backend restarted successfully; AIDA patch ran twice to check idempotence.
 
 AIDA masked-image handoff is now committed in its own jvierine/widefield-star-calibrator repository as well. Its Git checkout on Revontuli is /mnt/data/juha/gaia/aida-code; js/app.js and index.html were byte-compared against the running AIDA installation. Keep future AIDA code changes in that Git repository.
+
+## 2026-09-13 AIDA explicit masks (supersedes black calibration copies)
+- AIDA main 1d8f131 deployed on Revontuli from /mnt/data/juha/gaia/aida-code.
+- Latest and historical GAIA handoffs load untouched original pixels and GET /api/sources/{id}/settings separately. Crop and enabled normalized polygons feed AIDA star-detection and centroid mask predicates, with padding.
+- Physical all-sky annulus inference remains unchanged and sees original pixels, never synthetic black obstruction boundaries. Cropping never shifts/resizes pixels or lens coordinates.
+- The old deploy/aida-calibration-mask.cjs patch is retired and fails explicitly to prevent reintroducing the bug. The optional backend calibration=true image endpoint remains for compatibility but AIDA no longer uses it.
+- Scoped AIDA tests: 29 passed, 1 skipped, including existing all-sky annulus tests and new crop/multipolygon/edge-padding/disabled-mask regression.

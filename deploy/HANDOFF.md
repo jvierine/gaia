@@ -723,3 +723,5 @@ Shared globe station-marker and projected-image hover now use src/starvisor-cred
 Admin camera history now has a UTC date picker plus Last 24 hours reset. GET /api/sources/{id}/frames?date=YYYY-MM-DD selects that whole UTC day (inclusive midnight, exclusive following midnight); default retains rolling 24h. Strict date validation returns 400. Loading/empty/error states explicit, aborted stale requests cannot replace selected-date frames. Original selected-image AIDA links retained. This is admin raw-image browsing only, not a public archive access change.
 
 About opening simplified at user request: removed the STARVISOR jump link and Globe controls paragraph from shared ServiceDescription. Main service description now opens About. Camera-specific credit section remains intact; no persistent globe hint restored.
+
+Removed the requested manual-review/automatic-change sentence from both About suggestions and the suggestion form. Submission behavior is unchanged.

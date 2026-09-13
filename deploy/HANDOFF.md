@@ -713,3 +713,5 @@ juha.no now uses the compact Revontuli-style overlay dock: circular play, minus/
 Player parity correction: BOTH shells now import src/PlaybackToolbar.tsx and src/playback-toolbar.css. No separate public/admin toolbar markup or styling. Shared component owns speed steps, control labels, time display, Sun up and slider events. Shells only adapt their existing timeline state and supply access-controlled archive choices. Shared globe/compositor/buffering remains unchanged. Do not fork this component by deployment.
 
 Globe gesture hint removed from shared GaiaGlobeView. Instructions now live in shared Info/About ServiceDescription. Shared playback dock moved down to a 14px safe-area-aware bottom inset instead of reserving 58px for instructions. Keep mobile viewing free of persistent instructional text.
+
+STARVISOR credits rechecked from all homepage station pages. Added a direct camera-by-camera credits jump link near the top of Info on both shells; section displays total camera count. Original station and contributor links retained. Live public browser verified individual attributions, including Provideniya and Popovo.

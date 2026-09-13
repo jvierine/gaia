@@ -725,3 +725,5 @@ Admin camera history now has a UTC date picker plus Last 24 hours reset. GET /ap
 About opening simplified at user request: removed the STARVISOR jump link and Globe controls paragraph from shared ServiceDescription. Main service description now opens About. Camera-specific credit section remains intact; no persistent globe hint restored.
 
 Removed the requested manual-review/automatic-change sentence from both About suggestions and the suggestion form. Submission behavior is unchanged.
+
+Removed the redundant globe-injected Choose archive day / Live view link and its cleanup handler from shared globe.ts. The existing playback date selector remains unchanged. Applies to both viewers; no archive permissions or playback behavior changed.

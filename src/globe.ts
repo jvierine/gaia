@@ -5,7 +5,7 @@ import {shellTextureCoordinates} from './source-map-coordinates';
 import {cameraCompositor} from './camera-compositor';
 import {cameraWeightScale} from './composition-rules';
 import {liveCutoff} from './live-time';
-import {manifestUrl,archiveMode,canBrowseArchive} from './public-manifest';
+import {manifestUrl} from './public-manifest';
 const VERTEX = `
 attribute vec2 position;
 void main(){ gl_Position=vec4(position,0.0,1.0); }
@@ -116,7 +116,6 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const observationStatus=document.createElement('div');
   observationStatus.style.cssText='position:absolute;left:18px;top:56px;color:#a8c6bf;font:11px monospace;pointer-events:none';
   observationStatus.setAttribute('role','status');canvas.parentElement?.appendChild(observationStatus);
-  const archiveLink=document.createElement('a');archiveLink.href=archiveMode?'/gaia/':'/gaia/?archive=1';archiveLink.textContent=archiveMode?'Live view':'Choose archive day';archiveLink.style.cssText='position:absolute;left:18px;top:76px;color:#a8c6bf;font:11px sans-serif;z-index:5';if(canBrowseArchive)canvas.parentElement?.appendChild(archiveLink);
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null;projection?:any;calibrated?:boolean};
   let browserLayers=false,layerManifest:any=null,manifestRefresh:Promise<any>|null=null,manifestFetched=0;
   const compositor=cameraCompositor(gl);
@@ -266,7 +265,6 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   reportBuffer({active:true,done:0,total:0,failed:0,message:'Loading camera catalogue…'});
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
   abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
-  abort.signal.addEventListener('abort',()=>archiveLink.remove(),{once:true});
   void (publicOnly?published().then(async manifest=>{const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{source_id:c.source_id,label:`Camera: ${c.name}\n${cameraCredit(c.source_id,c.producer)}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return browserLayers?cameras.map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:!!c.projection,enabled:true,latitude_deg:null,longitude_deg:null})):[{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
     const sites:number[]=[];for(const s of sources){if(!s.enabled||s.latitude_deg===null||s.longitude_deg===null)continue;addStationDisc(sites,s.latitude_deg*Math.PI/180,s.longitude_deg*Math.PI/180,s.calibrated?[.3,.82,.58]:[.92,.3,.34]);}

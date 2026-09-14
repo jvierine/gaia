@@ -176,3 +176,13 @@
 .camera-quality select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
 .history-date-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0}.history-date-controls label{display:flex;gap:8px;align-items:center}.history-date-controls input{color-scheme:dark;background:#102633;color:#dceef0;border:1px solid #477080;padding:8px;border-radius:4px}
+
+.star-plot svg.scrubbable{cursor:ew-resize;touch-action:none}
+.star-cursor{stroke:#fff;stroke-width:1.2;opacity:.85;vector-effect:non-scaling-stroke}
+.star-scrub{display:flex;align-items:center;gap:.6rem;margin:.15rem 0 .5rem}
+.star-scrub input[type=range]{flex:1;accent-color:var(--accent);min-width:0}
+.star-scrub small{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.star-scrub button{background:rgba(8,28,40,.75);color:var(--text);border:1px solid rgba(103,200,215,.35);border-radius:6px;padding:.15rem .5rem;font:inherit;cursor:pointer}
+.star-frame{width:100%;height:auto;background:#04121a;border-radius:8px}
+.star-frame image{image-rendering:auto}
+.star-frame g{cursor:pointer}

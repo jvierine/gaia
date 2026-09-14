@@ -17,6 +17,21 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
 type StarSummary = {star_key:string;vt_mag:number;ra_hours_j2000:number;dec_deg_j2000:number;image_x:number|null;image_y:number|null;elevation_deg:number|null;frames:number;found:number;median_flux:number|null;clear_flux:number|null;median_background:number|null;variation:number|null};
 type StarSample = {at:string;flux:number|null;background:number|null;sigma_major:number|null;sigma_minor:number|null;angle_deg:number|null;centroid_offset_px:number|null;elevation_deg:number};
 const STAR_CHANNELS = ['mean','r','g','b'] as const;
+type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;best_flux:number|null;relative:number|null};
+type StarFrame={image_id:string|null;observation_utc?:string;width?:number|null;height?:number|null;stars:FrameStar[]};
+/// A star at its own best through the window reads bright, one that has faded
+/// reads dark and red. The quantity is the star's intensity as a fraction of
+/// its own maximum, so a faint star and a bright one are on the same scale.
+/// The colour follows the square root of that fraction: a star's best is the
+/// single clearest moment at the top of its arc, so most samples sit well below
+/// it and a linear ramp would put nearly every star in the dark end.
+const relativeColour=(v:number|null)=>{
+  if(v==null)return '#3b4a57';
+  const t=Math.sqrt(Math.min(1,Math.max(0,v)));
+  return `hsl(${Math.round(48*t)} 92% ${Math.round(26+46*t)}%)`};
+/// Magnitudes a star has fallen below its own best, the photometric way to say
+/// the same thing: cloud optical depth is linear in magnitudes.
+const magnitudesDown=(v:number|null)=>v==null||!(v>0)?null:-2.5*Math.log10(v);
 /// Steady stars read cool, strongly varying ones warm.
 const variationColour = (v:number|null) => v==null?'#5d7080':`hsl(${Math.round(190-190*Math.min(1,Math.max(0,v)))} 78% 55%)`;
 type SortKey = 'name' | 'latitude_deg' | 'longitude_deg' | 'calibrated';
@@ -110,6 +125,11 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [selected,setSelected]=useState<string[]>([]);
   const [series,setSeries]=useState<Record<string,StarSample[]>>({});
   const [loading,setLoading]=useState(true),[error,setError]=useState('');
+  // Scrubbing the series: the instant the user has slid to, and the nearest
+  // measured frame to it.
+  const [cursor,setCursor]=useState<number|null>(null);
+  const [frame,setFrame]=useState<StarFrame|null>(null);
+  const [frameBusy,setFrameBusy]=useState(false);
   useEffect(()=>{
     const controller=new AbortController();setLoading(true);setError('');
     void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars?channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
@@ -133,6 +153,20 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
     }
     return()=>controller.abort();
   },[selected,channel,hours,camera.id,series]);
+  // A new camera, channel or window invalidates the scrubbed frame.
+  useEffect(()=>{setCursor(null);setFrame(null)},[camera.id,channel,hours]);
+  useEffect(()=>{
+    if(cursor==null){setFrame(null);return}
+    const controller=new AbortController();
+    // The pointer moves far faster than the request; wait for it to settle.
+    const timer=window.setTimeout(()=>{setFrameBusy(true);
+      void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/frame?at=${encodeURIComponent(new Date(cursor).toISOString())}&channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
+        .then(async r=>r.ok?await r.json() as StarFrame:null)
+        .then(body=>{if(!controller.signal.aborted)setFrame(body)})
+        .catch(()=>{})
+        .finally(()=>{if(!controller.signal.aborted)setFrameBusy(false)})},120);
+    return()=>{controller.abort();window.clearTimeout(timer)};
+  },[cursor,camera.id,channel,hours]);
   const toggle=(key:string)=>setSelected(prev=>prev.includes(key)?prev.filter(k=>k!==key):[...prev,key]);
   const palette=['#56f0c5','#f3b647','#72ccef','#ff8fa3','#baff78','#c9a0ff'];
   const picked=selected.map((k,i)=>({key:k,colour:palette[i%palette.length],samples:series[`${channel}:${k}`]||[]}));
@@ -149,13 +183,27 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
       const x=t1>t0?(t-t0)/(t1-t0)*w:w/2, y=h-(v-lo)/(hi-lo)*h;
       d+=`${open?'L':'M'}${x.toFixed(1)} ${y.toFixed(1)} `;open=true;}
     return d.trim();};
-  const plot=(label:string,get:(x:StarSample)=>number|null,unit:string)=>{
+  // Pointer position along a plot, as a time. The SVG is stretched to its box,
+  // so the fraction has to come from the rendered width, not the viewBox.
+  const timeAt=(event:React.PointerEvent<SVGSVGElement>)=>{
+    const box=event.currentTarget.getBoundingClientRect();
+    if(box.width<=0||!(t1>t0))return null;
+    const fraction=Math.min(1,Math.max(0,(event.clientX-box.left)/box.width));
+    return Math.round(t0+fraction*(t1-t0));};
+  const plot=(label:string,get:(x:StarSample)=>number|null,unit:string,scrub=false)=>{
     const [lo,hi]=band(get);const w=560,h=118;
+    const cursorX=scrub&&cursor!=null&&t1>t0?(cursor-t0)/(t1-t0)*w:null;
+    const scrubbing=(event:React.PointerEvent<SVGSVGElement>)=>{
+      if(!scrub)return;const at=timeAt(event);if(at!=null)setCursor(at)};
     return <div className="star-plot"><div className="star-plot-head"><strong>{label}</strong><small>{lo.toPrecision(3)} to {hi.toPrecision(3)} {unit}</small></div>
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={label}>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={label}
+        className={scrub?'scrubbable':undefined}
+        onPointerDown={event=>{if(scrub){event.currentTarget.setPointerCapture(event.pointerId);scrubbing(event)}}}
+        onPointerMove={event=>{if(scrub&&event.buttons===1)scrubbing(event)}}>
         <rect x="0" y="0" width={w} height={h} className="star-plot-bg"/>
         {[0.25,0.5,0.75].map(f=><line key={f} x1="0" x2={w} y1={h*f} y2={h*f} className="star-grid"/>)}
         {picked.map(p=><path key={p.key} d={path(p.samples,get,lo,hi,w,h)} fill="none" stroke={p.colour} strokeWidth="1.4"/>)}
+        {cursorX!=null&&<line x1={cursorX} x2={cursorX} y1="0" y2={h} className="star-cursor"/>}
       </svg></div>;};
   const extent=(pick:(r:StarSummary)=>number)=>{
     const vals=stars.map(pick).filter(Number.isFinite);
@@ -177,13 +225,58 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
     {!loading&&!error&&stars.length===0&&<div className="history-empty">No star photometry recorded for this camera yet.</div>}
     {stars.length>0&&<div className="star-panels">
       <div className="star-series">
-        {plot('Total intensity above background',x=>x.flux,'counts')}
+        {plot('Total intensity above background',x=>x.flux,'counts',true)}
+        {times.length>0&&<div className="star-scrub">
+          <input type="range" aria-label="Time along the brightness series"
+            min={t0} max={t1} step={Math.max(1000,Math.round((t1-t0)/600))}
+            value={cursor??t1}
+            onChange={event=>setCursor(Number(event.target.value))}/>
+          <small role="status">{cursor==null?'Drag the brightness plot or this slider to open a frame'
+            :`${new Date(cursor).toISOString().replace('T',' ').slice(0,19)} UTC${frameBusy?' \u00b7 loading\u2026':''}`}</small>
+          {cursor!=null&&<button type="button" onClick={()=>setCursor(null)}>Clear</button>}
+        </div>}
         {plot('Fitted image background',x=>x.background,'counts')}
         <div className="star-legend">{picked.map(p=>{const row=stars.find(r=>r.star_key===p.key);
           return <span key={p.key}><i style={{background:p.colour}}/>{row?`V ${row.vt_mag.toFixed(2)} at ${row.elevation_deg?.toFixed(0)}\u00b0 el`:p.key}<small>{p.samples.length} pts</small></span>})}
           {picked.length===0&&<small>Select stars in the scatter to plot them.</small>}</div>
       </div>
       <div className="star-scatter">
+        {frame&&frame.image_id?(()=>{
+          // Scrubbed frame: the image itself, with every star looked for in it
+          // drawn where it was found, coloured by how far it has fallen from
+          // its own best in this window.
+          const placed=frame.stars.filter(r=>r.x!=null&&r.y!=null);
+          const W=frame.width||Math.ceil(Math.max(...placed.map(r=>r.x as number),1)*1.05);
+          const H=frame.height||Math.ceil(Math.max(...placed.map(r=>r.y as number),1)*1.05);
+          const found=placed.filter(r=>r.detected).length;
+          const r0=Math.max(2.5,Math.min(W,H)/150);
+          return <>
+            <div className="star-plot-head"><strong>Star positions in the frame</strong>
+              <small>{found} of {frame.stars.length} found{frame.observation_utc?` \u00b7 ${new Date(frame.observation_utc).toISOString().replace('T',' ').slice(0,19)} UTC`:''}</small></div>
+            <svg className="star-frame" viewBox={`0 0 ${W} ${H}`} role="img"
+              aria-label="Scrubbed camera frame with identified stars">
+              <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
+                x="0" y="0" width={W} height={H} preserveAspectRatio="none"/>
+              {placed.map(r=>{const on=selected.includes(r.star_key);
+                return <g key={r.star_key} className={on?'chosen':''} onClick={()=>toggle(r.star_key)}>
+                  <circle cx={r.x as number} cy={r.y as number}
+                    r={r0*(r.detected?1.6:1.1)*(on?1.5:1)}
+                    fill={r.detected?relativeColour(r.relative):'none'}
+                    fillOpacity={r.detected?0.9:0}
+                    stroke={on?'#fff':r.detected?'rgba(0,0,0,.55)':'rgba(255,255,255,.45)'}
+                    strokeWidth={r0*(on?0.55:0.3)}
+                    strokeDasharray={r.detected?undefined:`${r0*0.8} ${r0*0.6}`}/>
+                  <title>{`V ${r.vt_mag.toFixed(2)}  elevation ${r.elevation_deg?.toFixed(1)??'?'}\u00b0
+${r.detected?`flux ${r.flux?.toPrecision(4)} of best ${r.best_flux?.toPrecision(4)}
+${r.relative==null?'':(r.relative*100).toFixed(0)+'% of its own maximum, '+(magnitudesDown(r.relative)?.toFixed(2)??'?')+' mag down'}`:'not detected in this frame'}
+SNR ${r.flux_snr==null?'n/a':r.flux_snr.toFixed(1)}`}</title>
+                </g>})}
+            </svg>
+            <div className="star-ramp"><small>faded</small>
+              {[0,0.04,0.16,0.36,0.64,1].map(v=><i key={v} style={{background:relativeColour(v)}}/>)}
+              <small>at its best</small></div>
+            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found. Click a star to plot it.</small>
+          </>})():<>
         <div className="star-plot-head"><strong>Star positions in the frame</strong><small>colour is brightness variation</small></div>
         <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label="Star image positions coloured by brightness variation">
           <rect x="0" y="0" width={S} height={S} className="star-plot-bg"/>
@@ -200,7 +293,8 @@ clear-sky flux ${r.clear_flux==null?'n/a':r.clear_flux.toPrecision(4)}`}</title>
         <div className="star-ramp"><small>steady</small>
           {[0,0.2,0.4,0.6,0.8,1].map(v=><i key={v} style={{background:variationColour(v)}}/>)}
           <small>obscured</small></div>
-        <small className="star-hint">Click a star to add or remove it from the plots. Marker size follows catalogue magnitude.</small>
+        <small className="star-hint">Click a star to add or remove it from the plots. Marker size follows catalogue magnitude. Drag the brightness plot to open the frame behind it.</small>
+        </>}
       </div>
     </div>}
   </div></div>;

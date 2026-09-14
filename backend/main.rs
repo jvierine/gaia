@@ -793,10 +793,122 @@ struct StarsQuery {
 }
 
 #[derive(Deserialize)]
+struct StarFrameQuery {
+    /// Instant to scrub to, RFC 3339. The nearest measured frame is returned.
+    at: String,
+    channel: Option<String>,
+    hours: Option<f64>,
+}
+
+#[derive(Deserialize)]
 struct StarSeriesQuery {
     star: String,
     channel: Option<String>,
     hours: Option<f64>,
+}
+
+/// One measured frame, chosen as the nearest to a requested instant, with every
+/// star looked for in it. Each star carries its brightness relative to the
+/// brightest that star reached anywhere in the window, which is what makes the
+/// colours comparable between a bright star and a faint one: the quantity of
+/// interest is how far a star has fallen from its own best, not how bright it
+/// is.
+async fn source_star_frame(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<StarFrameQuery>,
+) -> ApiResult<Json<Value>> {
+    let channel = query.channel.unwrap_or_else(|| "mean".into());
+    if !starphot::CHANNELS.contains(&channel.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
+    }
+    let hours = query.hours.unwrap_or(24.0).clamp(0.1, 24.0 * 14.0);
+    let window = format!("-{hours} hours");
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    // The nearest measured frame to the requested instant, inside the window.
+    let frame: Option<(String, String)> = conn
+        .query_row(
+            "SELECT image_id,observation_utc FROM star_photometry
+             WHERE source_id=?1 AND channel=?2
+               AND julianday(observation_utc) >= julianday('now', ?3)
+             GROUP BY image_id
+             ORDER BY abs(julianday(observation_utc) - julianday(?4)) LIMIT 1",
+            rusqlite::params![id, channel, window, query.at],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    let Some((image_id, observation_utc)) = frame else {
+        return Ok(Json(json!({"stars": [], "image_id": null})));
+    };
+    // Full-resolution dimensions, so the overlay lines up with the image the
+    // browser fetches rather than with a padded bounding box of the stars.
+    let size: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT width,height FROM images WHERE id=?1",
+            [&image_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    let mut statement = conn
+        .prepare(
+            "SELECT p.star_key,p.vt_mag,p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,
+                    p.elevation_deg,p.flux,p.flux_snr,p.amplitude,m.best
+             FROM star_photometry p
+             LEFT JOIN (SELECT star_key,max(flux) AS best FROM star_photometry
+                        WHERE source_id=?1 AND channel=?2 AND amplitude IS NOT NULL
+                          AND flux_snr >= 5
+                          AND julianday(observation_utc) >= julianday('now', ?3)
+                        GROUP BY star_key) m ON m.star_key=p.star_key
+             WHERE p.source_id=?1 AND p.channel=?2 AND p.image_id=?4
+             ORDER BY p.vt_mag",
+        )
+        .map_err(internal)?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![id, channel, window, image_id],
+            |r| {
+                let predicted: (Option<f64>, Option<f64>) = (r.get(2)?, r.get(3)?);
+                let centroid: (Option<f64>, Option<f64>) = (r.get(4)?, r.get(5)?);
+                let flux: Option<f64> = r.get(7)?;
+                let best: Option<f64> = r.get(10)?;
+                let detected: Option<f64> = r.get(9)?;
+                // Where to draw it: where the fit found it when it was found,
+                // otherwise where the lens model said to look.
+                let (x, y) = match centroid {
+                    (Some(x), Some(y)) => (Some(x), Some(y)),
+                    _ => predicted,
+                };
+                Ok(json!({
+                    "star_key": r.get::<_, String>(0)?,
+                    "vt_mag": r.get::<_, f64>(1)?,
+                    "x": x,
+                    "y": y,
+                    "elevation_deg": r.get::<_, Option<f64>>(6)?,
+                    "flux": flux,
+                    "flux_snr": r.get::<_, Option<f64>>(8)?,
+                    "detected": detected.is_some(),
+                    "best_flux": best,
+                    // Fraction of this star's own best in the window. Null when
+                    // the star was not found, which the client draws as absent
+                    // rather than as dark.
+                    "relative": match (flux, best) {
+                        (Some(f), Some(b)) if b > 0.0 && detected.is_some() => {
+                            Some((f / b).clamp(0.0, 1.0))
+                        }
+                        _ => None,
+                    },
+                }))
+            },
+        )
+        .map_err(internal)?;
+    let stars = rows.collect::<Result<Vec<_>, _>>().map_err(internal)?;
+    Ok(Json(json!({
+        "image_id": image_id,
+        "observation_utc": observation_utc,
+        "width": size.map(|(w, _)| w),
+        "height": size.map(|(_, h)| h),
+        "stars": stars,
+    })))
 }
 
 /// Every star measured for one camera in a window, with its median image
@@ -1138,6 +1250,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/calibrations", post(calibration))
         .route("/api/sources/{id}/stars", get(source_stars))
         .route("/api/sources/{id}/stars/series", get(source_star_series))
+        .route("/api/sources/{id}/stars/frame", get(source_star_frame))
         .route(
             "/api/sources/{id}/calibrations",
             get(source_calibrations).post(set_selected_calibration),

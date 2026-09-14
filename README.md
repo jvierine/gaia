@@ -16,8 +16,6 @@ The public viewer is at <https://juha.no/gaia/>.
 
 The Rust service SHA-256 deduplicates downloads. It checks only a bounded number of newest archive entries and one frame from snapshot URLs per poll. Historical bulk acquisition is deliberately not enabled by default.
 
-`sources/starvisor.json` contains the current STARVISOR Night Sky Patrol registry, including Popovo. Regenerate it from a saved STARVISOR index page with `node tools/import-starvisor.mjs starvisor.html`; review its producer and copyright fields before committing changes.
-
 ## Adding an image source
 
 Add an object to `sources/core.json` and submit a pull request. Every source must name its producer and retain copyright:

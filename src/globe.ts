@@ -4,6 +4,7 @@ function cameraCredit(id:string,producer:string){return stationCredits.get(id)||
 import {shellTextureCoordinates} from './source-map-coordinates';
 import {cameraCompositor} from './camera-compositor';
 import {cameraWeightScale} from './composition-rules';
+import {clockAt,loopPosition,resumePosition} from './playback-clock';
 import {liveCutoff} from './live-time';
 import {manifestUrl} from './public-manifest';
 const VERTEX = `
@@ -248,6 +249,13 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   const smoothFramebuffer=gl.createFramebuffer();
   type SmoothState={textures:[WebGLTexture,WebGLTexture];index:number;target:WebGLTexture;geometry:Geometry;changed:number;initialized:boolean;size:[number,number]};
   const smoothStates=new Map<string,SmoothState>();let lastSmoothTime=performance.now(),displayEpoch=getEpochMillis();
+  // Where playback currently is, interpolated between image times rather than
+  // snapped to them: the images necessarily step, one per published minute, and
+  // the Earth underneath them must not. Set by the overview playback loop, read
+  // by the draw loop, and null whenever playback is not running, when the sun
+  // follows the epoch prop as before.
+  let playbackClockValue:number|null=null;
+  const playbackClock=()=>playbackClockValue;
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
   let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number}[]=[];
   const layers:{buffer:WebGLBuffer;count:number}[]=[];
@@ -401,13 +409,13 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
         if(!warming)reportBuffer({active:false,...status});
       }
     };
-    const cancelBuffer=()=>{cancelAnimationFrame(playAnimation);warmRequest?.abort();warming=false;overviewActive=false;overviewComplete=false;sheetImages.clear();selection++;for(const request of requests.values())request.abort();requests.clear();pending.clear();ready.clear();progress.clear();onLoading(false);reportBuffer({active:false,done:0,total:0,failed:0})};
+    const cancelBuffer=()=>{cancelAnimationFrame(playAnimation);playbackClockValue=null;warmRequest?.abort();warming=false;overviewActive=false;overviewComplete=false;sheetImages.clear();selection++;for(const request of requests.values())request.abort();requests.clear();pending.clear();ready.clear();progress.clear();onLoading(false);reportBuffer({active:false,done:0,total:0,failed:0})};
     canvas.addEventListener('gaia-cancel-buffer',cancelBuffer);
     abort.signal.addEventListener('abort',()=>canvas.removeEventListener('gaia-cancel-buffer',cancelBuffer),{once:true});
     const playOverview=async(event:Event)=>{
       const {active,speed=32}=(event as CustomEvent).detail;
       cancelAnimationFrame(playAnimation);
-      if(!active){if(warming){warmRequest?.abort();warming=false;overviewComplete=false;overviewActive=false;lastMinute=-1;reportBuffer({active:false,done:0,total:0,failed:0})}return}
+      if(!active){playbackClockValue=null;if(warming){warmRequest?.abort();warming=false;overviewComplete=false;overviewActive=false;lastMinute=-1;reportBuffer({active:false,done:0,total:0,failed:0})}return}
       try{
         if(!overviewComplete){
           warmRequest?.abort();const request=new AbortController();warmRequest=request;warming=true;
@@ -430,17 +438,27 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           canvas.dataset.overviewReady='true';canvas.dataset.overviewFrames=String(times.length);canvas.dataset.overviewTexturePixels='64';
           reportBuffer({active:false,done:times.length,total:times.length,failed:0});
         }
-        const times=overview.images.map((f:any)=>Date.parse(f.at)),duration=15000*32/Math.max(.25,speed),start=performance.now();let previous=-1,loops=0;
+        const times=overview.images.map((f:any)=>Date.parse(f.at)),duration=15000*32/Math.max(.25,speed);
+        // Carry on from wherever the globe is showing rather than rewinding to
+        // the start. This is what makes a speed change a change of speed: the
+        // event that carries the new rate arrives here exactly like a fresh
+        // play, so without it every adjustment would jump back to the first
+        // frame.
+        const start=performance.now()-resumePosition(times,playbackClockValue??getEpochMillis())*duration;
+        let previous=-1,loops=0;
         canvas.dataset.playbackStarted=String(start);canvas.dataset.playbackDuration=String(duration);
-        const tick=(now:number)=>{if(abort.signal.aborted)return;const elapsed=now-start,loop=Math.floor(elapsed/duration),i=Math.min(times.length-1,Math.floor(elapsed%duration/duration*times.length));
+        const tick=(now:number)=>{if(abort.signal.aborted)return;const elapsed=now-start,loop=Math.floor(elapsed/duration),position=loopPosition(elapsed,duration),i=Math.min(times.length-1,Math.floor(position*times.length));
           if(loop>loops){canvas.dataset.playbackLoopMs=String(elapsed/loop);loops=loop}
+          // The continuous clock, so the terminator and a sun-locked globe turn
+          // evenly instead of once per image.
+          playbackClockValue=clockAt(times,position);
           if(i!==previous){previous=i;window.dispatchEvent(new CustomEvent('gaia-overview-epoch',{detail:times[i]}))}
           playAnimation=requestAnimationFrame(tick);
         };playAnimation=requestAnimationFrame(tick);
       }catch(error){warming=false;overviewActive=false;overviewComplete=false;lastMinute=-1;reportBuffer({active:false,done:0,total:0,failed:1,message:String((error as Error).message)});window.dispatchEvent(new Event('gaia-pause-playback'))}
     };
-    const leaveOverview=()=>{cancelAnimationFrame(playAnimation);overviewActive=false;overviewComplete=false;warmRequest?.abort();warming=false;pending.clear();ready.clear();lastMinute=-1};
-    const scrubOverview=(event:Event)=>{if(!overviewComplete)return;const wanted=(event as CustomEvent).detail;const t=overview.images.map((f:any)=>Date.parse(f.at)).reduce((a:number,b:number)=>Math.abs(a-wanted)<Math.abs(b-wanted)?a:b);window.dispatchEvent(new CustomEvent('gaia-overview-epoch',{detail:t}))};
+    const leaveOverview=()=>{cancelAnimationFrame(playAnimation);playbackClockValue=null;overviewActive=false;overviewComplete=false;warmRequest?.abort();warming=false;pending.clear();ready.clear();lastMinute=-1};
+    const scrubOverview=(event:Event)=>{if(!overviewComplete)return;const wanted=(event as CustomEvent).detail;const t=overview.images.map((f:any)=>Date.parse(f.at)).reduce((a:number,b:number)=>Math.abs(a-wanted)<Math.abs(b-wanted)?a:b);playbackClockValue=t;window.dispatchEvent(new CustomEvent('gaia-overview-epoch',{detail:t}))};
     window.addEventListener('gaia-scrub-overview',scrubOverview);
     abort.signal.addEventListener('abort',()=>window.removeEventListener('gaia-scrub-overview',scrubOverview),{once:true});
     window.addEventListener('gaia-run-overview',playOverview);window.addEventListener('gaia-leave-overview',leaveOverview);
@@ -515,7 +533,10 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   // straight up, and the planet rotates underneath it as the epoch advances.
   const sunUpOrientation=(sun:number[]):[number,number]=>[Math.atan2(sun[0],sun[2])+Math.PI,sunTilt];
   let lastEpochTime=performance.now();
-  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);resetAttributes();gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;const sun=solarDirection(displayEpoch);if(sunLock){const[lockedYaw,lockedPitch]=sunUpOrientation(sun);yaw=lockedYaw;pitch=lockedPitch}gl.uniform2f(rotation,yaw,pitch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
+  const draw=()=>{const dpr=Math.min(devicePixelRatio||1,2),w=Math.floor(canvas.clientWidth*dpr),h=Math.floor(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);resetAttributes();gl.useProgram(program);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);gl.uniform2f(resolution,w,h);gl.uniform1f(zoomLoc,zoom);const now=performance.now();const target=getEpochMillis();if(target<displayEpoch||Math.abs(target-displayEpoch)>600000)displayEpoch=target;else displayEpoch+=(target-displayEpoch)*(1-Math.exp(-Math.min(100,now-lastEpochTime)/65));lastEpochTime=now;// While playback runs the sun follows the interpolated clock directly. It is
+  // already continuous, and easing towards it would only add lag; outside
+  // playback the epoch arrives in steps and still wants smoothing.
+  const sun=solarDirection(playbackClock()??displayEpoch);if(sunLock){const[lockedYaw,lockedPitch]=sunUpOrientation(sun);yaw=lockedYaw;pitch=lockedPitch}gl.uniform2f(rotation,yaw,pitch);gl.uniform3f(sunLoc,sun[0],sun[1],sun[2]);gl.drawArrays(gl.TRIANGLES,0,3);for(const [lineBuffer,count,color] of [[boundaryBuffer,boundaryVertices,[.52,.68,.72]],[magneticBuffer,magneticVertices,[.97,.48,1.]]] as const){
     if(!count)continue;resetAttributes();gl.useProgram(lineProgram);gl.bindBuffer(gl.ARRAY_BUFFER,lineBuffer);
     gl.enableVertexAttribArray(magneticPosition);gl.vertexAttribPointer(magneticPosition,2,gl.FLOAT,false,0,0);
     gl.uniform2f(gl.getUniformLocation(lineProgram,'resolution'),w,h);

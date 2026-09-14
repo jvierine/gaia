@@ -265,9 +265,10 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
           const [cx,cy]=centre??[W/2,H/2];
           const vbox=[Math.min(W-spanX/2,Math.max(spanX/2,cx))-spanX/2,
                       Math.min(H-spanY/2,Math.max(spanY/2,cy))-spanY/2,spanX,spanY];
-          // Each star owns the sky nearer to it than to any other. An edge is
-          // only as trustworthy as the dimmer of the two stars meeting across
-          // it, so it takes that one's colour.
+          // Each star owns the sky nearer to it than to any other. A boundary
+          // is shared, so it is drawn as a gradient running from the brighter
+          // of the two stars across to the darker one: the eye then reads which
+          // way the sky is closing rather than only how bad the worse side is.
           // Cut the cells to the sky the lens actually sees. A fisheye's corners
           // are ground and housing, and a cell running out there claims a
           // region its star never looked at.
@@ -275,11 +276,16 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
             ?clipToFrame(frame.field.map(([x,y])=>({x,y})),W,H)
             :frameBoundary(W,H);
           const cells=voronoiEdges(identified.map(r=>({x:r.x as number,y:r.y as number})),boundary);
-          const fainter=(a:number,b:number)=>{
-            const [p,q]=[identified[a]?.relative,identified[b]?.relative];
-            if(p==null)return q??null;
-            if(q==null)return p;
-            return Math.min(p,q);
+          // Ordered bright end first, so the gradient always runs the same way.
+          const across=(a:number,b:number)=>{
+            const first=identified[a],second=identified[b];
+            if(!first||!second)return null;
+            const [p,q]=[first.relative,second.relative];
+            // A star with no measured maximum cannot be ranked; treat the pair
+            // as flat rather than inventing a direction for it.
+            const bright=p==null||q==null?first:(p>=q?first:second);
+            const dark=bright===first?second:first;
+            return {bright,dark};
           };
           return <>
             <div className="star-plot-head"><strong>Star positions in the frame</strong>
@@ -312,8 +318,15 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
               style={{cursor:zoom>1?'grab':'default'}}>
               <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
                 x="0" y="0" width={W} height={H} preserveAspectRatio="none"/>
+              <defs>{cells.map((e,i)=>{const pair=across(e.a,e.b);if(!pair)return null;
+                return <linearGradient key={i} id={`vor${i}`} gradientUnits="userSpaceOnUse"
+                  x1={pair.bright.x as number} y1={pair.bright.y as number}
+                  x2={pair.dark.x as number} y2={pair.dark.y as number}>
+                  <stop offset="0" stopColor={relativeColour(pair.bright.relative)}/>
+                  <stop offset="1" stopColor={relativeColour(pair.dark.relative)}/>
+                </linearGradient>})}</defs>
               <g className="star-cells">{cells.map((e,i)=><line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-                stroke={relativeColour(fainter(e.a,e.b))} strokeWidth={r0*0.7} strokeLinecap="round"/>)}</g>
+                stroke={across(e.a,e.b)?`url(#vor${i})`:relativeColour(null)} strokeWidth={r0*0.7} strokeLinecap="round"/>)}</g>
               {placed.map(r=>{const on=selected.includes(r.star_key);
                 return <g key={r.star_key} className={on?'chosen':''} onClick={()=>toggle(r.star_key)}>
                   <circle cx={r.x as number} cy={r.y as number}
@@ -332,7 +345,7 @@ SNR ${r.flux_snr==null?'n/a':r.flux_snr.toFixed(1)}`}</title>
             <div className="star-ramp"><small>faded</small>
               {[0,0.04,0.16,0.36,0.64,1].map(v=><i key={v} style={{background:relativeColour(v)}}/>)}
               <small>at its best</small></div>
-            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found. The web divides the frame into the region nearest each identified star, every boundary taking the colour of the fainter star across it. Click a star to plot it.</small>
+            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found. The web divides the camera's field into the region nearest each identified star, every boundary shaded from the brighter of the two stars across it to the darker. Click a star to plot it.</small>
           </>})():<>
         <div className="star-plot-head"><strong>Star positions in the frame</strong><small>colour is brightness variation</small></div>
         <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label="Star image positions coloured by brightness variation">

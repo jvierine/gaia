@@ -759,3 +759,11 @@ reading the lens model shells out to h5dump.
 Frontend only and already live: the boundary lines are twice as wide and the
 frame view can be magnified. Until this binary is installed the tessellation
 still runs to the frame corners on fisheye cameras.
+
+## Commit attribution: human contributors only
+
+- Do not add AI assistants, models, bots, or their vendors as Git authors, committers, or co-authors. This includes Claude, Anthropic, Codex, OpenAI, and similar tools. Do not add AI `Co-Authored-By` trailers or generated-by signatures to commit messages.
+- Preserve the actual human author and any genuine human co-authors. Use the contributing human’s configured Git identity; never impersonate another collaborator.
+- Inspect the final commit message before pushing, including trailers inserted automatically by tools. Disable automatic AI attribution in your tool settings. These rules apply to every GAIA branch and release commit.
+
+2026-09-14: At Juha’s explicit request, main history is being rewritten to remove Claude/Anthropic co-author trailers only. Human identities, timestamps and file trees are preserved. The public-viewer release branch has no such trailers and is unchanged. Other checkouts must fetch and realign with rewritten origin/main before further pushes; preserve uncommitted work and do not merge the old history back. A private pre-rewrite Git bundle and old-to-new commit map are retained under /mnt/data/juha/gaia for recovery and interpretation of older deployment revision references.

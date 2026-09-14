@@ -53,3 +53,9 @@
 - Paused or removed cameras do not contribute projected imagery, station markers, hover targets, public composites, or attribution maps.
 - Preserve source observation timestamps. A download-time fallback must remain explicitly distinguishable from a source/instrument timestamp.
 - Preserve camera-provider provenance and links. GAIA serves projected low-resolution views and lens models, not replacement copies of providers' original high-resolution imagery.
+
+## Commit attribution: human contributors only
+
+- Do not add AI assistants, models, bots, or their vendors as Git authors, committers, or co-authors. This includes Claude, Anthropic, Codex, OpenAI, and similar tools. Do not add AI `Co-Authored-By` trailers or generated-by signatures to commit messages.
+- Preserve the actual human author and any genuine human co-authors. Use the contributing human’s configured Git identity; never impersonate another collaborator.
+- Inspect the final commit message before pushing, including trailers inserted automatically by tools. Disable automatic AI attribution in your tool settings. These rules apply to every GAIA branch and release commit.

@@ -3,6 +3,7 @@ mod calibration_image;
 mod crawler;
 mod db;
 mod equalize;
+mod extinction;
 mod geometry;
 mod igrf_grid;
 mod image_time;

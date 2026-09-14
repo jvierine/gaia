@@ -98,3 +98,24 @@ CREATE TABLE IF NOT EXISTS frame_sky(
   PRIMARY KEY(source_id,image_id)
 );
 CREATE INDEX IF NOT EXISTS frame_sky_series ON frame_sky(source_id,observation_utc);
+
+-- Clear-sky reference: one extinction coefficient per camera, night and colour
+-- channel, fitted to the upper envelope of the star brightnesses so that cloud
+-- is not absorbed into the atmosphere. `night` is a day number in local solar
+-- time offset by twelve hours, so one period of darkness is one row.
+CREATE TABLE IF NOT EXISTS extinction_nights(
+  source_id TEXT NOT NULL REFERENCES sources(id), night INTEGER NOT NULL, channel TEXT NOT NULL,
+  k_mag_per_airmass REAL NOT NULL, stars INTEGER NOT NULL, samples INTEGER NOT NULL,
+  airmass_span REAL NOT NULL, envelope_scatter REAL, curvature REAL NOT NULL,
+  fitted_utc TEXT NOT NULL,
+  PRIMARY KEY(source_id,night,channel)
+);
+-- The zero point of each star for that fit, as ln flux at the top of the
+-- atmosphere. Instrumental: there is no photometric zero point in the archive,
+-- so these are comparable only within one camera and night.
+CREATE TABLE IF NOT EXISTS star_zero_points(
+  source_id TEXT NOT NULL REFERENCES sources(id), night INTEGER NOT NULL, channel TEXT NOT NULL,
+  star_key TEXT NOT NULL, ln_flux_zero REAL NOT NULL,
+  PRIMARY KEY(source_id,night,channel,star_key)
+);
+CREATE INDEX IF NOT EXISTS extinction_by_camera ON extinction_nights(source_id,night);

@@ -26,6 +26,13 @@ Environment=GAIA_STARPHOT_REST_MS=250
 Environment=GAIA_STARPHOT_SUN_BELOW_DEG=-6
 Environment=GAIA_STARPHOT_MAX_OFFSET_PX=3
 Environment=GAIA_STARPHOT_LOOKBACK_HOURS=48
+# Clear-sky reference: one extinction coefficient per camera, night and channel,
+# fitted to the upper envelope of the star brightnesses. FIT_MIN_SNR is well
+# above the detection threshold on purpose, so the sample is not censored to the
+# clear moments at high air mass.
+Environment=GAIA_STARPHOT_FITS_PER_CYCLE=24
+Environment=GAIA_STARPHOT_FIT_NIGHTS=2
+Environment=GAIA_STARPHOT_FIT_MIN_SNR=20
 ExecStart=/mnt/data/juha/gaia-build/release/gaia-server
 Restart=on-failure
 RestartSec=5

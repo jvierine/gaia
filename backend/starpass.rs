@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::starphot::{self, Star};
-use crate::{db, geometry};
+use crate::{db, extinction, geometry};
 
 /// How the pass is tuned. Every field has an environment override so the rate
 /// can be changed on the live machine without a rebuild.
@@ -50,6 +50,13 @@ pub struct Settings {
     pub min_elevation_deg: f64,
     /// How far back the pass will reach for unmeasured frames.
     pub lookback_hours: f64,
+    /// Clear-sky fits attempted per cycle. Each is a scan over a few hundred
+    /// trial coefficients, so this is bounded work, but it shares the cycle
+    /// with the photometry and should not crowd it out.
+    pub max_fits_per_cycle: usize,
+    /// Nights back from the current one that stay eligible for refitting. Two
+    /// keeps the night in progress and the one just finished current.
+    pub fit_nights: i64,
 }
 
 fn env_parse<T: std::str::FromStr>(name: &str, fallback: T) -> T {
@@ -76,6 +83,8 @@ impl Default for Settings {
             max_offset_px: 3.0,
             min_elevation_deg: 10.0,
             lookback_hours: 48.0,
+            max_fits_per_cycle: 24,
+            fit_nights: 2,
         }
     }
 }
@@ -98,6 +107,8 @@ impl Settings {
             max_offset_px: env_parse("GAIA_STARPHOT_MAX_OFFSET_PX", d.max_offset_px),
             min_elevation_deg: env_parse("GAIA_STARPHOT_MIN_ELEVATION_DEG", d.min_elevation_deg),
             lookback_hours: env_parse("GAIA_STARPHOT_LOOKBACK_HOURS", d.lookback_hours),
+            max_fits_per_cycle: env_parse("GAIA_STARPHOT_FITS_PER_CYCLE", d.max_fits_per_cycle),
+            fit_nights: env_parse("GAIA_STARPHOT_FIT_NIGHTS", d.fit_nights),
         }
     }
 }
@@ -123,6 +134,11 @@ pub struct Report {
     pub measurements: usize,
     pub skipped_daylight: usize,
     pub failed: usize,
+    /// Camera-night-channels that produced a clear-sky fit.
+    pub fits: usize,
+    /// Camera-night-channels examined and refused: too few stars, too little
+    /// air mass. A normal outcome, counted so it is visible.
+    pub fits_refused: usize,
 }
 
 fn unix_seconds(utc: &str) -> Option<f64> {
@@ -324,6 +340,114 @@ impl OptparCache {
     }
 }
 
+/// Channels the clear-sky reference is fitted in. Cloud extinction is
+/// wavelength dependent, so each is fitted separately.
+const FIT_CHANNELS: [&str; 4] = ["mean", "r", "g", "b"];
+
+/// Fits the clear-sky reference for the camera-nights that have moved on since
+/// they were last fitted, newest night first. Returns how many fits were stored
+/// and how many were examined and refused.
+///
+/// A night is refitted whenever it has photometry newer than its stored fit, so
+/// a night in progress improves through the evening and settles once the camera
+/// stops contributing to it.
+pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usize, usize)> {
+    let mut cameras = conn.prepare(
+        "SELECT DISTINCT p.source_id, s.longitude_deg FROM star_photometry p \
+         JOIN sources s ON s.id=p.source_id \
+         WHERE s.longitude_deg IS NOT NULL \
+           AND julianday(p.observation_utc) >= julianday('now') - ?1",
+    )?;
+    let rows = cameras.query_map(rusqlite::params![settings.fit_nights + 1], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+    })?;
+    let cameras: Vec<(String, f64)> = rows.collect::<Result<Vec<_>, _>>()?;
+
+    let now = chrono::Utc::now().timestamp() as f64;
+    let current_night = extinction::night_index(now, 0.0);
+    let mut stored = 0usize;
+    let mut refused = 0usize;
+    for (source_id, longitude) in cameras {
+        for back in 0..settings.fit_nights {
+            if stored + refused >= settings.max_fits_per_cycle {
+                return Ok((stored, refused));
+            }
+            let night = extinction::night_index(now, longitude) - back;
+            // The night in local solar time, converted back to a UTC window.
+            let offset = longitude / 15.0 * 3600.0;
+            let from = (night as f64) * 86400.0 + 43200.0 - offset;
+            let to = from + 86400.0;
+            let (from_utc, to_utc) = (rfc3339(from), rfc3339(to));
+            // Nothing new since the last fit means nothing to do.
+            let newest: Option<String> = conn
+                .query_row(
+                    "SELECT max(observation_utc) FROM star_photometry \
+                     WHERE source_id=?1 AND observation_utc>=?2 AND observation_utc<?3",
+                    rusqlite::params![source_id, from_utc, to_utc],
+                    |r| r.get(0),
+                )
+                .unwrap_or(None);
+            let Some(newest) = newest else { continue };
+            let fitted: Option<String> = conn
+                .query_row(
+                    "SELECT min(fitted_utc) FROM extinction_nights \
+                     WHERE source_id=?1 AND night=?2",
+                    rusqlite::params![source_id, night],
+                    |r| r.get(0),
+                )
+                .unwrap_or(None);
+            if fitted.as_deref().is_some_and(|f| f > newest.as_str()) {
+                continue;
+            }
+            for channel in FIT_CHANNELS {
+                let mut q = conn.prepare(
+                    "SELECT star_key,elevation_deg,flux FROM star_photometry \
+                     WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 \
+                       AND observation_utc<?4 AND amplitude IS NOT NULL \
+                       AND flux IS NOT NULL AND flux>0 AND flux_snr>=?5",
+                )?;
+                let samples = q
+                    .query_map(
+                        rusqlite::params![source_id, channel, from_utc, to_utc, min_fit_snr()],
+                        |r| {
+                            Ok(extinction::Sample {
+                                star_key: r.get(0)?,
+                                elevation_deg: r.get(1)?,
+                                flux: r.get(2)?,
+                            })
+                        },
+                    )?
+                    .collect::<Result<Vec<_>, _>>()?;
+                match extinction::fit_night(&samples) {
+                    Some(fit) => {
+                        extinction::record(conn, &source_id, night, channel, &fit)?;
+                        stored += 1;
+                    }
+                    None => refused += 1,
+                }
+            }
+        }
+    }
+    Ok((stored, refused))
+}
+
+/// A measurement has to stand clear of the noise before it can define a clear
+/// sky, and the floor has to be well above the detection threshold rather than
+/// at it. A star measured near its detection limit is only recorded on the
+/// nights and elevations where it happened to be bright enough, so the
+/// surviving samples at high air mass are the clear ones. That censoring
+/// flattens the extinction slope and can drive the fitted coefficient negative.
+/// Requiring a comfortable margin keeps the sample complete.
+fn min_fit_snr() -> f64 {
+    env_parse("GAIA_STARPHOT_FIT_MIN_SNR", 20.0)
+}
+
+fn rfc3339(unix_seconds: f64) -> String {
+    chrono::DateTime::from_timestamp(unix_seconds as i64, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .to_rfc3339()
+}
+
 /// One pass over the pending frames.
 pub fn run_cycle(
     conn: &Connection,
@@ -389,6 +513,16 @@ pub fn run_cycle(
             rest();
         }
     }
+
+    // Then the clear-sky reference over what has been measured. It is cheap
+    // next to the fitting, and it is what turns a flux into an optical depth.
+    match fit_recent_nights(conn, settings) {
+        Ok((stored, refused)) => {
+            report.fits = stored;
+            report.fits_refused = refused;
+        }
+        Err(error) => tracing::warn!(%error, "clear-sky fit failed"),
+    }
     Ok(report)
 }
 
@@ -440,6 +574,8 @@ pub async fn run_loop(db_path: PathBuf, settings: Settings) {
                         measurements = report.measurements,
                         daylight = report.skipped_daylight,
                         failed = report.failed,
+                        fits = report.fits,
+                        fits_refused = report.fits_refused,
                         "star photometry cycle"
                     );
                 }
@@ -580,6 +716,11 @@ mod tests {
                     planted.push((x, y, 180.0));
                 }
             }
+            assert!(
+                !planted.is_empty(),
+                "frame {index} has no star above the horizon; the synthetic catalogue should \
+                 guarantee some at every hour"
+            );
             planted_image(512, 512, &planted).save(&path).unwrap();
             let id = format!("img-{index}");
             conn.execute(
@@ -605,14 +746,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gaia-cycle-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let optpar = equidistant_optpar();
-        let catalog = [
-            Star { ra_hours: 6.752, dec_deg: -16.716, vt_mag: -1.09 },
-            Star { ra_hours: 14.261, dec_deg: 19.182, vt_mag: -0.05 },
-            Star { ra_hours: 5.278, dec_deg: 45.998, vt_mag: 0.08 },
-            Star { ra_hours: 18.615, dec_deg: 38.784, vt_mag: 0.03 },
-            Star { ra_hours: 7.655, dec_deg: 5.225, vt_mag: 0.38 },
-            Star { ra_hours: 5.242, dec_deg: -8.202, vt_mag: 0.18 },
-        ];
+        // A synthetic catalogue spread right around the sky rather than real
+        // stars: which real star is up depends on the date the test runs, and
+        // this test asserts on frames timed relative to today.
+        let catalog: Vec<Star> = (0..24)
+            .flat_map(|hour| {
+                [-20.0, 0.0, 20.0].map(move |dec| Star {
+                    ra_hours: hour as f64,
+                    dec_deg: dec,
+                    vt_mag: 1.0,
+                })
+            })
+            .collect();
         let conn = test_db();
         let (night_ids, lens) = seed_archive(&conn, &dir, &optpar, &catalog);
 

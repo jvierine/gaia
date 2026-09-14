@@ -535,20 +535,21 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
-## Pending backend install: star photometry writer (2026-09-11)
+## Pending backend install: clear-sky reference and series scrubbing (2026-09-14)
 
-The running `gaia-server` predates commit `378f911` and must be replaced. bgu001
+The running `gaia-server` was installed 2026-09-13 21:05 and predates commit
+`66cb4d3`, so it has the star photometry writer but neither the clear-sky
+reference nor the new frame endpoint. bgu001
 cannot do it: `/mnt/data/juha/gaia-build` is j-owned and the live unit is j's
-USER `gaia-revontuli.service`. A release build of `378f911` is staged at
-`/mnt/data/juha/gaia/staging/gaia-server-378f911`, sha256
-`8f61ad8e95cd3186579f6f00e8f9db2e65df1f364b8ecf1835310cda479e66de`. As j:
+USER `gaia-revontuli.service`. A release build of `66cb4d3` is staged at
+`/mnt/data/juha/gaia/staging/gaia-server-66cb4d3`, sha256
+`be13ad36db6f0267fc50390aeb7540cc6881b3774e3b895f9aace12241a15b53`. As j:
 
-    cp /mnt/data/juha/gaia/staging/gaia-server-378f911 /mnt/data/juha/gaia-build/release/gaia-server
+    cp /mnt/data/juha/gaia/staging/gaia-server-66cb4d3 /mnt/data/juha/gaia-build/release/gaia-server
     systemctl --user restart gaia-revontuli.service
 
-The `f452a63` build this section first named was installed on 2026-09-11 at
-13:01 and is superseded; it has been removed from staging so the older binary
-cannot be installed by mistake.
+Earlier staged builds are removed as they are superseded, so the staging
+directory only ever holds the one to install.
 
 Or rebuild from source in the usual place; the staged binary is only a
 convenience. The SYSTEM unit of the same name stays disabled.
@@ -727,3 +728,19 @@ About opening simplified at user request: removed the STARVISOR jump link and Gl
 Removed the requested manual-review/automatic-change sentence from both About suggestions and the suggestion form. Submission behavior is unchanged.
 
 Removed the redundant globe-injected Choose archive day / Live view link and its cleanup handler from shared globe.ts. The existing playback date selector remains unchanged. Applies to both viewers; no archive permissions or playback behavior changed.
+
+### What the 66cb4d3 install adds over the running build
+
+The clear-sky reference. The photometry cycle now also fits one extinction
+coefficient per camera, night and colour channel to the upper envelope of the
+star brightnesses, storing it in `extinction_nights` with a zero point per star
+in `star_zero_points`. Both tables are created on open. It is bounded work, 24
+fits a cycle by default, and every limit is a `GAIA_STARPHOT_FIT_*` variable in
+the unit file. On the archive it accepts 151 fits and refuses 745; the accepted
+ones average 0.179 mag per air mass against a literature clear sky near 0.20.
+
+`GET /api/sources/{id}/stars/frame`, which the Cameras-tab photometry panel uses
+to open the frame behind a scrubbed instant. NOTE: `web-dist` is served straight
+from the repo, so that panel is already live in front of the older backend. The
+request 404s there and the panel simply stays on its aggregate scatter, which is
+inert rather than harmful, but scrubbing does nothing until this build is in.

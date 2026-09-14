@@ -535,17 +535,17 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
-## Pending backend install: clear-sky reference and series scrubbing (2026-09-14)
+## Pending backend install: camera field outline (2026-09-14)
 
-The running `gaia-server` was installed 2026-09-13 21:05 and predates commit
-`66cb4d3`, so it has the star photometry writer but neither the clear-sky
-reference nor the new frame endpoint. bgu001
+The running `gaia-server` was installed 2026-09-14 09:27 at commit `66cb4d3`,
+so it already has the clear-sky reference and the frame endpoint. What it lacks
+is the camera field outline that endpoint now returns. bgu001
 cannot do it: `/mnt/data/juha/gaia-build` is j-owned and the live unit is j's
-USER `gaia-revontuli.service`. A release build of `66cb4d3` is staged at
-`/mnt/data/juha/gaia/staging/gaia-server-66cb4d3`, sha256
-`be13ad36db6f0267fc50390aeb7540cc6881b3774e3b895f9aace12241a15b53`. As j:
+USER `gaia-revontuli.service`. A release build of `d1adbb8` is staged at
+`/mnt/data/juha/gaia/staging/gaia-server-d1adbb8`, sha256
+`2c4c85e82212cb8a2d321fdc5a55287cddac2f579f66ca0bb8a2759030504bff`. As j:
 
-    cp /mnt/data/juha/gaia/staging/gaia-server-66cb4d3 /mnt/data/juha/gaia-build/release/gaia-server
+    cp /mnt/data/juha/gaia/staging/gaia-server-d1adbb8 /mnt/data/juha/gaia-build/release/gaia-server
     systemctl --user restart gaia-revontuli.service
 
 Earlier staged builds are removed as they are superseded, so the staging
@@ -729,7 +729,7 @@ Removed the requested manual-review/automatic-change sentence from both About su
 
 Removed the redundant globe-injected Choose archive day / Live view link and its cleanup handler from shared globe.ts. The existing playback date selector remains unchanged. Applies to both viewers; no archive permissions or playback behavior changed.
 
-### What the 66cb4d3 install adds over the running build
+### What the 66cb4d3 install added, now in place
 
 The clear-sky reference. The photometry cycle now also fits one extinction
 coefficient per camera, night and colour channel to the upper envelope of the
@@ -744,3 +744,18 @@ to open the frame behind a scrubbed instant. NOTE: `web-dist` is served straight
 from the repo, so that panel is already live in front of the older backend. The
 request 404s there and the panel simply stays on its aggregate scatter, which is
 inert rather than harmful, but scrubbing does nothing until this build is in.
+
+### What the d1adbb8 install adds over the running build
+
+`GET /api/sources/{id}/stars/frame` gains a `field` member: the camera's own
+horizon projected into its image, so the star photometry tab can cut the Voronoi
+tessellation to the sky the lens actually sees rather than to the frame corners,
+which on a fisheye are ground and housing. Kiruna returns a circle of radius
+1368 px in a 2832 px frame. A rectilinear lens throws its horizon to infinity
+and returns nothing, and the client falls back to the frame, which for that
+camera is correct. The outline is cached per calibration and frame size because
+reading the lens model shells out to h5dump.
+
+Frontend only and already live: the boundary lines are twice as wide and the
+frame view can be magnified. Until this binary is installed the tessellation
+still runs to the frame corners on fisheye cameras.

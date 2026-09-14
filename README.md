@@ -1,6 +1,8 @@
 # GAIA — Global Auroral Image Aggregator
 
-GAIA aggregates near-real-time auroral imagery with attribution to its camera operators. It acquires public camera frames at a polite cadence, preserves the producer's copyright and requested acknowledgement, calibrates wide-field lenses through [AIDA/WISC](https://juha.no/aida/), and projects usable pixels onto a 100 km emission shell. Overlaps are blended with preference for the view nearest magnetic zenith, and each camera's contribution is tapered smoothly to zero between 75° and 85° zenith angle so horizon-grazing pixels drop out of the composite. Crop and obstruction outlines are feathered over 10 working-grid pixels; because each output pixel is normalized by its own summed weight, that feather only shows where images overlap. A whole image is additionally weighted by the solar elevation at its own station, from full weight below -12° down to 0.05 once the sun reaches the horizon, so twilight skies yield to genuinely dark neighbours.
+GAIA brings together low-resolution aurora images from publicly available cameras around the world on an interactive 3D globe. It provides a near-real-time global overview of auroral activity and lets viewers explore how it changes over time, for science and public outreach.
+
+GAIA helps users discover auroral cameras and reach the people and institutions behind them. Camera operators are credited, and images link directly to their websites. GAIA does not provide high-resolution imagery or an archival image service; contact the individual camera operators for those resources. Image copyrights remain with their owners, and scientific or commercial use requires permission from the camera operators.
 
 Authors: Juha Vierinen and Björn Gustavsson.
 

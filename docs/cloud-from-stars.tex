@@ -615,7 +615,8 @@ bound on the true clear-sky value. That is precisely the confound the remedies
 below exist to break, and it is the reason the third one is the right answer
 rather than the most thorough-sounding one.
 
-\paragraph{Three ways to fix it, in increasing quality.}
+\paragraph{Three ways to fix it, in increasing quality.} The third is now
+built; Sec.~\ref{sec:reference} reports what it took.
 \begin{enumerate}
   \item \textbf{Bin the reference by elevation.} Compute $p_{90}$ within
     elevation bands, say \SI{10}{\degree} wide, and compare a sample only with
@@ -670,6 +671,66 @@ but the derived optical depths should not be treated as calibrated.
     and known auroral activity before trusting marginal detections.
 \end{itemize}
 
+\section{The clear-sky reference, as built}
+\label{sec:reference}
+
+\texttt{backend/extinction.rs} fits the third remedy: one coefficient per
+camera, night and colour channel, with a zero point per star. The fit is a
+quantile regression at the ninetieth percentile rather than least squares,
+because cloud only ever subtracts and the clear sky is therefore the upper
+envelope of the samples, not their middle. The choice pays for itself
+numerically: for a fixed $k$ the zero point that minimises the pinball loss is
+exactly the quantile of $\ln F + \beta k X$ for that star, so every zero point
+profiles out analytically and what remains is a one-dimensional convex scan.
+Air mass is Kasten--Young rather than $1/\sin h$, which matters because the
+samples that carry the information are the low ones. A night runs from local
+solar noon to noon, so one period of darkness is one fit.
+
+\paragraph{Only a star that moves can measure the atmosphere.} This is the
+lesson the archive taught, and it is worth stating plainly because it is easy
+to get backwards. Every star carries its own free zero point, so a difference
+between two stars at different elevations is absorbed entirely by those zero
+points and says nothing about extinction. Only the air mass a star sweeps
+\emph{itself} identifies $k$. On this archive most stars barely move: Kiruna
+on one night showed 148 stars spanning air mass 1.1 to 4.6 across the field,
+which looks like ample leverage, while individually they covered 1.08 to 1.3
+and Polaris did not move at all. Fitted in that state the coefficient is
+unidentified, and it showed: 42 of 100 nights returned a \emph{negative}
+extinction, which is not a physical quantity. Stars that do not sweep at least
+\num{0.3} in air mass are now dropped, and a night without three that do is
+refused outright. A fit is refused as well when it lands on the edge of the
+scan, when the coefficient comes out negative, or when the objective fails to
+rise on both sides of the minimum --- the last being a direct test of whether
+the night pins $k$ at all.
+
+\paragraph{What it gives.} Over the archive the guards accept 151 fits and
+refuse 745, which is the honest ratio: most camera-nights genuinely do not
+constrain extinction. The accepted ones land where they should.
+
+\begin{center}\small
+\begin{tabular}{lrrr}
+\toprule
+channel & fits & mean $k$ & moving stars \\
+\midrule
+panchromatic & 38 & 0.179 & 34.2 \\
+red & 37 & 0.194 & 33.7 \\
+green & 38 & 0.185 & 34.0 \\
+blue & 38 & 0.191 & 32.2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The literature clear-sky value in $V$ is near \SI{0.20}{mag} per air
+mass. The estimator was never told that number, and the earlier whole-series
+regression on the same data gave \num{0.38}; recovering \num{0.18} is the
+evidence that the envelope fit separates atmosphere from weather. Optical
+depths computed from the stored references behave as they should too: on the
+best-sampled night they run from \num{0.000} at the tenth percentile through
+\num{0.147} at the median to \num{1.06} at the ninety-ninth, with
+\SI{39}{\percent} of samples below \num{0.1}. The floor at zero is by
+construction, since the reference is the ninetieth percentile of the star's own
+corrected series.
+
 \section{Where the cloud weight now has to go}
 \label{sec:weightpath}
 
@@ -709,11 +770,11 @@ term should follow that pattern rather than work around it.
 \label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{The clear-sky reference}, per Sec.~\ref{sec:airmass}. This is
-    now the blocking item: the measurements exist, in quantity, and nothing can
-    become an optical depth until each star has a clear-sky flux to be compared
-    against. The measured spread of $k$ says the per-camera per-night fit is
-    the one to build.
+  \item \textbf{Carry the reference through to a stored optical depth.} The
+    reference exists (Sec.~\ref{sec:reference}) and $\tau$ follows from it in
+    one line, but nothing yet writes a $\tau$ per measurement, and the nights
+    the fit refuses need a stated fallback: no weight at all, rather than a
+    guessed one.
   \item \textbf{Gate $\tau$ on detectability}, so a fit that is indistinguishable
     from noise is treated as an absent star rather than a faint one.
   \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:
@@ -753,7 +814,11 @@ term should follow that pattern rather than work around it.
   \item \texttt{backend/schema.sql} --- the \texttt{star\_photometry} and
     \texttt{frame\_sky} tables and their indices.
   \item \texttt{backend/starpass.rs} --- the writer: frame selection, the sky
-    record, cadence thinning, the lens-model cache and the background loop.
+    record, cadence thinning, the lens-model cache, the background loop and the
+    nightly refit of the clear-sky reference.
+  \item \texttt{backend/extinction.rs} --- air mass, the observing night, the
+    quantile fit, the identifiability guards, and the optical depth that
+    follows from a fit.
   \item \texttt{backend/publish\_layers.rs}, \texttt{src/composition-rules.ts}
     --- the two halves of the composite weight, and where a cloud factor has to
     be added (Sec.~\ref{sec:weightpath}).

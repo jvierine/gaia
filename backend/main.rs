@@ -807,6 +807,47 @@ struct StarSeriesQuery {
     hours: Option<f64>,
 }
 
+/// The horizon of a camera, projected into its own image, as a closed polygon.
+/// This is the edge of the sky a fisheye actually sees; its corners are ground
+/// and lens housing. Computed from the camera's own lens model and cached,
+/// because reading that model shells out to `h5dump`.
+fn field_outline(hdf5_path: &str, width: f64, height: f64) -> Option<Vec<[f64; 2]>> {
+    static CACHE: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<Vec<[f64; 2]>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    let key = format!("{hdf5_path}|{width}x{height}");
+    if let Some(hit) = CACHE.lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return hit;
+    }
+    let outline = projection::optical_parameters(hdf5_path).ok().and_then(|optpar| {
+        let mut points = Vec::new();
+        let mut outside = 0usize;
+        for step in 0..180 {
+            let az = step as f64 * 2.0;
+            // The horizon itself. A star is only measured well above it, so this
+            // is a generous edge rather than a tight one.
+            let Some((x, y)) = starphot::az_el_to_pixel(az, 0.0, &optpar, width, height) else {
+                return None;
+            };
+            if !x.is_finite() || !y.is_finite() {
+                return None;
+            }
+            // A rectilinear lens throws its horizon to infinity; a few points
+            // beyond the frame are ordinary for a fisheye whose circle is cut
+            // off by the sensor, but a mostly-outside outline is not a field.
+            if x < -width || x > 2.0 * width || y < -height || y > 2.0 * height {
+                outside += 1;
+            }
+            points.push([x, y]);
+        }
+        if outside * 4 > points.len() { None } else { Some(points) }
+    });
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(key, outline.clone());
+    }
+    outline
+}
+
 /// One measured frame, chosen as the nearest to a requested instant, with every
 /// star looked for in it. Each star carries its brightness relative to the
 /// brightest that star reached anywhere in the window, which is what makes the
@@ -902,11 +943,28 @@ async fn source_star_frame(
         )
         .map_err(internal)?;
     let stars = rows.collect::<Result<Vec<_>, _>>().map_err(internal)?;
+    // The lens model that was used to look for these stars, so the client can
+    // cut the tessellation to the sky this camera actually sees.
+    let field = match size {
+        Some((w, h)) => conn
+            .query_row(
+                "SELECT c.hdf5_path FROM star_photometry p \
+                 JOIN sources s ON s.id=p.source_id JOIN calibrations c ON c.source_id=s.id \
+                 WHERE p.source_id=?1 AND p.image_id=?2 \
+                 ORDER BY c.created_utc DESC LIMIT 1",
+                rusqlite::params![id, image_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|path| field_outline(&path, w as f64, h as f64)),
+        None => None,
+    };
     Ok(Json(json!({
         "image_id": image_id,
         "observation_utc": observation_utc,
         "width": size.map(|(w, _)| w),
         "height": size.map(|(_, h)| h),
+        "field": field,
         "stars": stars,
     })))
 }

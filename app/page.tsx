@@ -6,7 +6,7 @@ import {liveCutoff,LIVE_DELAY_MINUTES} from '../src/live-time';
 import { Activity, Aperture, CircleHelp, Database, Lightbulb, Satellite, Send, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import GaiaGlobeView from '../src/GaiaGlobeView';
-import {voronoiEdges} from '../src/voronoi';
+import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
 
 type ViewName = 'globe' | 'cameras' | 'status' | 'calibrate' | 'about';
 type Camera = {id:string;name:string;producer:string;state:string;timestamp_mode:string;latitude_deg:number|null;longitude_deg:number|null;calibrated:boolean;processing?:{state:string;total?:number;done?:number;ready?:number;error?:string|null};enabled:boolean;quality_exponent:number;images_24h:number;message?:string|null};
@@ -19,7 +19,7 @@ type StarSummary = {star_key:string;vt_mag:number;ra_hours_j2000:number;dec_deg_
 type StarSample = {at:string;flux:number|null;background:number|null;sigma_major:number|null;sigma_minor:number|null;angle_deg:number|null;centroid_offset_px:number|null;elevation_deg:number};
 const STAR_CHANNELS = ['mean','r','g','b'] as const;
 type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;best_flux:number|null;relative:number|null};
-type StarFrame={image_id:string|null;observation_utc?:string;width?:number|null;height?:number|null;stars:FrameStar[]};
+type StarFrame={image_id:string|null;observation_utc?:string;width?:number|null;height?:number|null;field?:[number,number][]|null;stars:FrameStar[]};
 /// A star at its own best through the window reads bright, one that has faded
 /// reads dark and red. The quantity is the star's intensity as a fraction of
 /// its own maximum, so a faint star and a bright one are on the same scale.
@@ -131,6 +131,12 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [cursor,setCursor]=useState<number|null>(null);
   const [frame,setFrame]=useState<StarFrame|null>(null);
   const [frameBusy,setFrameBusy]=useState(false);
+  // Magnification of the frame view, with the centre it is magnified about in
+  // image pixels. Stars are a pixel or two across, so this is the difference
+  // between seeing a fit and guessing at it.
+  const [zoom,setZoom]=useState(1);
+  const [centre,setCentre]=useState<[number,number]|null>(null);
+  const pan=useRef<{x:number;y:number;cx:number;cy:number}|null>(null);
   useEffect(()=>{
     const controller=new AbortController();setLoading(true);setError('');
     void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars?channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
@@ -156,6 +162,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   },[selected,channel,hours,camera.id,series]);
   // A new camera, channel or window invalidates the scrubbed frame.
   useEffect(()=>{setCursor(null);setFrame(null)},[camera.id,channel,hours]);
+  useEffect(()=>{setZoom(1);setCentre(null)},[frame?.image_id]);
   useEffect(()=>{
     if(cursor==null){setFrame(null);return}
     const controller=new AbortController();
@@ -251,11 +258,23 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
           const H=frame.height||Math.ceil(Math.max(...placed.map(r=>r.y as number),1)*1.05);
           const identified=placed.filter(r=>r.detected);
           const found=identified.length;
-          const r0=Math.max(2.5,Math.min(W,H)/150);
+          // Markers and boundaries keep a constant size on screen, so zooming
+          // magnifies the picture rather than the annotation.
+          const r0=Math.max(2.5,Math.min(W,H)/150)/zoom;
+          const spanX=W/zoom,spanY=H/zoom;
+          const [cx,cy]=centre??[W/2,H/2];
+          const vbox=[Math.min(W-spanX/2,Math.max(spanX/2,cx))-spanX/2,
+                      Math.min(H-spanY/2,Math.max(spanY/2,cy))-spanY/2,spanX,spanY];
           // Each star owns the sky nearer to it than to any other. An edge is
           // only as trustworthy as the dimmer of the two stars meeting across
           // it, so it takes that one's colour.
-          const cells=voronoiEdges(identified.map(r=>({x:r.x as number,y:r.y as number})),W,H);
+          // Cut the cells to the sky the lens actually sees. A fisheye's corners
+          // are ground and housing, and a cell running out there claims a
+          // region its star never looked at.
+          const boundary=frame.field&&frame.field.length>2
+            ?clipToFrame(frame.field.map(([x,y])=>({x,y})),W,H)
+            :frameBoundary(W,H);
+          const cells=voronoiEdges(identified.map(r=>({x:r.x as number,y:r.y as number})),boundary);
           const fainter=(a:number,b:number)=>{
             const [p,q]=[identified[a]?.relative,identified[b]?.relative];
             if(p==null)return q??null;
@@ -265,12 +284,36 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
           return <>
             <div className="star-plot-head"><strong>Star positions in the frame</strong>
               <small>{found} of {frame.stars.length} found{frame.observation_utc?` \u00b7 ${new Date(frame.observation_utc).toISOString().replace('T',' ').slice(0,19)} UTC`:''}</small></div>
-            <svg className="star-frame" viewBox={`0 0 ${W} ${H}`} role="img"
-              aria-label="Scrubbed camera frame with identified stars">
+            <div className="star-zoom" role="group" aria-label="Frame magnification">
+              <button type="button" aria-label="Zoom in" onClick={()=>setZoom(z=>Math.min(16,z*1.6))}>+</button>
+              <button type="button" aria-label="Zoom out" onClick={()=>setZoom(z=>Math.max(1,z/1.6))}>&minus;</button>
+              <button type="button" aria-label="Fit the whole frame" onClick={()=>{setZoom(1);setCentre(null)}}>Fit</button>
+              <small>{zoom<1.05?'whole frame':`${zoom.toFixed(1)}\u00d7`}</small>
+            </div>
+            <svg className="star-frame" viewBox={vbox.join(' ')} role="img"
+              aria-label="Scrubbed camera frame with identified stars"
+              onWheel={event=>{event.preventDefault();
+                const box=event.currentTarget.getBoundingClientRect();
+                const at:[number,number]=[vbox[0]+(event.clientX-box.left)/box.width*vbox[2],
+                                          vbox[1]+(event.clientY-box.top)/box.height*vbox[3]];
+                // Zoom about the pointer, so the feature under it stays put.
+                setZoom(z=>{const next=Math.min(16,Math.max(1,z*Math.exp(-event.deltaY*0.0015)));
+                  if(next!==z)setCentre(c=>{const[cx,cy]=c??[W/2,H/2];
+                    return [at[0]+(cx-at[0])*z/next,at[1]+(cy-at[1])*z/next]});
+                  return next})}}
+              onPointerDown={event=>{if(zoom<=1)return;event.currentTarget.setPointerCapture(event.pointerId);
+                const[cx,cy]=centre??[W/2,H/2];pan.current={x:event.clientX,y:event.clientY,cx,cy}}}
+              onPointerMove={event=>{const start=pan.current;if(!start)return;
+                const box=event.currentTarget.getBoundingClientRect();
+                setCentre([start.cx-(event.clientX-start.x)/box.width*vbox[2],
+                           start.cy-(event.clientY-start.y)/box.height*vbox[3]])}}
+              onPointerUp={()=>{pan.current=null}}
+              onPointerCancel={()=>{pan.current=null}}
+              style={{cursor:zoom>1?'grab':'default'}}>
               <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
                 x="0" y="0" width={W} height={H} preserveAspectRatio="none"/>
               <g className="star-cells">{cells.map((e,i)=><line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-                stroke={relativeColour(fainter(e.a,e.b))} strokeWidth={r0*0.35} strokeLinecap="round"/>)}</g>
+                stroke={relativeColour(fainter(e.a,e.b))} strokeWidth={r0*0.7} strokeLinecap="round"/>)}</g>
               {placed.map(r=>{const on=selected.includes(r.star_key);
                 return <g key={r.star_key} className={on?'chosen':''} onClick={()=>toggle(r.star_key)}>
                   <circle cx={r.x as number} cy={r.y as number}

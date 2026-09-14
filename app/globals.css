@@ -187,7 +187,9 @@
 .star-frame image{image-rendering:auto}
 .star-frame g{cursor:pointer}
 
-.star-cells{opacity:.62;mix-blend-mode:screen;pointer-events:none}
+/* No screen blending: it can only lighten, so a dark red boundary over a bright
+   sky came out pink and the cloudy cells stopped reading as cloudy. */
+.star-cells{opacity:.92;pointer-events:none}
 
 .star-zoom{display:flex;align-items:center;gap:.35rem;margin:.1rem 0 .35rem}
 .star-zoom button{background:rgba(8,28,40,.75);color:var(--text);border:1px solid rgba(103,200,215,.35);border-radius:6px;padding:.1rem .45rem;font:inherit;line-height:1.4;cursor:pointer}

@@ -18,6 +18,7 @@ void main(){if(visible<0.||w<=0.)discard;vec2 screen=gl_FragCoord.xy/resolution;
 if(mode==1){float scale=exp2(texture2D(previousWeight,screen).r*144.-128.);float a=w/scale;gl_FragColor=vec4(rgb*a,a);}
 else if(mode==2){gl_FragColor=vec4(code,1.);}
 else if(mode==3){gl_FragColor=vec4(vec3(clamp((log2(w)+128.)/144.,0.,1.)),1.);}
+else if(mode==6){gl_FragColor=vec4(rgb,1.);}
 else{float old=decode(texture2D(previousWeight,screen).rgb),total=old+w;if(mode==4)gl_FragColor=vec4(encode(total),1.);else gl_FragColor=vec4((texture2D(previousColor,screen).rgb*old+rgb*w)/total,1.);}}`);
   const resolve=program(`attribute vec2 position;void main(){gl_Position=vec4(position,0.,1.);}`,`precision highp float;uniform vec2 resolution;uniform sampler2D sums;uniform bool normalize;void main(){vec4 c=texture2D(sums,gl_FragCoord.xy/resolution);gl_FragColor=normalize?(c.a>0.?vec4(c.rgb/c.a,1.):vec4(0.)):c;}`);
   const quad=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
@@ -32,7 +33,11 @@ else{float old=decode(texture2D(previousWeight,screen).rgb),total=old+w;if(mode=
   const bind=(w:number,h:number,yaw:number,pitch:number,zoom:number)=>{resetAttributes();gl.useProgram(mesh);gl.uniform2f(gl.getUniformLocation(mesh,'resolution'),w,h);gl.uniform2f(gl.getUniformLocation(mesh,'rotation'),yaw,pitch);gl.uniform1f(gl.getUniformLocation(mesh,'zoom'),zoom);gl.uniform1i(gl.getUniformLocation(mesh,'image'),0);gl.uniform1i(gl.getUniformLocation(mesh,'previousColor'),1);gl.uniform1i(gl.getUniformLocation(mesh,'previousWeight'),2);for(const unit of [gl.TEXTURE1,gl.TEXTURE2]){gl.activeTexture(unit);gl.bindTexture(gl.TEXTURE_2D,dummy)}gl.activeTexture(gl.TEXTURE0)};
   const render=(frames:CameraLayer[],textures:Map<string,WebGLTexture>,muted:Set<string>,mode:number)=>{gl.uniform1i(gl.getUniformLocation(mesh,'mode'),mode);for(const frame of frames){if(frame.sourceId&&muted.has(frame.sourceId))continue;const texture=textures.get(frame.sourceId??String(frame.order))||frame.texture;if(!gl.isTexture(texture)||!gl.isBuffer(frame.geometry.buffer))continue;gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);for(const [name,n,offset] of [['world',3,0],['uv',2,12],['weight',1,20]] as const){const a=gl.getAttribLocation(mesh,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,n,gl.FLOAT,false,24,offset)}gl.uniform1f(gl.getUniformLocation(mesh,'scale'),frame.weightScale??1);const code=frame.order+1;gl.uniform3f(gl.getUniformLocation(mesh,'code'),((code>>16)&255)/255,((code>>8)&255)/255,(code&255)/255);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}};
   return {
-    draw(outputW:number,outputH:number,yaw:number,pitch:number,zoom:number,frames:CameraLayer[],textures:Map<string,WebGLTexture>,muted:Set<string>){
+    /// `overlay` names cameras to lay over the finished mosaic in their own
+    /// colours. They are still part of the blend underneath, but they are drawn
+    /// again on top unweighted, so where they see sky it is their image and not
+    /// an average with anything else.
+    draw(outputW:number,outputH:number,yaw:number,pitch:number,zoom:number,frames:CameraLayer[],textures:Map<string,WebGLTexture>,muted:Set<string>,overlay?:Set<string>|null){
       const [w,h]=rasterSize(outputW,outputH);
       audit('before');allocate(w,h);audit('allocation');gl.viewport(0,0,w,h);gl.disable(gl.BLEND);gl.disable(gl.DEPTH_TEST);gl.clearColor(0,0,0,0);
       const key=[w,h,yaw,pitch,zoom,...frames.filter(f=>!muted.has(f.sourceId||'')).map(f=>`${id(f.geometry.buffer)}:${id(textures.get(f.sourceId??String(f.order))||f.texture)}:${f.weightScale}`)].join(',');
@@ -51,7 +56,10 @@ else{float old=decode(texture2D(previousWeight,screen).rgb),total=old+w;if(mode=
           }target(result);blit(colors[previous],w,h);
         }lastKey=key;
       }
-      target(null);gl.viewport(0,0,outputW,outputH);gl.enable(gl.BLEND);gl.blendEquation(gl.FUNC_ADD);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);blit(result,outputW,outputH);gl.disable(gl.BLEND);return floating?'magnetic-weighted GPU blend':'normalized GPU blend (portable)';
+      target(null);gl.viewport(0,0,outputW,outputH);gl.enable(gl.BLEND);gl.blendEquation(gl.FUNC_ADD);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);blit(result,outputW,outputH);gl.disable(gl.BLEND);
+      const chosen=overlay&&overlay.size?frames.filter(f=>f.sourceId&&overlay.has(f.sourceId)):[];
+      if(chosen.length){bind(outputW,outputH,yaw,pitch,zoom);render(chosen,textures,muted,6);audit('overlay')}
+      return (floating?'magnetic-weighted GPU blend':'normalized GPU blend (portable)')+(chosen.length?` + ${chosen.length} unblended overlay`:'');
     },
     pick(x:number,y:number,w:number,h:number,yaw:number,pitch:number,zoom:number,frames:CameraLayer[],muted:Set<string>){if(disposed||!frames.length)return undefined;const ow=w,oh=h;[w,h]=rasterSize(w,h);x*=w/ow;y*=h/oh;allocate(w,h);target(pick);gl.viewport(0,0,w,h);gl.disable(gl.BLEND);gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.depthFunc(gl.LEQUAL);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);bind(w,h,yaw,pitch,zoom);render(frames,new Map(),muted,2);const p=new Uint8Array(4);gl.readPixels(Math.floor(x),Math.floor(y),1,1,gl.RGBA,gl.UNSIGNED_BYTE,p);target(null);gl.disable(gl.DEPTH_TEST);const order=((p[0]<<16)|(p[1]<<8)|p[2])-1;return frames.find(f=>f.order===order)?.sourceId;},
     dispose(){disposed=true;gl.deleteProgram(mesh);gl.deleteProgram(resolve);gl.deleteBuffer(quad);gl.deleteFramebuffer(fbo);for(const t of [dummy,sum,pick,result,...colors,...weights])gl.deleteTexture(t);gl.deleteRenderbuffer(depth)}

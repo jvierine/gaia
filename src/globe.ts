@@ -140,7 +140,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
     attributionCache.set(url,result);for(const key of attributionCache.keys()){if(attributionCache.size<=6)break;if(key!==url&&key!==attribution?.url)attributionCache.delete(key);}return result;
   };
   const projectedCamera=(clientX:number,clientY:number)=>{
-    if(browserLayers){const r=canvas.getBoundingClientRect();const id=compositor.pick((clientX-r.left)*canvas.width/r.width,(r.bottom-clientY)*canvas.height/r.height,canvas.width,canvas.height,yaw,pitch,zoom,frames,hiddenSources);return [...publicCameras.values()].find(c=>c.source_id===id)||null;}
+    if(browserLayers){const r=canvas.getBoundingClientRect();const id=compositor.pick((clientX-r.left)*canvas.width/r.width,(r.bottom-clientY)*canvas.height/r.height,canvas.width,canvas.height,yaw,pitch,zoom,frames,mutedSources);return [...publicCameras.values()].find(c=>c.source_id===id)||null;}
     if(!attribution)return null;const r=canvas.getBoundingClientRect(),side=Math.min(r.width,r.height);
     const px=(2*(clientX-r.left)-r.width)/side/zoom,py=(r.height-2*(clientY-r.top))/side/zoom;
     const uv=shellTextureCoordinates(px,py,yaw,pitch);if(!uv)return null;const [u,v]=uv;
@@ -162,16 +162,7 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   // not a setting.
   let soloSources:Set<string>|null=null;
   const mutedSources=new Set<string>();
-  // What the compositor is told to leave out. Solo wins while it is on, because
-  // it is an explicit request to see one thing.
-  let hiddenSources=mutedSources;
-  const refreshHidden=()=>{
-    if(!soloSources){hiddenSources=mutedSources;canvas.dataset.soloCameras='';return}
-    hiddenSources=new Set<string>();
-    for(const site of cameraSites)if(site.source_id&&!soloSources.has(site.source_id))hiddenSources.add(site.source_id);
-    for(const camera of publicCameras.values())if(!soloSources.has(camera.source_id))hiddenSources.add(camera.source_id);
-    canvas.dataset.soloCameras=JSON.stringify([...soloSources]);
-  };
+  const refreshHidden=()=>{canvas.dataset.soloCameras=soloSources?JSON.stringify([...soloSources]):''};
   const bestHere=(site:{lat:number;lon:number})=>bestAtStation(cameraSites,site);
   try{const saved=JSON.parse(localStorage.getItem('gaia-muted-cameras')||'[]');if(Array.isArray(saved))for(const id of saved)if(typeof id==='string')mutedSources.add(id);}catch{}
   canvas.dataset.mutedCameras=JSON.stringify([...mutedSources]);refreshHidden();
@@ -228,8 +219,8 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   const setSolo=(next:Set<string>|null,name?:string)=>{
     soloSources=next&&next.size?next:null;refreshHidden();visibilityDirty=true;
     observationStatus.textContent=soloSources
-      ?`${name||'Station'}: showing only the highest quality weight at this site, ${soloSources.size} camera${soloSources.size>1?'s':''}, unblended. Middle-click again to restore.`
-      :'All cameras restored to the blended mosaic.';
+      ?`${name||'Station'}: ${soloSources.size} camera${soloSources.size>1?'s':''} at the highest quality weight here drawn unblended over the mosaic. Middle-click again to restore.`
+      :'Mosaic restored; no camera is laid over it.';
   };
   const pointerDown=(e:PointerEvent)=>{
     // Middle button isolates a station rather than dragging. preventDefault also
@@ -547,13 +538,16 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,sourceMapTexture);
     if(attribution&&uploadedSourceMap!==attribution.url){gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,attribution.width,attribution.height,0,gl.RGBA,gl.UNSIGNED_BYTE,attribution.data);uploadedSourceMap=attribution.url;}
     gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,visibilityTexture);
-    if(visibilityDirty){const pixels=new Uint8Array(256*256*4).fill(255);for(const [index,camera] of publicCameras){if(index<65536&&hiddenSources.has(camera.source_id))pixels[index*4]=0;}gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,256,256,0,gl.RGBA,gl.UNSIGNED_BYTE,pixels);visibilityDirty=false;}
+    if(visibilityDirty){const pixels=new Uint8Array(256*256*4).fill(255);for(const [index,camera] of publicCameras){if(index<65536&&mutedSources.has(camera.source_id))pixels[index*4]=0;}gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,256,256,0,gl.RGBA,gl.UNSIGNED_BYTE,pixels);visibilityDirty=false;}
     const worldAttr=gl.getAttribLocation(imageProgram,'world'),rgbAttr=gl.getAttribLocation(imageProgram,'rgb'),uvAttr=gl.getAttribLocation(imageProgram,'uv');
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),1);gl.uniform1i(gl.getUniformLocation(imageProgram,'frame'),0);gl.activeTexture(gl.TEXTURE0);
     gl.disableVertexAttribArray(rgbAttr);gl.enableVertexAttribArray(worldAttr);gl.enableVertexAttribArray(uvAttr);
-    if(browserLayers){canvas.dataset.composition=compositor.draw(w,h,yaw,pitch,zoom,frames,displayTextures,hiddenSources);canvas.dataset.cameraLayers=String(frames.length);canvas.dataset.muteApplied=String(hiddenSources.size>0);resetAttributes();gl.useProgram(imageProgram);gl.activeTexture(gl.TEXTURE0);gl.enableVertexAttribArray(worldAttr);}
+    if(browserLayers){canvas.dataset.composition=compositor.draw(w,h,yaw,pitch,zoom,frames,displayTextures,mutedSources,soloSources);canvas.dataset.cameraLayers=String(frames.length);canvas.dataset.muteApplied=String(mutedSources.size>0);resetAttributes();gl.useProgram(imageProgram);gl.activeTexture(gl.TEXTURE0);gl.enableVertexAttribArray(worldAttr);}
     if(publicOnly&&!browserLayers){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);}
-    for(const frame of browserLayers?[]:frames){/* Solo and mute drop a camera from the drawing rather than masking it afterwards, so nothing of it survives in an overlap. */if(frame.sourceId&&hiddenSources.has(frame.sourceId))continue;const applyMute=hiddenSources.size>0&&attribution?.url===frame.sourceMapUrl;gl.uniform1i(gl.getUniformLocation(imageProgram,'applyMute'),applyMute?1:0);canvas.dataset.muteApplied=String(applyMute);gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(stationKey(frame))||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
+    /* Chosen cameras go last. Blending is off in this pass, so the last write wins
+     and their image sits on top of the others rather than averaged into them. */
+    const ordered=browserLayers?[]:soloSources?[...frames.filter(f=>!f.sourceId||!soloSources!.has(f.sourceId)),...frames.filter(f=>f.sourceId&&soloSources!.has(f.sourceId))]:frames;
+    for(const frame of ordered){const applyMute=mutedSources.size>0&&attribution?.url===frame.sourceMapUrl;gl.uniform1i(gl.getUniformLocation(imageProgram,'applyMute'),applyMute?1:0);canvas.dataset.muteApplied=String(applyMute);gl.bindBuffer(gl.ARRAY_BUFFER,frame.geometry.buffer);gl.vertexAttribPointer(worldAttr,3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(uvAttr,2,gl.FLOAT,false,20,12);gl.bindTexture(gl.TEXTURE_2D,displayTextures.get(stationKey(frame))||frame.texture);gl.drawArrays(gl.TRIANGLES,0,frame.geometry.count)}
     if(publicOnly)gl.disable(gl.BLEND);
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),0);gl.disableVertexAttribArray(uvAttr);
     for(const layer of layers){

@@ -43,7 +43,7 @@ void main(){
   color=mix(color,vec3(.16,.60,.72),geoEquator*.62);
   float sites=0.;
   color=mix(color,vec3(.76,1.,.91),sites);
-  float sunlight=dot(n,sunDirection);color*=.24+.84*smoothstep(-.04,.10,sunlight);
+  float sunlight=dot(n,sunDirection);color*=.24+.96*smoothstep(-.04,.10,sunlight);
   float terminator=1.-smoothstep(.003,.012,abs(sunlight));color=mix(color,vec3(1.,.82,.20),terminator*.82);
   float sunMarker=1.-smoothstep(.020,.034,length(n-sunDirection));color=mix(color,vec3(1.,.94,.55),sunMarker);
   color*=limb; float rim=pow(1.-sqrt(1.-r2),7.);color+=rim*vec3(.10,.48,.54);

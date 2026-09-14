@@ -18,7 +18,7 @@
 \title{\bfseries Cloud coverage from stellar intensity time series\\[2mm]
 \large Status of the GAIA implementation, and what remains}
 \author{Memo --- GAIA Data Center}
-\date{11 September 2026 \\ \small(second revision; first issued 10 September 2026)}
+\date{14 September 2026 \\ \small(third revision; first issued 10 September 2026)}
 
 \begin{document}
 \maketitle
@@ -35,21 +35,23 @@ been strengthened where it was weakest: the sky under a star is now a bilinear
 plane rather than a constant, every measurement carries the scatter of its own
 fit residuals so a star can be tested against the frame's own noise instead of
 being trusted blindly, and the solar and lunar state at the station is computed
-and stored per frame. Storage and both diagnostic plots exist, and the
-writer that fills them now runs: on a copy of the live archive it measures a
-frame per second and finds \num{109} stars in a good one. Two things still do
-not exist: the cloud weight is not applied to the composite, and the Voronoi
-cloud-cover output is not built. One
-methodological issue is unresolved and is the main risk to the numbers:
-atmospheric extinction varies with elevation, and a star's clear-sky reference
-taken over a whole night mixes elevations, which alone can imitate an optical
-depth of \num{0.35}.
+and stored per frame. Storage, both diagnostic plots, and the writer that
+fills them all exist, and the writer has been running in production since
+10 September: \num{1.6} million measurements, \num{4761} frames, \num{71}
+cameras, every one of them detecting stars. What does not exist is everything
+downstream of the measurement. No flux has yet become an optical depth, so no
+cloud weight reaches the composite and no cloud map is drawn. The blocking item
+is the clear-sky reference, and four days of real series now let us put a number
+on why it is hard: regressing flux on air mass gives a median extinction of
+\SI{0.38}{mag} per air mass against a clear-sky value near \num{0.20}, because
+cloud and air mass are folded into the same fit and cannot be separated by a
+whole-series regression.
 \end{abstract}
 
 \section{What changed since the first issue}
 
-Four things, all in the estimation and storage layers; the outstanding items in
-Sec.~\ref{sec:remains} are unchanged in substance.
+Four things in the estimation and storage layers, added between the first and
+second issues:
 
 \begin{enumerate}
   \item \textbf{Bilinear background.} The fit went from 7 to 10 parameters. The
@@ -70,6 +72,24 @@ Sec.~\ref{sec:remains} are unchanged in substance.
   \item \textbf{The writer exists} (Sec.~\ref{sec:writer}). The tables are no
     longer empty, which moves the blocking item from ``nothing measures'' to
     ``nothing yet turns a measurement into an optical depth''.
+\end{enumerate}
+
+\noindent Since the second revision, three days later, the writer has been
+deployed and has produced enough data to answer questions the memo could only
+pose:
+
+\begin{enumerate}
+  \item \textbf{The pointing conclusion needed narrowing.} The second revision
+    generalised from the only two cameras then measured, and both happened to
+    belong to the one station family in the archive with a drift problem. Across
+    66 cameras, 47 point true to better than half a pixel
+    (Table~\ref{tab:pointing}).
+  \item \textbf{The air-mass confound is measured} rather than predicted, and
+    its spread across stars is itself the argument for which remedy to build
+    (Sec.~\ref{sec:airmass}).
+  \item \textbf{The composite moved into the browser}, so a cloud weight now has
+    two places to be applied rather than one, and unlike its neighbours it
+    cannot be computed client-side (Sec.~\ref{sec:weightpath}).
 \end{enumerate}
 
 \section{The measurement chain}
@@ -369,42 +389,99 @@ same optics the mosaic is drawn with. Reading the model shells out to
 Frames are decoded at full resolution; the \SI{256}{px} globe textures are
 useless here, and nothing in this path may touch them.
 
-\paragraph{Cost.} On a copy of the live archive one cycle wrote \num{400} sky
-rows and photometered six \num{3840}$\times$\num{2160} frames in
-\SI{7}{\second}, about a second per frame including the JPEG decode and the
-search over all \num{512} catalogue stars. At the shipped settings, twelve
-frames every five minutes with a \SI{250}{\milli\second} rest between them, the
-pass costs a few percent of one core. It rests deliberately: the publisher takes
-sixteen cores under its own lock, and a missed frame costs nothing when the
-quantity wanted is a time series.
+\paragraph{Cost.} One cycle writes \num{400} sky rows and photometers six
+\num{3840}$\times$\num{2160} frames in \SI{7}{\second}, about a second per frame
+including the JPEG decode and the search over all \num{512} catalogue stars. At
+the shipped settings, twelve frames every five minutes with a
+\SI{250}{\milli\second} rest between them, the pass costs a few percent of one
+core. It rests deliberately: the publisher takes sixteen cores under its own
+lock, and a missed frame costs nothing when the quantity wanted is a time
+series.
+
+\paragraph{It is running.} The pass has been live on Revontuli since
+10 September. As of 14 September at 06:30 UTC it holds
+
+\begin{center}\small
+\begin{tabular}{lr}
+\toprule
+sky rows (\texttt{frame\_sky}) & \num{132759} \\
+photometry rows (\texttt{star\_photometry}) & \num{1622892} \\
+frames photometered & \num{4761} \\
+cameras & \num{71} \\
+detections & \num{329121} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Every one of the \num{71} cameras is producing detections and 53 of
+them have passed a thousand. Kiruna is the richest at \num{416} rows per frame,
+which is \num{104} stars in four colour channels. \SI{20.3}{\percent} of all
+rows are detections, and \SI{20.2}{\percent} clear $\mathrm{SNR}_F>5$: almost
+every fit that converges is comfortably above the noise, and almost every
+failure is a patch with no star in it rather than a marginal one. That is the
+behaviour the detectability design was aiming for.
+
+The series are only now becoming long enough to work with. Counting per star per
+camera, in the mean channel, there are \num{112} series with a hundred samples
+or more, \num{167} with 50 to 99, and \num{877} with 20 to 49. A ninetieth
+percentile is a real statistic from about twenty samples upward, so roughly
+\num{1156} series can carry a clear-sky reference today, out of \num{8055} that
+exist. The rest are short because the look-back window is \SI{48}{\hour} and the
+cadence ten minutes; they lengthen on their own.
 
 \begin{table}[h]
 \centering
 \small
-\begin{tabular}{llrrrr}
+\begin{tabular}{lr}
 \toprule
-camera & UTC & looked for & detected & best $\mathrm{SNR}_F$ & $(\overline{\Delta x},\overline{\Delta y})$ px \\
+mean pointing offset & cameras \\
 \midrule
-\texttt{starvisor-yurga}    & 14:08 & 43 & 74  & 39.1  & $(-1.01,+1.05)$ \\
-\texttt{starvisor-bagdarin} & 14:09 & 47 & 109 & 110.1 & $(-1.41,-0.27)$ \\
-\texttt{starvisor-bagdarin} & 14:19 & 52 & 109 & 78.8  & $(-1.32,-0.26)$ \\
-\texttt{starvisor-yurga}    & 14:19 & 42 & 85  & 52.0  & $(-0.80,+0.87)$ \\
+below \SI{0.5}{px} & 47 \\
+\SI{0.5}{} to \SI{1}{px} & 16 \\
+\SI{1}{} to \SI{1.5}{px} & 1 \\
+above \SI{2}{px} & 2 \\
 \bottomrule
 \end{tabular}
-\caption{The first real measurements, 11 September 2026. ``Looked for'' counts
-stars; ``detected'' counts rows, four colour channels each, so roughly half of
-the channels of half of the stars yield a fit. The last column is the mean
-offset of the fitted centroid from the position the lens model predicts.}
-\label{tab:firstlight}
+\caption{Distance between the fitted centroid and the position the lens model
+predicts, averaged per camera over confident detections, for the 66 cameras with
+at least thirty of them. The projection is accurate to under half a pixel for
+most of the archive.}
+\label{tab:pointing}
 \end{table}
 
-\paragraph{An immediate finding: the prediction is systematically off.}
-Table~\ref{tab:firstlight} shows a mean offset of one to one and a half pixels
-that does not shrink with signal-to-noise: the brightest stars, at
-$\mathrm{SNR}_F$ of 50 to 60, sit \num{2.1} to \SI{2.5}{px} from their predicted
-positions, where a well-pointed model would put them inside half a pixel. The
-offset is dominated by a \emph{rigid shift}, the same in every frame of a
-camera, and it differs between cameras.
+\paragraph{Pointing: a few cameras have drifted, most have not.} The first two
+cameras this pass ever measured, Bagdarin and Yurga, both showed a mean offset
+of one to one and a half pixels that did not shrink with signal-to-noise, and
+the second revision of this memo concluded from them that cameras drift after
+calibration. With 66 cameras now measured instead of two, that conclusion needs
+narrowing: it is true, but it is not the general case.
+Table~\ref{tab:pointing} is the population. Forty-seven cameras point true to
+better than half a pixel, and the per-frame shift is steady --- Kiruna sits at
+$(+0.10,+0.03)$ px with a frame-to-frame scatter of \num{0.19} and \num{0.11}.
+The projection, the ephemeris and the lens models are doing their job across
+the archive.
+
+The cameras that miss are a family:
+
+\begin{center}\small
+\begin{tabular}{lr}
+\toprule
+camera & mean offset \\
+\midrule
+\texttt{starvisor-tula} & \SI{2.57}{px} \\
+\texttt{starvisor-azevo} & \SI{2.06}{px} \\
+\texttt{starvisor-bagdarin} & \SI{1.02}{px} \\
+\texttt{ucalgary-trexrgb\_luck\_standard} & \SI{0.95}{px} \\
+\texttt{starvisor-popovo} & \SI{0.94}{px} \\
+\texttt{starvisor-berezniki} & \SI{0.89}{px} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Five of the six worst are STARVISOR stations. The two cameras the
+earlier revision sampled were, by chance, drawn from the one family in the
+archive that has this problem: they were the only cameras in darkness at the
+hour that test ran.
 
 \paragraph{It is not an off-by-one.} The obvious suspect is the one-based
 indexing AIDA inherits from its \textsc{Matlab} ancestry, and it was checked
@@ -423,18 +500,18 @@ $(-1.4,-0.1)$ for Bagdarin and $(-0.9,+0.8)$ for Yurga. And AIDA's own fit
 residuals are centred at $0.000$ px in both axes, so at calibration time the
 model sat on the stars.
 
-\paragraph{What it actually is.} The offset appeared \emph{after} calibration.
-Fitting an affine field to the per-frame offsets and decomposing it separates
-the causes. There is a uniform scale term of $5\times10^{-4}$ in both cameras,
-about a pixel at the frame edge, which no timing error can produce. There is a
-rotation of $10^{-3}$ radians in Bagdarin, which read as a stale timestamp
-would mean a lag of 7 to \SI{15}{\second}; Yurga shows none, so a download-time
-lag is at most a minor contributor. What is left, and what dominates, is a
-constant per-camera pointing shift: the cameras have moved slightly since they
-were calibrated. Removing the affine field brings Bagdarin's residual to
-\num{0.56} to \SI{0.95}{px}, against the \SI{0.61}{px} scatter of its own
-calibration, and Yurga's to \SI{1.3}{px} against its \SI{1.81}{px}. In both
-cases the correction recovers the accuracy the calibration itself had.
+\paragraph{What it is on the cameras that do miss.} The offset appeared
+\emph{after} calibration. Fitting an affine field to the per-frame offsets and
+decomposing it separates the causes. There is a uniform scale term of
+$5\times10^{-4}$ in both of the cameras examined, about a pixel at the frame
+edge, which no timing error can produce. There is a rotation of $10^{-3}$
+radians in Bagdarin, which read as a stale timestamp would mean a lag of 7 to
+\SI{15}{\second}; Yurga shows none, so a download-time lag is at most a minor
+contributor. What dominates is a constant pointing shift: those cameras have
+moved slightly since they were calibrated. Removing the affine field brings
+Bagdarin's residual to \num{0.56} to \SI{0.95}{px}, against the \SI{0.61}{px}
+scatter of its own calibration, and Yurga's to \SI{1.3}{px} against its
+\SI{1.81}{px} --- in both cases recovering the accuracy the calibration had.
 
 This does not corrupt the photometry --- the patch is 19 pixels across, the fit
 finds the true centroid, and the flux is what it is --- but it eats the
@@ -443,12 +520,15 @@ camera with a \SI{1.5}{px} boresight error has only \SI{1.5}{px} of real
 tolerance left. The rejected fits are not near misses: their mean offset is
 \num{3.3e4} pixels, which is a Levenberg--Marquardt run diverging on a patch
 with no star in it, so the gate is discarding empty sky rather than good stars.
-The fix is to fit the offset per frame from the confidently detected stars and
-gate on the residual from \emph{that}. A rigid $(\Delta x,\Delta y)$ removes
-most of it; the full affine recovers the calibration's own accuracy for four
-more parameters on a few tens of stars. Either way it yields a per-frame
-pointing check for nothing, and a camera that has drifted far enough to want
-recalibrating would announce itself.
+The useful conclusion is no longer a correction but a diagnostic. Since the
+mean offset per camera is now a quantity the archive measures continuously, it
+is a standing check on every calibration in it: a camera whose stars sit a
+pixel and a half from where its lens model puts them is telling the operator to
+recalibrate, and the six above are doing so now. Fitting a per-frame rigid
+$(\Delta x,\Delta y)$ and gating on the residual from it remains worth doing,
+because it buys back the acceptance margin on exactly those cameras, but it is
+a repair for a handful of stations rather than a correction the archive needs
+everywhere.
 
 \section{The unresolved issue: extinction depends on elevation}
 \label{sec:airmass}
@@ -518,6 +598,23 @@ mass. These are not cloud.}
 \label{tab:airmass}
 \end{table}
 
+\paragraph{The effect is now measured, not predicted.} With four days of series
+the extinction can be read off the data. Taking every star series with at least
+forty confident samples spanning more than \SI{25}{\degree} of elevation, 188 of
+them, and regressing $\ln F$ on air mass gives a median $k$ of
+\SI{0.38}{mag} per air mass, with the central 68\,\% running from
+\num{0.02} to \num{1.28}. Clear-sky $V$-band is about \SI{0.20}{mag}, and
+\SI{70}{\percent} of the series sit above it.
+
+Two things follow. The air-mass term is real and of the size
+Table~\ref{tab:airmass} predicts, so it cannot be left in the estimator. And the
+spread is the cloud signal: a whole-series regression cannot separate extinction
+from weather, because cloud dims a star at whatever air mass it happens to be
+at, so the fitted $k$ absorbs both and the median of \num{0.38} is an upper
+bound on the true clear-sky value. That is precisely the confound the remedies
+below exist to break, and it is the reason the third one is the right answer
+rather than the most thorough-sounding one.
+
 \paragraph{Three ways to fix it, in increasing quality.}
 \begin{enumerate}
   \item \textbf{Bin the reference by elevation.} Compute $p_{90}$ within
@@ -573,16 +670,50 @@ but the derived optical depths should not be treated as calibrated.
     and known auroral activity before trusting marginal detections.
 \end{itemize}
 
+\section{Where the cloud weight now has to go}
+\label{sec:weightpath}
+
+The composite was rebuilt on 11 September to compose camera layers in the
+browser, and that changes the answer this memo gave for applying the weight.
+There are now two places a factor can live, and they are not
+interchangeable.
+
+\begin{enumerate}
+  \item \textbf{Baked into the published mesh, per vertex}
+    (\texttt{backend/publish\_layers.rs}). This carries the factors that vary
+    across an image: the magnetic-axis weight, the zenith taper and the
+    mask-edge fade. One float per vertex, computed once when the layer is
+    published.
+  \item \textbf{Applied per layer in the browser}
+    (\texttt{src/composition-rules.ts}, \texttt{cameraWeightScale}). This
+    carries the factors that are one number for a whole image: the solar taper
+    and the operator's quality weight $2^{n}$. The browser recomputes the solar
+    elevation from the camera's position and the frame's epoch with the same
+    equations as \texttt{backend/geometry.rs}.
+\end{enumerate}
+
+A cloud weight is one number per camera per frame, so by shape it belongs in
+the second group. But it differs from both of its neighbours there in a way
+that matters: the solar taper and the quality weight can be \emph{computed} in
+the browser from data it already has, and an optical depth cannot. It is a
+measurement. It therefore has to be published --- carried per frame in the
+layer manifest, beside the texture and geometry URLs --- and multiplied into
+\texttt{cameraWeightScale} as a third factor. The server-side composite in
+\texttt{publish.rs} still exists and still applies the full chain, so the same
+factor has to enter there too, or the admin and public views will disagree
+about which camera won a pixel. Keeping those two in step is the whole reason
+\texttt{composition-rules.ts} was split out as a shared module, and the cloud
+term should follow that pattern rather than work around it.
+
 \section{What remains to be built}
 \label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{Correct the pointing before gating}, per
-    Sec.~\ref{sec:writer}: one rigid offset per frame, fitted from the confident
-    detections, with the \SI{3}{px} test applied to the residual from it. Until
-    then a camera whose calibration is a pixel and a half off spends half its
-    acceptance margin on a constant.
-  \item \textbf{The clear-sky reference}, per Sec.~\ref{sec:airmass}.
+  \item \textbf{The clear-sky reference}, per Sec.~\ref{sec:airmass}. This is
+    now the blocking item: the measurements exist, in quantity, and nothing can
+    become an optical depth until each star has a clear-sky flux to be compared
+    against. The measured spread of $k$ says the per-camera per-night fit is
+    the one to build.
   \item \textbf{Gate $\tau$ on detectability}, so a fit that is indistinguishable
     from noise is treated as an absent star rather than a faint one.
   \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:
@@ -593,7 +724,9 @@ but the derived optical depths should not be treated as calibrated.
     weight is now a product of five factors --- magnetic axis, zenith taper,
     mask-edge fade, solar taper and the operator's per-camera quality setting
     $2^{n}$ --- so the cloud term is a sixth factor of the same kind, and the
-    cache keys must take it the way they now take the quality weights.
+    cache keys must take it the way they now take the quality weights. It has to
+    be applied in both composites, which since 11 September means two places:
+    see Sec.~\ref{sec:weightpath}.
   \item \textbf{Surface the noise in the panel.} $\sigma_r$ and the
     signal-to-noise ratios are stored and served by the API but not drawn; a
     brightness series without its noise band cannot be read honestly.
@@ -605,6 +738,9 @@ but the derived optical depths should not be treated as calibrated.
   \item \textbf{Let the pass reach the whole archive.} It looks back
     \SI{48}{\hour} by default, which keeps it current but leaves the history
     unmeasured. A backfill wants a wider window and a night-by-night sweep.
+  \item \textbf{Per-frame pointing correction} for the cameras that need it,
+    with the standing per-camera offset used as a recalibration flag for the
+    rest (Sec.~\ref{sec:writer}).
 \end{enumerate}
 
 \section{Where the code is}
@@ -618,6 +754,9 @@ but the derived optical depths should not be treated as calibrated.
     \texttt{frame\_sky} tables and their indices.
   \item \texttt{backend/starpass.rs} --- the writer: frame selection, the sky
     record, cadence thinning, the lens-model cache and the background loop.
+  \item \texttt{backend/publish\_layers.rs}, \texttt{src/composition-rules.ts}
+    --- the two halves of the composite weight, and where a cloud factor has to
+    be added (Sec.~\ref{sec:weightpath}).
   \item \texttt{backend/main.rs} --- \texttt{GET /api/sources/\{id\}/stars} and
     \texttt{.../stars/series}, and the spawn of the pass.
   \item \texttt{deploy/gaia-revontuli.service} --- the \texttt{GAIA\_STARPHOT\_*}

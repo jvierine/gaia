@@ -6,6 +6,7 @@ import {liveCutoff,LIVE_DELAY_MINUTES} from '../src/live-time';
 import { Activity, Aperture, CircleHelp, Database, Lightbulb, Satellite, Send, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import GaiaGlobeView from '../src/GaiaGlobeView';
+import {voronoiEdges} from '../src/voronoi';
 
 type ViewName = 'globe' | 'cameras' | 'status' | 'calibrate' | 'about';
 type Camera = {id:string;name:string;producer:string;state:string;timestamp_mode:string;latitude_deg:number|null;longitude_deg:number|null;calibrated:boolean;processing?:{state:string;total?:number;done?:number;ready?:number;error?:string|null};enabled:boolean;quality_exponent:number;images_24h:number;message?:string|null};
@@ -248,8 +249,19 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
           const placed=frame.stars.filter(r=>r.x!=null&&r.y!=null);
           const W=frame.width||Math.ceil(Math.max(...placed.map(r=>r.x as number),1)*1.05);
           const H=frame.height||Math.ceil(Math.max(...placed.map(r=>r.y as number),1)*1.05);
-          const found=placed.filter(r=>r.detected).length;
+          const identified=placed.filter(r=>r.detected);
+          const found=identified.length;
           const r0=Math.max(2.5,Math.min(W,H)/150);
+          // Each star owns the sky nearer to it than to any other. An edge is
+          // only as trustworthy as the dimmer of the two stars meeting across
+          // it, so it takes that one's colour.
+          const cells=voronoiEdges(identified.map(r=>({x:r.x as number,y:r.y as number})),W,H);
+          const fainter=(a:number,b:number)=>{
+            const [p,q]=[identified[a]?.relative,identified[b]?.relative];
+            if(p==null)return q??null;
+            if(q==null)return p;
+            return Math.min(p,q);
+          };
           return <>
             <div className="star-plot-head"><strong>Star positions in the frame</strong>
               <small>{found} of {frame.stars.length} found{frame.observation_utc?` \u00b7 ${new Date(frame.observation_utc).toISOString().replace('T',' ').slice(0,19)} UTC`:''}</small></div>
@@ -257,6 +269,8 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
               aria-label="Scrubbed camera frame with identified stars">
               <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
                 x="0" y="0" width={W} height={H} preserveAspectRatio="none"/>
+              <g className="star-cells">{cells.map((e,i)=><line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                stroke={relativeColour(fainter(e.a,e.b))} strokeWidth={r0*0.35} strokeLinecap="round"/>)}</g>
               {placed.map(r=>{const on=selected.includes(r.star_key);
                 return <g key={r.star_key} className={on?'chosen':''} onClick={()=>toggle(r.star_key)}>
                   <circle cx={r.x as number} cy={r.y as number}
@@ -275,7 +289,7 @@ SNR ${r.flux_snr==null?'n/a':r.flux_snr.toFixed(1)}`}</title>
             <div className="star-ramp"><small>faded</small>
               {[0,0.04,0.16,0.36,0.64,1].map(v=><i key={v} style={{background:relativeColour(v)}}/>)}
               <small>at its best</small></div>
-            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found. Click a star to plot it.</small>
+            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found. The web divides the frame into the region nearest each identified star, every boundary taking the colour of the fainter star across it. Click a star to plot it.</small>
           </>})():<>
         <div className="star-plot-head"><strong>Star positions in the frame</strong><small>colour is brightness variation</small></div>
         <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label="Star image positions coloured by brightness variation">

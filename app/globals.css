@@ -186,3 +186,5 @@
 .star-frame{width:100%;height:auto;background:#04121a;border-radius:8px}
 .star-frame image{image-rendering:auto}
 .star-frame g{cursor:pointer}
+
+.star-cells{opacity:.62;mix-blend-mode:screen;pointer-events:none}

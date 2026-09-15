@@ -108,3 +108,30 @@ export function densityColour(fraction: number): string | null {
   const light = 18 + 52 * t;
   return `hsl(${Math.round(hue)} ${Math.round(55 + 35 * t)}% ${Math.round(light)}%)`;
 }
+
+/// Tick positions across a range, at values a reader would choose: 1, 2 or 5
+/// times a power of ten. Returns the values themselves, so a caller can place
+/// and label them.
+export function ticks(low: number, high: number, about = 5): number[] {
+  if (!Number.isFinite(low) || !Number.isFinite(high) || !(high > low)) return [];
+  const raw = (high - low) / Math.max(1, about);
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 5, 10].map(m => m * magnitude).find(s => s >= raw) ?? 10 * magnitude;
+  const out: number[] = [];
+  for (let v = Math.ceil(low / step) * step; v <= high + step * 1e-9; v += step) {
+    // Guard the accumulated error, so 0.30000000000000004 is not a tick label.
+    out.push(Math.abs(v) < step * 1e-9 ? 0 : Number(v.toFixed(12)));
+  }
+  return out;
+}
+
+/// A short label for a tick, keeping large and small numbers readable without
+/// a units column.
+export function tickLabel(value: number): string {
+  const size = Math.abs(value);
+  if (size === 0) return '0';
+  if (size >= 1e5 || size < 1e-3) return value.toExponential(0).replace('e+', 'e');
+  if (size >= 100) return value.toFixed(0);
+  if (size >= 10) return value.toFixed(value % 1 === 0 ? 0 : 1);
+  return value.toFixed(size >= 1 ? 1 : 2);
+}

@@ -9,7 +9,7 @@ import GaiaGlobeView from '../src/GaiaGlobeView';
 import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
 // `extent` is imported under another name: the panel already has a local one
 // for the scatter, and a shadowed import would silently call the wrong function.
-import {densityColour,extent as binExtent,histogram1d,histogram2d} from '../src/histogram';
+import {densityColour,extent as binExtent,histogram1d,histogram2d,tickLabel,ticks} from '../src/histogram';
 
 type ViewName = 'globe' | 'cameras' | 'status' | 'calibrate' | 'about';
 type Camera = {id:string;name:string;producer:string;state:string;timestamp_mode:string;latitude_deg:number|null;longitude_deg:number|null;calibrated:boolean;processing?:{state:string;total?:number;done?:number;ready?:number;error?:string|null};enabled:boolean;quality_exponent:number;images_24h:number;message?:string|null};
@@ -24,6 +24,7 @@ const STAR_CHANNELS = ['mean','r','g','b'] as const;
 /// The average reads warm, the colour channels read as themselves.
 const CHANNEL_COLOUR:Record<string,string> = {mean:'#f5a524',r:'#ff5f56',g:'#3ddc84',b:'#5aa9ff'};
 type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;saturated:boolean;best_flux:number|null;relative:number|null};
+type Distribution={star_key:string;samples:number;days:number;channels:Record<string,{flux:number[];amplitude:number[];background:number[]}>};
 type StarNight={night:number;from:string;to:string;frames:number;looked_for:number;detections:number};
 type StarFrame={image_id:string|null;observation_utc?:string;width?:number|null;height?:number|null;field?:[number,number][]|null;stars:FrameStar[]};
 /// A star at its own best through the window reads bright, one that has faded
@@ -151,6 +152,14 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   // Which of the two left-hand views is showing: the series through time, or
   // the distributions those series are drawn from.
   const [leftTab,setLeftTab]=useState<'series'|'histograms'>('series');
+  // The histograms are built from the whole archive for one star, not from the
+  // window on screen. A star at high latitude barely changes elevation, so its
+  // air mass hardly varies night to night and its clear-sky level is far better
+  // determined over months than over hours; that level is what a fading is
+  // measured against.
+  const [histStar,setHistStar]=useState<string|null>(null);
+  const [distribution,setDistribution]=useState<Distribution|null>(null);
+  const [distBusy,setDistBusy]=useState(false);
   const [zoom,setZoom]=useState(1);
   const [centre,setCentre]=useState<[number,number]|null>(null);
   const pan=useRef<{x:number;y:number;cx:number;cy:number}|null>(null);
@@ -176,8 +185,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   },[camera.id,channel,span]);
   useEffect(()=>{
     const controller=new AbortController();
-    const wanted=leftTab==='histograms'?[...STAR_CHANNELS]:[channel];
-    for(const key of selected)for(const channel of wanted){
+    for(const key of selected){
       if(series[`${span}:${channel}:${key}`])continue;
       void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/series?star=${encodeURIComponent(key)}&channel=${channel}&${span}`,{cache:'no-store',signal:controller.signal})
         .then(async r=>r.ok?await r.json() as {samples:StarSample[]}:{samples:[]})
@@ -185,7 +193,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         .catch(()=>{});
     }
     return()=>controller.abort();
-  },[selected,channel,span,camera.id,series,leftTab]);
+  },[selected,channel,span,camera.id,series]);
   useEffect(()=>{
     const controller=new AbortController();
     void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/nights?channel=${channel}&days=60`,{cache:'no-store',signal:controller.signal})
@@ -195,6 +203,19 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
     return()=>controller.abort();
   },[camera.id,channel]);
   useEffect(()=>{setRange(null)},[camera.id]);
+  useEffect(()=>{
+    setHistStar(prev=>prev&&selected.includes(prev)?prev:(selected[0]??null));
+  },[selected]);
+  useEffect(()=>{
+    if(leftTab!=='histograms'||!histStar){setDistribution(null);return}
+    const controller=new AbortController();setDistBusy(true);
+    void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/distribution?star=${encodeURIComponent(histStar)}`,{cache:'no-store',signal:controller.signal})
+      .then(async r=>r.ok?await r.json() as Distribution:null)
+      .then(body=>{if(!controller.signal.aborted)setDistribution(body)})
+      .catch(()=>{})
+      .finally(()=>{if(!controller.signal.aborted)setDistBusy(false)});
+    return()=>controller.abort();
+  },[leftTab,histStar,camera.id]);
   // A new camera, channel or window invalidates the scrubbed frame.
   useEffect(()=>{setCursor(null);setFrame(null)},[camera.id,channel,span]);
   useEffect(()=>{setZoom(1);setCentre(null)},[frame?.image_id]);
@@ -262,51 +283,83 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         {picked.map(p=><path key={p.key} d={path(p.samples,get,lo,hi,w,h)} fill="none" stroke={p.colour} strokeWidth="1.4"/>)}
         {cursorX!=null&&<line x1={cursorX} x2={cursorX} y1="0" y2={h} className="star-cursor"/>}
       </svg></div>;};
-  // Samples of one quantity, for one channel, across every selected star.
-  const pooled=(chan:string,pick:(x:StarSample)=>number|null)=>selected
-    .flatMap(k=>series[`${span}:${chan}:${k}`]||[])
-    .map(pick)
-    .filter((v):v is number=>v!=null&&Number.isFinite(v));
-  const histogramPlot=(label:string,pick:(x:StarSample)=>number|null,unit:string)=>{
-    const byChannel=STAR_CHANNELS.map(c=>({channel:c,values:pooled(c,pick)}));
-    const all=byChannel.flatMap(c=>c.values);
+  // Plot geometry. These SVGs scale uniformly rather than being stretched to
+  // their box, because stretched text is unreadable and these ones carry axis
+  // labels.
+  const PLOT={w:600,h:180,left:52,right:8,top:8,bottom:26};
+  const axisLines=(lo:number,hi:number,peak:number,area:{x:number;y:number;w:number;h:number})=>{
+    const xs=ticks(lo,hi,5),ys=ticks(0,peak,4);
+    return <>
+      {xs.map(v=>{const x=area.x+(v-lo)/(hi-lo)*area.w;
+        return <g key={`x${v}`}>
+          <line x1={x} x2={x} y1={area.y+area.h} y2={area.y+area.h+4} className="star-axis"/>
+          <text x={x} y={area.y+area.h+15} className="star-tick" textAnchor="middle">{tickLabel(v)}</text>
+        </g>})}
+      {ys.map(v=>{const y=area.y+area.h-(peak>0?v/peak:0)*area.h;
+        return <g key={`y${v}`}>
+          <line x1={area.x-4} x2={area.x} y1={y} y2={y} className="star-axis"/>
+          <line x1={area.x} x2={area.x+area.w} y1={y} y2={y} className="star-grid"/>
+          <text x={area.x-7} y={y+3.5} className="star-tick" textAnchor="end">{tickLabel(v)}</text>
+        </g>})}
+      <line x1={area.x} x2={area.x} y1={area.y} y2={area.y+area.h} className="star-axis"/>
+      <line x1={area.x} x2={area.x+area.w} y1={area.y+area.h} y2={area.y+area.h} className="star-axis"/>
+    </>;};
+  const histogramPlot=(label:string,key:'flux'|'amplitude'|'background',unit:string)=>{
+    const channels=STAR_CHANNELS.map(c=>({channel:c,values:distribution?.channels?.[c]?.[key]??[]}));
+    const all=channels.flatMap(c=>c.values);
     // One span for all four, so the channels can be compared by eye.
     const [lo,hi]=binExtent(all);
-    const bins=40,w=560,h=118;
-    const series4=byChannel.map(c=>({...c,bins:histogram1d(c.values,bins,[lo,hi])}));
-    const peak=series4.reduce((m,c)=>Math.max(m,c.bins.peak),0)||1;
+    const bins=44;
+    const area={x:PLOT.left,y:PLOT.top,w:PLOT.w-PLOT.left-PLOT.right,h:PLOT.h-PLOT.top-PLOT.bottom};
+    const binned=channels.map(c=>({...c,bins:histogram1d(c.values,bins,[lo,hi])}));
+    const peak=binned.reduce((m,c)=>Math.max(m,c.bins.peak),0)||1;
     const outline=(counts:number[])=>{
-      let d=`M0 ${h}`;
-      counts.forEach((n,i)=>{const x0=i/bins*w,x1=(i+1)/bins*w,y=h-n/peak*h;
+      let d=`M${area.x} ${area.y+area.h}`;
+      counts.forEach((n,i)=>{const x0=area.x+i/bins*area.w,x1=area.x+(i+1)/bins*area.w,
+        y=area.y+area.h-n/peak*area.h;
         d+=`L${x0.toFixed(1)} ${y.toFixed(1)}L${x1.toFixed(1)} ${y.toFixed(1)}`});
-      return `${d}L${w} ${h}`;};
+      return `${d}L${area.x+area.w} ${area.y+area.h}`;};
     return <div className="star-plot"><div className="star-plot-head"><strong>{label}</strong>
-      <small>{lo.toPrecision(3)} to {hi.toPrecision(3)} {unit} · {all.length} samples</small></div>
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={`${label} distribution`}>
-        <rect x="0" y="0" width={w} height={h} className="star-plot-bg"/>
-        {[0.25,0.5,0.75].map(f=><line key={f} x1="0" x2={w} y1={h*f} y2={h*f} className="star-grid"/>)}
-        {series4.map(c=>c.bins.total>0&&<path key={c.channel} d={outline(c.bins.counts)} fill="none"
-          stroke={CHANNEL_COLOUR[c.channel]} strokeWidth={c.channel==='mean'?1.9:1.2}
+      <small>{all.length} measurements {unit}</small></div>
+      <svg className="star-hist" viewBox={`0 0 ${PLOT.w} ${PLOT.h}`} role="img" aria-label={`${label} distribution`}>
+        <rect x={area.x} y={area.y} width={area.w} height={area.h} className="star-plot-bg"/>
+        {axisLines(lo,hi,peak,area)}
+        {binned.map(c=>c.bins.total>0&&<path key={c.channel} d={outline(c.bins.counts)} fill="none"
+          stroke={CHANNEL_COLOUR[c.channel]} strokeWidth={c.channel==='mean'?1.8:1.1}
           opacity={c.channel==='mean'?1:.85}/>)}
       </svg></div>;};
   const jointPlot=()=>{
-    const samples=selected.flatMap(k=>series[`${span}:${channel}:${k}`]||[]);
-    const xs=samples.map(x=>x.amplitude),ys=samples.map(x=>x.background);
-    const grid=histogram2d(xs as number[],ys as number[],48,34);
-    const w=560,h=238;
-    const cw=w/grid.columns,ch=h/grid.rows;
+    const set=distribution?.channels?.[channel];
+    // Background along the horizontal, star peak up the vertical: the eye then
+    // reads how far the peak falls as the sky brightens.
+    const xs=set?.background??[],ys=set?.amplitude??[];
+    const n=Math.min(xs.length,ys.length);
+    const columns=Math.max(10,Math.min(56,Math.round(Math.sqrt(n)*1.6)));
+    const rows=Math.max(8,Math.round(columns*0.62));
+    const grid=histogram2d(xs,ys,columns,rows);
+    const h=300;
+    const area={x:PLOT.left,y:PLOT.top,w:PLOT.w-PLOT.left-PLOT.right,h:h-PLOT.top-PLOT.bottom};
+    const cw=area.w/grid.columns,ch=area.h/grid.rows;
+    const xs2=ticks(grid.xLow,grid.xHigh,5),ys2=ticks(grid.yLow,grid.yHigh,5);
     return <div className="star-plot"><div className="star-plot-head"><strong>Peak against background</strong>
-      <small>{channel==='mean'?'average':channel.toUpperCase()} · {grid.total} samples</small></div>
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img"
-        aria-label="Joint distribution of star peak and sky background">
-        <rect x="0" y="0" width={w} height={h} className="star-plot-bg"/>
-        {grid.counts.map((n,i)=>{const colour=densityColour(n/(grid.peak||1));if(!colour)return null;
-          const cx=(i%grid.columns)*cw,cy=h-(Math.floor(i/grid.columns)+1)*ch;
-          return <rect key={i} x={cx} y={cy} width={cw+0.5} height={ch+0.5} fill={colour}/>})}
+      <small>{channel==='mean'?'average':channel.toUpperCase()} · {grid.total} measurements</small></div>
+      <svg className="star-hist" viewBox={`0 0 ${PLOT.w} ${h}`} role="img"
+        aria-label="Joint distribution of sky background and star peak">
+        <rect x={area.x} y={area.y} width={area.w} height={area.h} className="star-plot-bg"/>
+        {grid.counts.map((c,i)=>{const colour=densityColour(c/(grid.peak||1));if(!colour)return null;
+          const cx=area.x+(i%grid.columns)*cw,cy=area.y+area.h-(Math.floor(i/grid.columns)+1)*ch;
+          return <rect key={i} x={cx} y={cy} width={cw+0.4} height={ch+0.4} fill={colour}/>})}
+        {xs2.map(v=>{const x=area.x+(v-grid.xLow)/(grid.xHigh-grid.xLow)*area.w;
+          return <g key={`x${v}`}><line x1={x} x2={x} y1={area.y+area.h} y2={area.y+area.h+4} className="star-axis"/>
+            <text x={x} y={area.y+area.h+15} className="star-tick" textAnchor="middle">{tickLabel(v)}</text></g>})}
+        {ys2.map(v=>{const y=area.y+area.h-(v-grid.yLow)/(grid.yHigh-grid.yLow)*area.h;
+          return <g key={`y${v}`}><line x1={area.x-4} x2={area.x} y1={y} y2={y} className="star-axis"/>
+            <text x={area.x-7} y={y+3.5} className="star-tick" textAnchor="end">{tickLabel(v)}</text></g>})}
+        <line x1={area.x} x2={area.x} y1={area.y} y2={area.y+area.h} className="star-axis"/>
+        <line x1={area.x} x2={area.x+area.w} y1={area.y+area.h} y2={area.y+area.h} className="star-axis"/>
       </svg>
-      <div className="star-axes">
-        <small>horizontal: peak above background, {grid.xLow.toPrecision(3)} to {grid.xHigh.toPrecision(3)}</small>
-        <small>vertical: sky background, {grid.yLow.toPrecision(3)} to {grid.yHigh.toPrecision(3)}</small></div>
+      <div className="star-axes"><small>horizontal: sky background</small>
+        <small>vertical: peak above background</small></div>
     </div>;};
   const extent=(pick:(r:StarSummary)=>number)=>{
     const vals=stars.map(pick).filter(Number.isFinite);
@@ -343,15 +396,24 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         <div className="star-subtabs" role="tablist" aria-label="Left panel view">
           <button type="button" role="tab" aria-selected={leftTab==='series'} onClick={()=>setLeftTab('series')}>Time series</button>
           <button type="button" role="tab" aria-selected={leftTab==='histograms'} onClick={()=>setLeftTab('histograms')}>Histograms</button>
-          <small>{leftTab==='series'?'brightness and sky through the window':'distributions over the window, all four channels'}</small>
+          <small>{leftTab==='series'?'brightness and sky through the window above':'one star over the whole archive, all four channels'}</small>
         </div>
         {leftTab==='histograms'?<>
-          {histogramPlot('Total intensity above background',x=>x.flux,'counts')}
-          {histogramPlot('Peak intensity above background',x=>x.amplitude,'counts')}
-          {histogramPlot('Fitted sky background',x=>x.background,'counts')}
+          <div className="star-histstar">
+            <span className="eyebrow">STAR</span>
+            {selected.map(k=>{const row=stars.find(r=>r.star_key===k);
+              return <button key={k} type="button" aria-pressed={histStar===k} onClick={()=>setHistStar(k)}>
+                {row?`V ${row.vt_mag.toFixed(2)}`:k.slice(0,10)}</button>})}
+            <small role="status">{!histStar?'select a star in the frame'
+              :distBusy?'loading the whole archive\u2026'
+              :`${distribution?.samples??0} measurements over the whole archive, every night it was seen`}</small>
+          </div>
+          {histogramPlot('Total intensity above background','flux','counts')}
+          {histogramPlot('Peak intensity above background','amplitude','counts')}
+          {histogramPlot('Fitted sky background','background','counts')}
           {jointPlot()}
           <div className="star-legend">{STAR_CHANNELS.map(c=><span key={c}><i style={{background:CHANNEL_COLOUR[c]}}/>{c==='mean'?'average':c.toUpperCase()}</span>)}
-            {selected.length===0&&<small>Select stars in the frame to pool their samples.</small>}</div>
+            <small>One star at a time, over the whole archive rather than the window above: a star this far north barely changes elevation, so its clear-sky level is far better determined over months than over hours.</small></div>
         </>:<>
         {plot('Total intensity above background',x=>x.flux,'counts',true)}
         {times.length>0&&<div className="star-scrub">

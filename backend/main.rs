@@ -853,6 +853,73 @@ struct StarSeriesQuery {
 }
 
 #[derive(Deserialize)]
+struct StarDistributionQuery {
+    star: String,
+    /// How far back to gather. The default is the whole archive.
+    days: Option<f64>,
+}
+
+/// Every detected measurement of one star, in all four channels, as bare
+/// columns over a long baseline.
+///
+/// The histograms want the season, not the night on screen. A star at high
+/// latitude barely changes elevation, so its air mass hardly varies from one
+/// night to the next and its clear-sky level is far better determined over
+/// months than over hours; that level is what a fading is measured against.
+/// Returning columns rather than whole sample rows keeps a season of data small
+/// enough to send: three numbers per measurement instead of twenty-five.
+async fn source_star_distribution(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<StarDistributionQuery>,
+) -> ApiResult<Json<Value>> {
+    let days = query.days.unwrap_or(400.0).clamp(1.0, 4000.0);
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let mut statement = conn
+        .prepare(
+            "SELECT channel,flux,amplitude,background FROM star_photometry
+             WHERE source_id=?1 AND star_key=?2 AND amplitude IS NOT NULL
+               AND julianday(observation_utc) >= julianday('now') - ?3
+             ORDER BY observation_utc",
+        )
+        .map_err(internal)?;
+    let mut channels: std::collections::BTreeMap<String, (Vec<f64>, Vec<f64>, Vec<f64>)> =
+        Default::default();
+    let rows = statement
+        .query_map(rusqlite::params![id, query.star, days], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<f64>>(1)?,
+                r.get::<_, Option<f64>>(2)?,
+                r.get::<_, Option<f64>>(3)?,
+            ))
+        })
+        .map_err(internal)?;
+    let mut total = 0usize;
+    for row in rows {
+        let (channel, flux, amplitude, background) = row.map_err(internal)?;
+        let (Some(flux), Some(amplitude), Some(background)) = (flux, amplitude, background) else {
+            continue;
+        };
+        let entry = channels.entry(channel).or_default();
+        entry.0.push(flux);
+        entry.1.push(amplitude);
+        entry.2.push(background);
+        total += 1;
+    }
+    let listed: serde_json::Map<String, Value> = channels
+        .into_iter()
+        .map(|(channel, (flux, amplitude, background))| {
+            (channel, json!({"flux": flux, "amplitude": amplitude, "background": background}))
+        })
+        .collect();
+    Ok(Json(json!({
+        "source_id": id, "star_key": query.star, "days": days,
+        "samples": total, "channels": Value::Object(listed),
+    })))
+}
+
+#[derive(Deserialize)]
 struct ExtinctionQuery {
     /// Limit the listing to one camera. Omitted, the whole archive is summarised.
     source: Option<String>,
@@ -1555,6 +1622,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/stars/frame", get(source_star_frame))
         .route("/api/sources/{id}/stars/nights", get(source_star_nights))
         .route("/api/extinction", get(extinction_state))
+        .route("/api/sources/{id}/stars/distribution", get(source_star_distribution))
         .route(
             "/api/sources/{id}/calibrations",
             get(source_calibrations).post(set_selected_calibration),

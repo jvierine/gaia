@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 const source=readFileSync(new URL('../src/histogram.ts',import.meta.url),'utf8');
 // ES2020 to match the shipped bundle.
 const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2020}}).outputText;
-const {histogram1d,histogram2d,extent,densityColour}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
+const {histogram1d,histogram2d,extent,densityColour,ticks,tickLabel}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
 
 test('every sample lands in exactly one bin',()=>{
   const values=[0,1,2,3,4,5,6,7,8,9,10];
@@ -74,4 +74,33 @@ test('extent widens a degenerate span and honours a given one',()=>{
   assert.deepEqual(extent([5,5,5]),[4.5,5.5]);
   assert.deepEqual(extent([1,2,3],[0,10]),[0,10]);
   assert.deepEqual(extent([]),[0,1]);
+});
+
+test('ticks land on values a reader would choose',()=>{
+  assert.deepEqual(ticks(0,10,5),[0,2,4,6,8,10]);
+  assert.deepEqual(ticks(0,1,5),[0,0.2,0.4,0.6,0.8,1]);
+  // A step is always 1, 2 or 5 times a power of ten.
+  for(const [lo,hi] of [[0,7],[0,1234],[12.5,13.5],[0,0.004],[-30,30]]){
+    const t=ticks(lo,hi,5);
+    assert.ok(t.length>=2,`too few ticks for ${lo}..${hi}`);
+    const step=t[1]-t[0];
+    const mantissa=step/Math.pow(10,Math.floor(Math.log10(step)));
+    assert.ok([1,2,5,10].some(m=>Math.abs(mantissa-m)<1e-9),`step ${step} is not a round number`);
+    assert.ok(t[0]>=lo-1e-9&&t[t.length-1]<=hi+1e-9,'ticks must stay inside the range');
+  }
+});
+
+test('ticks refuse a degenerate range rather than looping',()=>{
+  assert.deepEqual(ticks(5,5),[]);
+  assert.deepEqual(ticks(10,0),[]);
+  assert.deepEqual(ticks(NaN,1),[]);
+});
+
+test('tick labels stay short across scales',()=>{
+  assert.equal(tickLabel(0),'0');
+  assert.equal(tickLabel(250),'250');
+  assert.equal(tickLabel(2.5),'2.5');
+  assert.equal(tickLabel(0.25),'0.25');
+  assert.ok(tickLabel(3.4e6).length<=6,'large numbers go exponential');
+  assert.ok(!tickLabel(0.6000000000000001).includes('0000'),'no accumulated error in a label');
 });

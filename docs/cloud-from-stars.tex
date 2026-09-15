@@ -18,7 +18,7 @@
 \title{\bfseries Cloud coverage from stellar intensity time series\\[2mm]
 \large Status of the GAIA implementation, and what remains}
 \author{Memo --- GAIA Data Center}
-\date{14 September 2026 \\ \small(third revision; first issued 10 September 2026)}
+\date{15 September 2026 \\ \small(fourth revision; first issued 10 September 2026)}
 
 \begin{document}
 \maketitle
@@ -37,15 +37,15 @@ fit residuals so a star can be tested against the frame's own noise instead of
 being trusted blindly, and the solar and lunar state at the station is computed
 and stored per frame. Storage, both diagnostic plots, and the writer that
 fills them all exist, and the writer has been running in production since
-10 September: \num{1.6} million measurements, \num{4761} frames, \num{71}
-cameras, every one of them detecting stars. What does not exist is everything
-downstream of the measurement. No flux has yet become an optical depth, so no
-cloud weight reaches the composite and no cloud map is drawn. The blocking item
-is the clear-sky reference, and four days of real series now let us put a number
-on why it is hard: regressing flux on air mass gives a median extinction of
-\SI{0.38}{mag} per air mass against a clear-sky value near \num{0.20}, because
-cloud and air mass are folded into the same fit and cannot be separated by a
-whole-series regression.
+10 September: \num{2.4} million measurements over \num{71} cameras, every one
+of them detecting stars. The clear-sky reference exists too, and after three
+faults were found and fixed it is accumulating: 59 fits over 20 cameras at the
+time of writing, at \num{0.18} magnitudes per air mass against a literature
+clear sky near \num{0.20}, a figure the estimator was never told. What still
+does not exist is the step from a measurement to a cloud number. No flux has yet
+become an optical depth, so no cloud weight reaches the composite and no cloud
+map is published. That is now the whole of the remaining work, and none of it is
+research: the reference it was waiting for is in place.
 \end{abstract}
 
 \section{What changed since the first issue}
@@ -91,6 +91,14 @@ pose:
     two places to be applied rather than one, and unlike its neighbours it
     cannot be computed client-side (Sec.~\ref{sec:weightpath}).
 \end{enumerate}
+
+\noindent The fourth revision, a day later again, is mostly a correction. The
+third reported the clear-sky reference as built and working. It was built; it
+was not working. Three faults in the pass had left it stalled in production at
+the twelve fits it had made in its first four hours, and the fault that hid this
+was that the only evidence either way lived in two database tables nobody could
+read without risking the service. All three are fixed and the reference is now
+accumulating (Sec.~\ref{sec:stall}), and the evidence is now an API call.
 
 \section{The measurement chain}
 
@@ -643,9 +651,16 @@ but the derived optical depths should not be treated as calibrated.
     own reference understates the extinction and it will look clearer than it
     is. Needs either a minimum clear-fraction test or a reference carried over
     a longer baseline than the analysis window.
-  \item \textbf{Saturation.} Bright stars clip, which truncates the Gaussian and
-    biases both amplitude and width, always toward underestimating the flux.
-    Clipped patches should be rejected, not fitted.
+  \item \textbf{Saturation is detected but not yet excluded.} A star whose
+    fitted background plus amplitude reaches the top of the range has a clipped
+    peak, and its flux is an underestimate; the frame view marks those with a
+    cross. It is commoner than expected, and aurora is the cause: at Kiruna on
+    the night of 14 September, as a display faded, 54 of 140 identified stars
+    were saturated at 00:47 with the background at 172, 28 at 01:23, and one at
+    01:59 with the background at 151. A bright aurora lifts the sky until the
+    stars have no headroom left. These measurements must be kept out of the
+    optical depth, where they would read as a fading rather than as a full
+    detector.
   \item \textbf{Moonlight is measured but not corrected for.} The gradient it
     puts across a patch is now part of the fit, and its brightness is recorded
     per frame, but nothing yet uses that record. A bright Moon raises the sky
@@ -703,9 +718,13 @@ scan, when the coefficient comes out negative, or when the objective fails to
 rise on both sides of the minimum --- the last being a direct test of whether
 the night pins $k$ at all.
 
-\paragraph{What it gives.} Over the archive the guards accept 151 fits and
-refuse 745, which is the honest ratio: most camera-nights genuinely do not
-constrain extinction. The accepted ones land where they should.
+\paragraph{What it gives.} Run once over the whole archive, offline, the guards
+accepted 151 fits and refused 745; running continuously in production a day
+later, 59 fits over 20 cameras against 432 attempts (Sec.~\ref{sec:stall}). The
+ratio is the honest one either way: most camera-nights genuinely do not
+constrain extinction. The accepted ones land where they should. The table below
+is the offline run, which covers more nights; the production figures agree with
+it to within a hundredth.
 
 \begin{center}\small
 \begin{tabular}{lrrr}
@@ -730,6 +749,58 @@ best-sampled night they run from \num{0.000} at the tenth percentile through
 \SI{39}{\percent} of samples below \num{0.1}. The floor at zero is by
 construction, since the reference is the ninetieth percentile of the star's own
 corrected series.
+
+\section{The reference was stalled, and why that went unnoticed}
+\label{sec:stall}
+
+A day after the reference went live its fit count had not moved: twelve fits,
+the newest more than a day old, after a full period of darkness. Three separate
+faults, all in \texttt{backend/starpass.rs}.
+
+\begin{enumerate}
+  \item \textbf{The pending-frame query took two minutes sixteen} on the live
+    archive and ran every cycle, which is what burned a core continuously. It
+    wrapped the indexed column in \texttt{julianday()}, so the index on
+    observation time could not be used, and it resolved which calibration covers
+    each frame through a correlated subquery over every image in the window. The
+    cutoff is now compared as a string, exact because every observation time in
+    the archive is RFC 3339 with a \texttt{+00:00} offset, and the calibration is
+    resolved only for the few frames actually selected. Cycles now finish in
+    about a second.
+  \item \textbf{The cycle returned before the fit} whenever no frame was
+    pending. The writer usually keeps up, so the fit was being skipped precisely
+    when it was most able to run.
+  \item \textbf{A refused fit recorded nothing}, so every cycle re-decided the
+    same hopeless camera-nights and spent its whole budget on the first few
+    cameras of a fixed order. Nothing past the tenth camera had ever been
+    reached; the five cameras that held fits all sat between positions four and
+    ten of that walk. Attempts are now recorded whatever their outcome, and
+    cameras are visited least-recently-tried first.
+\end{enumerate}
+
+\paragraph{The methodological point.} A refusal is a result. Treating it as a
+non-event, something to be re-derived on the next pass, is what let a handful of
+camera-nights monopolise a bounded budget indefinitely. The same applies to the
+science: a night that cannot constrain extinction has told us something about
+that night, and the record of the attempt is worth as much as the record of a
+success.
+
+\paragraph{What it looks like now.} Within an hour of the fix the pass had
+reached 75 cameras and stored 59 fits over 20 of them, against 432 attempts of
+which 373 were refused. That ratio is the expected shape, not a fault: most
+camera-nights genuinely cannot constrain extinction, for the reason in
+Sec.~\ref{sec:reference}. The coefficients remain where they should be, at
+\num{0.181} in the panchromatic channel and \num{0.147} to \num{0.164} in green,
+red and blue, against a literature clear sky near \num{0.20}.
+
+\paragraph{And the reason it went unnoticed for a day.} The only evidence about
+the fit lived in two tables, and reading the live database from any account but
+the server's own leaves its write-ahead log owned by the wrong user and takes
+the whole API down; it did so twice. \texttt{GET /api/extinction} now reports
+the fits, the attempts, the refusals and the coefficient by channel, so the
+state of the reference can be read without touching the database. A quantity
+that cannot be observed without risk will not be observed, and will therefore be
+assumed.
 
 \section{Where the cloud weight now has to go}
 \label{sec:weightpath}
@@ -770,11 +841,14 @@ term should follow that pattern rather than work around it.
 \label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{Carry the reference through to a stored optical depth.} The
-    reference exists (Sec.~\ref{sec:reference}) and $\tau$ follows from it in
-    one line, but nothing yet writes a $\tau$ per measurement, and the nights
-    the fit refuses need a stated fallback: no weight at all, rather than a
-    guessed one.
+  \item \textbf{Carry the reference through to a stored optical depth.} This is
+    the whole of what is left between the archive and a cloud number. The
+    reference exists and is accumulating (Sec.~\ref{sec:reference},
+    Sec.~\ref{sec:stall}), and $\tau$ follows from it in one line, but nothing
+    yet writes a $\tau$ per measurement. Three things must be decided with it:
+    saturated measurements excluded, undetectable ones excluded, and a stated
+    fallback for the camera-nights the fit refuses, which are the majority --- no
+    weight at all rather than a guessed one.
   \item \textbf{Gate $\tau$ on detectability}, so a fit that is indistinguishable
     from noise is treated as an absent star rather than a faint one.
   \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:
@@ -790,12 +864,18 @@ term should follow that pattern rather than work around it.
     see Sec.~\ref{sec:weightpath}.
   \item \textbf{Surface the noise in the panel.} $\sigma_r$ and the
     signal-to-noise ratios are stored and served by the API but not drawn; a
-    brightness series without its noise band cannot be read honestly.
-  \item \textbf{Voronoi cloud-cover output}: tessellate with star positions as
-    centres, assign each cell its star's optical depth, and feather the cell
-    edges with the same $\psi$-based smooth step at \SI{10}{\percent} of cell
-    width, then publish the map as a separate image and expose it as an option
-    in the browse-history panel.
+    brightness series without its noise band cannot be read honestly. The
+    distributions now drawn beside it (total intensity, peak and background, per
+    colour channel, over the whole archive for one star) are the natural place
+    to put it.
+  \item \textbf{Voronoi cloud-cover output.} The tessellation itself is built
+    and drawn: cells are cut to the camera's own projected horizon rather than to
+    the frame, since a fisheye's corners are ground and housing, and each
+    boundary takes the colour of the more faded of the two stars across it, so a
+    clouded star is ringed in dark red all the way round. What remains is to
+    assign each cell an optical depth rather than a relative brightness, feather
+    the edges with the $\psi$-based smooth step at \SI{10}{\percent} of cell
+    width, and publish the map as an image in the browse-history panel.
   \item \textbf{Let the pass reach the whole archive.} It looks back
     \SI{48}{\hour} by default, which keeps it current but leaves the history
     unmeasured. A backfill wants a wider window and a night-by-night sweep.
@@ -822,8 +902,14 @@ term should follow that pattern rather than work around it.
   \item \texttt{backend/publish\_layers.rs}, \texttt{src/composition-rules.ts}
     --- the two halves of the composite weight, and where a cloud factor has to
     be added (Sec.~\ref{sec:weightpath}).
-  \item \texttt{backend/main.rs} --- \texttt{GET /api/sources/\{id\}/stars} and
-    \texttt{.../stars/series}, and the spawn of the pass.
+  \item \texttt{backend/main.rs} --- the star endpoints: \texttt{stars},
+    \texttt{stars/series}, \texttt{stars/frame} with its camera field outline
+    and saturation flag, \texttt{stars/nights}, \texttt{stars/distribution} for
+    the whole-archive histograms, and \texttt{/api/extinction}, which reports
+    the state of the clear-sky reference without anyone having to open the
+    database.
+  \item \texttt{src/voronoi.ts}, \texttt{src/histogram.ts} --- the tessellation
+    cut to the camera's field, and the binning behind the distributions.
   \item \texttt{deploy/gaia-revontuli.service} --- the \texttt{GAIA\_STARPHOT\_*}
     settings, all of them overridable without a rebuild.
   \item \texttt{app/page.tsx}, \texttt{app/globals.css} --- the Star photometry

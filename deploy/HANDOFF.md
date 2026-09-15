@@ -535,6 +535,30 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
+## Pending backend install: the star series read the wrong column (2026-09-15)
+
+`/api/sources/{id}/stars/series` listed `p.optical_depth` as its 22nd column
+and read it from the 27th, which is `s.sun_elevation_deg`. So every sample
+came back carrying the sun's elevation as its optical depth -- a smooth -15
+to -18 through the evening, which reads as a plausible depth and is why the
+fault survived. The five moon and sun fields were each shifted by one for the
+same reason. The frame endpoint, which is what the panel actually draws, was
+never affected, so nothing wrong was displayed; the API was the liar.
+
+The columns are addressed by name now, and the query sits in
+`star_series_samples` so a test can call it. The test plants a different
+value in every column, which is the only kind that catches a shift of one.
+
+Staged as `gaia-server-3d7fae9`, sha256
+`e0e3bea00158d218198d284b9bc2d8f73f88557bfe34138d18fc8068b256b0db`. Install
+as j:
+
+    cp /mnt/data/juha/gaia/staging/gaia-server-3d7fae9 /mnt/data/juha/gaia-build/release/gaia-server
+    systemctl --user restart gaia-revontuli.service
+
+To go back, the previous binary is `gaia-server-099c8dc` in the same
+directory. No schema change, so a rollback needs nothing else.
+
 ## Pending backend install: the season-long distribution (2026-09-15)
 
 The running `gaia-server` was installed 2026-09-15 18:28 at commit `c7c9fef`,

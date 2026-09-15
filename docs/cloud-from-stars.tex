@@ -18,7 +18,7 @@
 \title{\bfseries Cloud coverage from stellar intensity time series\\[2mm]
 \large Status of the GAIA implementation, and what remains}
 \author{Memo --- GAIA Data Center}
-\date{15 September 2026 \\ \small(fourth revision; first issued 10 September 2026)}
+\date{15 September 2026 \\ \small(fifth revision; first issued 10 September 2026)}
 
 \begin{document}
 \maketitle
@@ -39,12 +39,17 @@ and stored per frame. Storage, both diagnostic plots, and the writer that
 fills them all exist, and the writer has been running in production since
 10 September: \num{2.4} million measurements over \num{71} cameras, every one
 of them detecting stars. The clear-sky reference exists too, and after three
-faults were found and fixed it is accumulating: 59 fits over 20 cameras at the
-time of writing, at \num{0.18} magnitudes per air mass against a literature
+faults were found and fixed it is accumulating: 63 fits over 21 cameras at the
+time of writing, at \num{0.166} magnitudes per air mass in each colour channel
+and \num{0.186} in the mean against a literature
 clear sky near \num{0.20}, a figure the estimator was never told. Every measurement a fitted
-camera-night explains now carries a vertical optical depth, with saturated,
-undetectable and unexplained measurements deliberately left null rather than
-guessed. What remains is to spend that number: no cloud weight yet reaches the
+camera-night explains now carries a vertical optical depth --- \num{33287} of
+\num{2.47} million, rising as the backfill sweeps older nights --- with
+saturated, undetectable and unexplained measurements deliberately left null
+rather than guessed, and the depth capped at 6 where the sky is already opaque.
+Those depths can now be read one at a time as well as in aggregate, which for
+most of this revision's life they could not: see Sec.~\ref{sec:audit}. What
+remains is to spend that number: no cloud weight yet reaches the
 composite and no cloud map is published. Neither is research.
 \end{abstract}
 
@@ -100,12 +105,25 @@ was that the only evidence either way lived in two database tables nobody could
 read without risking the service. All three are fixed and the reference is now
 accumulating (Sec.~\ref{sec:stall}), and the evidence is now an API call.
 
+\noindent The fifth revision carries two corrections of unequal weight. The
+smaller: an uncapped depth had reached \num{40.25}, which is not a measurement
+of cloud but of a star the reference expected and the frame never had. Depths
+are now capped at 6 (Sec.~\ref{sec:depth}). The larger is about how any of
+this gets checked at all. The series endpoint --- built, in the fourth
+revision, precisely so the archive could be audited without opening the
+database --- listed the optical depth as its twenty-second column and read it
+from its twenty-seventh, which holds the solar elevation. Every depth it served
+was the elevation of the Sun that evening: a smooth \num{-15} to \num{-18}
+that reads as a perfectly plausible optical depth, which is exactly why it
+survived review and two rounds of verification (Sec.~\ref{sec:audit}).
+
 \section{The measurement chain}
 
 Each stage below is a separate, testable step: a catalogue position becomes a
 sky position, a sky position becomes a pixel through that camera's own lens
 model, a pixel patch becomes a flux, and a series of fluxes becomes an optical
-depth. The first four are built; the last is not.
+depth. All five are now built. What is not built is anything that reads the
+last one.
 
 \begin{figure}[h]
 \centering
@@ -120,7 +138,7 @@ depth. The first four are built; the last is not.
  \node[d,right=of proj] (fit) {rotated 2-D\\ Gaussian +\\ bilinear sky\\ per channel};
  \node[d,right=of fit] (store) {store row\\ per star,\\ frame, channel};
  \node[d,above=6mm of store] (sky) {sky state\\ Sun + Moon\\ per frame};
- \node[t,right=of store] (tau) {$\tau$ from\\ own $p_{90}$};
+ \node[d,right=of store] (tau) {$\tau$ from\\ clear-sky\\ reference};
  \node[t,right=of tau] (out) {weight +\\ Voronoi\\ map};
  \draw[a] (cat)--(eph); \draw[a] (eph)--(proj); \draw[a] (proj)--(fit);
  \draw[a] (fit)--(store); \draw[a] (store)--(tau); \draw[a] (tau)--(out);
@@ -128,13 +146,13 @@ depth. The first four are built; the last is not.
  \node[below=5mm of proj,font=\scriptsize,soft,text width=42mm,align=center]
    {verified against AIDA to \SI{1e-6}{\degree} and \SI{1e-6}{px}};
  \node[below=5mm of tau,font=\scriptsize,todo,text width=40mm,align=center]
-   {no optical depth yet, no weight applied};
+   {stored per measurement, capped at 6};
 \end{tikzpicture}
 \caption{Green stages are implemented and tested; orange stages are not built.
 The chain runs entirely from the camera's own calibration, so it needs no
-additional instrumentation. The break is at the same place as in the first
-issue: everything up to and including storage exists, everything that turns a
-stored flux into a cloud number does not.}
+additional instrumentation. The break has moved: a stored flux now becomes a
+stored optical depth, and what remains unbuilt is everything downstream of that
+number --- the composite weight and the published map.}
 \label{fig:chain}
 \end{figure}
 
@@ -839,6 +857,17 @@ frame shows rather than a typical one, which errs towards not claiming a fading:
 the cost of a missed cloud is a slightly optimistic mosaic, while the cost of an
 invented one is a camera wrongly suppressed.
 
+\paragraph{And capped where the sky is already opaque.} A depth of 6 transmits
+under a quarter of a percent, which is the point past which one blanket of
+cloud is indistinguishable from a thicker one. Left uncapped the stored values
+reached \num{40.25}, i.e.\ a transmission of $10^{-18}$, and no such number is
+a measurement of weather: it is a star the reference expected at a brightness
+the frame never showed, for a reason outside the model --- an obstruction, a
+lens fault, a zero point fitted on a night unlike this one. Capping at the same
+6 used for a total fading puts those cases where they belong, alongside ``fully
+extinguished'', and stops a single unbounded value dominating any average taken
+over the archive.
+
 \paragraph{Where no number is claimed.} Three kinds of measurement are still
 left null, because in each case a number would be a fiction. A faint or low star
 that was not found may simply have been beyond this camera on this night. A star
@@ -869,6 +898,61 @@ $k=\num{0.808}$. The data was wrong, not the estimator, but it is worth
 recording that this failure looks exactly like success --- depths are produced,
 they are larger where the cloud was --- until the coefficient itself is checked
 against something. It is the cheapest available audit of the whole chain.
+
+\section{The instrument that reads the archive has to be checked too}
+\label{sec:audit}
+
+The fourth revision's lesson was that evidence living only in a database nobody
+can safely open is not evidence, and the remedy was \texttt{/api/extinction}.
+That was right as far as it went. What this revision adds is that an endpoint is
+itself an instrument, and an instrument reports what it reports whether or not
+it is correct.
+
+The series endpoint's query selects twenty-seven columns, of which
+\texttt{p.optical\_depth} is the twenty-second. The handler read that field
+from the twenty-seventh, which is \texttt{s.sun\_elevation\_deg}. So every
+optical depth it served was the elevation of the Sun at that moment --- and a
+September evening at Kiruna runs from \SI{-15}{\degree} to \SI{-18}{\degree}
+over a couple of hours, smoothly and monotonically. As an optical depth it is
+nonsense, since it is negative; as a curve on a plot of something labelled
+depth against time, it is impeccably well behaved. Five lunar and solar fields
+were shifted by one in the same way, and what finally gave the whole thing away
+was an illuminated fraction of $\num{-24.9}$, which cannot be a fraction of
+anything. Three things from this are worth keeping.
+
+\paragraph{A correct aggregate tells you nothing about a single value.} The
+summary endpoint computes \texttt{count}, \texttt{avg} and \texttt{max} over
+the column itself, so its report --- a mean depth near \num{0.45}, a maximum
+sitting exactly on the cap --- was accurate the entire time. It is perfectly
+possible to have a sound summary of a quantity and no ability whatsoever to
+read one instance of it, and the summary will not warn you. Verification that
+stops at the aggregate is not verification.
+
+\paragraph{Positional column access has now failed twice} in this code: once
+returning an empty camera registry with HTTP 200, because a fourteen-column
+query was read at index fourteen, and once here. The remedy is not a better
+index but a different kind of access. The query now addresses every column by
+name and lives in \texttt{star\_series\_samples}, a function a test can call,
+so a column inserted in the middle of the list cannot slide the rest.
+
+\paragraph{The only test that catches this plants a different value in every
+column.} Nothing weaker works. A test asserting that the flux is a flux passes
+happily while the depth is a solar elevation, because both are plausible
+numbers in plausible ranges, and a fixture that leaves most columns at zero or
+null hides the shift entirely. The regression test seeds all twenty-seven
+columns with distinct sentinels, and was confirmed to fail on precisely the
+original substitution before it was accepted.
+
+\paragraph{What the corrected endpoint shows.} Depths now read one at a time,
+and they behave. At Klin, the star $11.03066{+}56.38234$ carries a median
+$\tau$ of \num{0.51} in blue, \num{0.49} in green, \num{0.43} in red and
+\num{0.47} in the mean channel; at Gulkevichi, $0.61619{+}53.89693$ gives
+\num{0.14}, \num{0.16}, \num{0.03} and \num{0.16}. Cloud extinction is close
+to achromatic, so four independently fitted references --- separate quantile
+fits, separate coefficients, separate zero points --- agreeing to within
+\num{0.05} is evidence about the reference itself, and not merely evidence that
+it is self-consistent. It is the cheapest audit available of everything upstream
+of the number.
 
 \section{Where the cloud weight now has to go}
 \label{sec:weightpath}
@@ -909,11 +993,12 @@ term should follow that pattern rather than work around it.
 \label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{Spend the optical depth.} It is now stored
-    (Sec.~\ref{sec:depth}); nothing yet reads it. Two things should:
+  \item \textbf{Spend the optical depth.} It is stored
+    (Sec.~\ref{sec:depth}) and, since this revision, readable
+    (Sec.~\ref{sec:audit}); nothing yet acts on it. Two things should:
     \texttt{cloud\_weight} in the composite, and a cell value in the cloud map.
-  \item \textbf{Gate $\tau$ on detectability}, so a fit that is indistinguishable
-    from noise is treated as an absent star rather than a faint one.
+    This is now the only thing standing between the archive and a cloud-aware
+    mosaic, and it is the next piece of work.
   \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:
     $w=\text{floor}+(1-\text{floor})e^{-\tau}$, strictly positive so a single
     contributing camera normalises back to full strength and no hole is punched.
@@ -966,7 +1051,9 @@ term should follow that pattern rather than work around it.
     --- the two halves of the composite weight, and where a cloud factor has to
     be added (Sec.~\ref{sec:weightpath}).
   \item \texttt{backend/main.rs} --- the star endpoints: \texttt{stars},
-    \texttt{stars/series}, \texttt{stars/frame} with its camera field outline
+    \texttt{stars/series} (whose query lives in \texttt{star\_series\_samples},
+    addressed by column name, Sec.~\ref{sec:audit}),
+    \texttt{stars/frame} with its camera field outline
     and saturation flag, \texttt{stars/nights}, \texttt{stars/distribution} for
     the whole-archive histograms, and \texttt{/api/extinction}, which reports
     the state of the clear-sky reference without anyone having to open the

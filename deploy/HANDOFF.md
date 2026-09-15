@@ -786,3 +786,34 @@ were saturated at 00:47 with the background at 172, and one at 01:59 with it at
 
 Until this is installed the panel falls back to the trailing window and no star
 is ever marked saturated.
+
+## Returning to the known-good state (2026-09-15)
+
+Tag `known-good-2026-09-15` marks the combination that was deployed and
+working on 15 September. Everything needed to get back to it is on disk, so a
+rollback needs no network and no rebuild:
+
+    git checkout known-good-2026-09-15
+    tar xzf /mnt/data/juha/gaia/staging/web-dist-9bd0b5a.tar.gz    # from the repo root
+    # as j:
+    cp /mnt/data/juha/gaia/staging/gaia-server-b8d2d86 /mnt/data/juha/gaia-build/release/gaia-server
+    systemctl --user restart gaia-revontuli.service
+
+`web-dist` is gitignored and served straight out of the repository, so the
+frontend lives in that archive rather than in the commit. The backend binary in
+staging is byte-identical to the one installed at 15:37 that day, sha256
+`2846ab2bea063131bb75c08978f430e06b46df8cb3e28a837ea37568a1570c33`.
+
+### Reading the live database without breaking it
+
+Twice now the live API has been taken down by a read of `gaia.sqlite3` from
+another account. In WAL mode a reader needs `-shm`, and the archive directory is
+world-writable, so a read-only connection from `bgu001` creates `-shm` and `-wal`
+owned by `bgu001`; the `j` server then cannot write them and every request
+returns 500. Recovery is to delete those two files, which `j` or root must do,
+after checking `-wal` is 0 bytes so nothing committed is lost.
+
+`?immutable=1` avoids this, because it never touches the WAL at all, but it is
+only safe on a file nothing is writing: used on the live database it yields a
+copy that fails `PRAGMA quick_check`. There is no safe way to copy the live
+database from another account. Take copies as `j`, or from a stopped service.

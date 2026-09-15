@@ -283,6 +283,25 @@ impl NightFit {
 /// as hazy.
 pub const MIN_DEPTH_SNR: f64 = 5.0;
 
+/// A star this bright, this far above the horizon, is one the camera should see
+/// whenever the sky is clear. Its absence is therefore evidence, and the
+/// strongest kind: dropping it as "no measurement" biases the archive towards
+/// clear, because a total fading leaves exactly no flux to measure.
+pub const CERTAIN_MAGNITUDE: f64 = 3.5;
+pub const CERTAIN_ELEVATION_DEG: f64 = 20.0;
+
+/// Above this sky level the frame is washed out and a missing star is explained
+/// by the detector being full rather than by cloud, so no fading is claimed.
+/// The test uses the brightest background the frame shows, not a typical one,
+/// which errs towards not claiming a fading.
+pub const WASHED_OUT_BACKGROUND: f64 = 240.0;
+
+/// The attenuation credited to a star that should have been seen and was not,
+/// when the frame offers no fainter detection to measure against. Transmission
+/// of `e^-6` is under a quarter of a percent: opaque, which is what a total
+/// fading means.
+pub const TOTAL_FADING_DEPTH: f64 = 6.0;
+
 /// Writes the optical depth of every measurement this fit covers, and clears it
 /// from those it does not.
 ///
@@ -337,6 +356,93 @@ pub fn record_depths(
             continue;
         };
         set.execute(rusqlite::params![rowid, depth])?;
+        written += 1;
+    }
+    written += record_total_fadings(conn, source_id, channel, from_utc, to_utc, fit, &mut set)?;
+    Ok(written)
+}
+
+/// What each frame in the window shows: the faintest star it did detect, which
+/// bounds how far a missing one must have fallen, and the brightest sky it
+/// shows, which says whether a miss can be blamed on cloud at all.
+fn frame_limits(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    channel: &str,
+    from_utc: &str,
+    to_utc: &str,
+) -> Result<std::collections::HashMap<String, (f64, f64)>> {
+    let mut q = conn.prepare(
+        "SELECT image_id,min(flux),max(background) FROM star_photometry
+         WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 AND observation_utc<?4
+           AND amplitude IS NOT NULL AND flux IS NOT NULL AND flux>0
+           AND amplitude_snr >= ?5 AND flux_snr >= ?5
+         GROUP BY image_id",
+    )?;
+    let mut out = std::collections::HashMap::new();
+    for row in q.query_map(
+        rusqlite::params![source_id, channel, from_utc, to_utc, MIN_DEPTH_SNR],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?, r.get::<_, Option<f64>>(2)?)),
+    )? {
+        let (image, faintest, brightest_sky) = row?;
+        out.insert(image, (faintest, brightest_sky.unwrap_or(0.0)));
+    }
+    Ok(out)
+}
+
+/// Credits a depth to the bright, high stars a frame failed to find.
+///
+/// The depth is a lower bound wherever the frame gives one: the star fell at
+/// least as far as the faintest star that frame did detect, so
+/// `tau >= cos z ln(F_clear / F_faintest)`. Where a frame detected nothing at
+/// all there is no floor to measure against and the fading is credited as
+/// total. A frame whose sky is washed out is left alone entirely, since the
+/// miss is then explained by the detector rather than by the weather.
+fn record_total_fadings(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    channel: &str,
+    from_utc: &str,
+    to_utc: &str,
+    fit: &NightFit,
+    set: &mut rusqlite::Statement<'_>,
+) -> Result<usize> {
+    let limits = frame_limits(conn, source_id, channel, from_utc, to_utc)?;
+    let mut q = conn.prepare(
+        "SELECT rowid,star_key,elevation_deg,image_id FROM star_photometry
+         WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 AND observation_utc<?4
+           AND vt_mag < ?5 AND elevation_deg > ?6
+           AND (amplitude IS NULL OR flux IS NULL OR flux <= 0
+                OR amplitude_snr < ?7 OR flux_snr < ?7)",
+    )?;
+    let missing: Vec<(i64, String, f64, String)> = q
+        .query_map(
+            rusqlite::params![
+                source_id,
+                channel,
+                from_utc,
+                to_utc,
+                CERTAIN_MAGNITUDE,
+                CERTAIN_ELEVATION_DEG,
+                MIN_DEPTH_SNR
+            ],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut written = 0usize;
+    for (rowid, star_key, elevation, image) in missing {
+        let (faintest, brightest_sky) = limits.get(&image).copied().unwrap_or((0.0, 0.0));
+        if brightest_sky > WASHED_OUT_BACKGROUND {
+            continue;
+        }
+        let Some(clear) = fit.clear_flux(&star_key, elevation) else { continue };
+        let depth = if faintest > 0.0 {
+            let zenith = (90.0 - elevation).to_radians();
+            starphot::optical_depth(faintest, clear, zenith).unwrap_or(TOTAL_FADING_DEPTH)
+        } else {
+            TOTAL_FADING_DEPTH
+        };
+        set.execute(rusqlite::params![rowid, depth.max(0.0)])?;
         written += 1;
     }
     Ok(written)
@@ -767,25 +873,23 @@ mod tests {
                     .unwrap();
             }
         }
+        // These three are faint stars, so only the honest-claim rule applies to
+        // them; the certain-miss rule of the next test needs a bright one.
+        let faint = "INSERT INTO star_photometry(source_id,image_id,observation_utc,star_key,\
+            channel,ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,predicted_x,\
+            predicted_y,background,amplitude,flux,amplitude_snr,flux_snr) \
+            VALUES('cam',?1,?2,'star-0','mean',1.0,45.0,5.0,120.0,60.0,100.0,100.0,?3,?4,?5,?6,?6)";
         // One saturated: background plus peak fills the range.
-        insert
-            .execute(rusqlite::params![
-                "cam", "img-sat", "2026-09-14T19:30:00+00:00", "star-0", 60.0,
-                200.0_f64, 60.0_f64, 5000.0_f64, 40.0_f64, 40.0_f64
-            ])
-            .unwrap();
+        conn.execute(faint, rusqlite::params!["img-sat", "2026-09-14T19:30:00+00:00",
+            200.0_f64, 60.0_f64, 5000.0_f64, 40.0_f64]).unwrap();
         // One in the noise: detected, but neither ratio clears the gate.
-        insert
-            .execute(rusqlite::params![
-                "cam", "img-noise", "2026-09-14T19:31:00+00:00", "star-0", 60.0,
-                50.0_f64, 3.0_f64, 90.0_f64, 1.2_f64, 1.5_f64
-            ])
-            .unwrap();
+        conn.execute(faint, rusqlite::params!["img-noise", "2026-09-14T19:31:00+00:00",
+            50.0_f64, 3.0_f64, 90.0_f64, 1.2_f64]).unwrap();
         // One never found: no flux at all.
         conn.execute(
             "INSERT INTO star_photometry(source_id,image_id,observation_utc,star_key,channel,\
                 ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,predicted_x,predicted_y)\
-             VALUES('cam','img-miss','2026-09-14T19:32:00+00:00','star-0','mean',1.0,45.0,2.0,120.0,60.0,100.0,100.0)",
+             VALUES('cam','img-miss','2026-09-14T19:32:00+00:00','star-0','mean',1.0,45.0,5.0,120.0,60.0,100.0,100.0)",
             [],
         )
         .unwrap();
@@ -836,6 +940,90 @@ mod tests {
             .query_row("SELECT max(optical_depth) FROM star_photometry", [], |r| r.get(0))
             .unwrap();
         assert!(worst < 0.05, "clear sky came out as tau {worst}");
+    }
+
+    #[test]
+    fn a_bright_star_that_should_have_been_seen_counts_as_a_total_fading() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        night_in_a_table(&conn);
+        let insert = "INSERT INTO star_photometry(source_id,image_id,observation_utc,star_key,\
+            channel,ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,predicted_x,\
+            predicted_y,background,amplitude,flux,amplitude_snr,flux_snr) \
+            VALUES('cam',?1,'2026-09-14T19:00:00+00:00',?2,'mean',1.0,45.0,?3,120.0,?4,100.0,100.0,\
+            ?5,?6,?7,?8,?8)";
+        // The frame that holds the misses also holds a faint detection, which
+        // is the floor a missing star must have fallen below.
+        conn.execute(insert, rusqlite::params!["f", "star-1", 2.0_f64, 60.0_f64, 50.0_f64, 30.0_f64, 300.0_f64, 40.0_f64]).unwrap();
+        // Bright and high, not found: a total fading.
+        conn.execute(insert, rusqlite::params!["f", "star-0", 2.0_f64, 60.0_f64, None::<f64>, None::<f64>, None::<f64>, None::<f64>]).unwrap();
+        // Bright but low: the air mass alone could hide it, so nothing claimed.
+        conn.execute(insert, rusqlite::params!["f", "star-2", 2.0_f64, 12.0_f64, None::<f64>, None::<f64>, None::<f64>, None::<f64>]).unwrap();
+        // High but faint: it was never certain to be visible.
+        conn.execute(insert, rusqlite::params!["f", "star-3", 4.8_f64, 60.0_f64, None::<f64>, None::<f64>, None::<f64>, None::<f64>]).unwrap();
+        // Detected, but buried in noise: treated as a miss, since a fit to
+        // noise is not a measurement. Its own frame, with its own floor.
+        conn.execute(insert, rusqlite::params!["f2", "star-1", 2.0_f64, 60.0_f64, 50.0_f64, 30.0_f64, 300.0_f64, 40.0_f64]).unwrap();
+        conn.execute(insert, rusqlite::params!["f2", "star-0", 2.0_f64, 55.0_f64, 50.0_f64, 4.0_f64, 120.0_f64, 1.1_f64]).unwrap();
+
+        let mut samples = Vec::new();
+        let mut q = conn
+            .prepare("SELECT star_key,elevation_deg,flux FROM star_photometry \
+                      WHERE amplitude IS NOT NULL AND flux_snr>=5 AND image_id LIKE 'img%'")
+            .unwrap();
+        for row in q
+            .query_map([], |r| Ok(Sample { star_key: r.get(0)?, elevation_deg: r.get(1)?, flux: r.get(2)? }))
+            .unwrap()
+        { samples.push(row.unwrap()); }
+        let fit = fit_night(&samples).expect("fit");
+        record_depths(&conn, "cam", "mean", "2026-09-14T00:00:00+00:00",
+                      "2026-09-15T00:00:00+00:00", &fit).unwrap();
+
+        let depth = |star: &str| -> Option<f64> {
+            conn.query_row(
+                "SELECT optical_depth FROM star_photometry WHERE star_key=?1 AND image_id='f'",
+                [star], |r| r.get(0)).unwrap()
+        };
+        let missed = depth("star-0").expect("a bright high star that was missed must carry a depth");
+        assert!(missed > 0.5, "a total fading should be a large depth, got {missed}");
+        assert!(depth("star-2").is_none(), "a low star may be hidden by air mass alone");
+        assert!(depth("star-3").is_none(), "a faint star was never certain to be visible");
+        let noise: Option<f64> = conn
+            .query_row("SELECT optical_depth FROM star_photometry \
+                        WHERE star_key='star-0' AND image_id='f2'", [], |r| r.get(0))
+            .unwrap();
+        assert!(noise.expect("noise-level counts as a miss") > 0.5);
+    }
+
+    #[test]
+    fn a_washed_out_frame_explains_its_own_missing_stars() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        night_in_a_table(&conn);
+        let insert = "INSERT INTO star_photometry(source_id,image_id,observation_utc,star_key,\
+            channel,ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,predicted_x,\
+            predicted_y,background,amplitude,flux,amplitude_snr,flux_snr) \
+            VALUES('cam',?1,'2026-09-14T19:00:00+00:00',?2,'mean',1.0,45.0,?3,120.0,?4,100.0,100.0,\
+            ?5,?6,?7,?8,?8)";
+        // Sky at 245: above the washed-out level, so a miss is the detector.
+        conn.execute(insert, rusqlite::params!["w", "star-1", 2.0_f64, 60.0_f64, 245.0_f64, 5.0_f64, 300.0_f64, 40.0_f64]).unwrap();
+        conn.execute(insert, rusqlite::params!["w", "star-0", 2.0_f64, 60.0_f64, None::<f64>, None::<f64>, None::<f64>, None::<f64>]).unwrap();
+
+        let mut samples = Vec::new();
+        let mut q = conn
+            .prepare("SELECT star_key,elevation_deg,flux FROM star_photometry \
+                      WHERE amplitude IS NOT NULL AND flux_snr>=5 AND image_id LIKE 'img%'")
+            .unwrap();
+        for row in q
+            .query_map([], |r| Ok(Sample { star_key: r.get(0)?, elevation_deg: r.get(1)?, flux: r.get(2)? }))
+            .unwrap()
+        { samples.push(row.unwrap()); }
+        let fit = fit_night(&samples).expect("fit");
+        record_depths(&conn, "cam", "mean", "2026-09-14T00:00:00+00:00",
+                      "2026-09-15T00:00:00+00:00", &fit).unwrap();
+        let claimed: Option<f64> = conn
+            .query_row("SELECT optical_depth FROM star_photometry \
+                        WHERE star_key='star-0' AND image_id='w'", [], |r| r.get(0))
+            .unwrap();
+        assert!(claimed.is_none(), "a washed-out frame must not have its misses read as cloud");
     }
 
     #[test]

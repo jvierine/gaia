@@ -1199,11 +1199,21 @@ async fn source_star_frame(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .ok();
+    // The brightest sky this frame shows, by which a missing star is either
+    // cloud or a full detector. Same test the depth pass applies.
+    let washed_out: bool = conn
+        .query_row(
+            "SELECT COALESCE(max(background),0) > ?3 FROM star_photometry
+             WHERE source_id=?1 AND image_id=?2 AND amplitude IS NOT NULL",
+            rusqlite::params![id, image_id, extinction::WASHED_OUT_BACKGROUND],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
     let mut statement = conn
         .prepare(
             "SELECT p.star_key,p.vt_mag,p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,
                     p.elevation_deg,p.flux,p.flux_snr,p.amplitude,m.best,p.background,
-                    p.optical_depth
+                    p.optical_depth,p.amplitude_snr
              FROM star_photometry p
              LEFT JOIN (SELECT star_key,max(flux) AS best FROM star_photometry
                         WHERE source_id=?1 AND channel=?2 AND amplitude IS NOT NULL
@@ -1222,6 +1232,8 @@ async fn source_star_frame(
                 let predicted: (Option<f64>, Option<f64>) = (r.get(2)?, r.get(3)?);
                 let centroid: (Option<f64>, Option<f64>) = (r.get(4)?, r.get(5)?);
                 let flux: Option<f64> = r.get(7)?;
+                let vt_mag: f64 = r.get(1)?;
+                let elevation: Option<f64> = r.get(6)?;
                 let best: Option<f64> = r.get(10)?;
                 let detected: Option<f64> = r.get(9)?;
                 // Where to draw it: where the fit found it when it was found,
@@ -1232,10 +1244,10 @@ async fn source_star_frame(
                 };
                 Ok(json!({
                     "star_key": r.get::<_, String>(0)?,
-                    "vt_mag": r.get::<_, f64>(1)?,
+                    "vt_mag": vt_mag,
                     "x": x,
                     "y": y,
-                    "elevation_deg": r.get::<_, Option<f64>>(6)?,
+                    "elevation_deg": elevation,
                     "flux": flux,
                     "flux_snr": r.get::<_, Option<f64>>(8)?,
                     "detected": detected.is_some(),
@@ -1244,6 +1256,16 @@ async fn source_star_frame(
                     // clipped and this flux is an underestimate. Aurora causes
                     // it by lifting the background out from under the stars.
                     "optical_depth": r.get::<_, Option<f64>>(12)?,
+                    // A star bright enough and high enough that this camera
+                    // should see it whenever the sky is clear. Its absence is
+                    // the strongest cloud signal there is, unless the frame is
+                    // washed out, when the detector explains it instead.
+                    "certain": vt_mag < extinction::CERTAIN_MAGNITUDE
+                        && elevation.is_some_and(|e| e > extinction::CERTAIN_ELEVATION_DEG),
+                    "usable": detected.is_some()
+                        && r.get::<_, Option<f64>>(8)?.is_some_and(|s| s >= extinction::MIN_DEPTH_SNR)
+                        && r.get::<_, Option<f64>>(13)?.is_some_and(|s| s >= extinction::MIN_DEPTH_SNR),
+                    "washed_out": washed_out,
                     "saturated": match (detected, r.get::<_, Option<f64>>(11)?) {
                         (Some(amplitude), Some(background)) => {
                             amplitude + background >= starphot::SATURATION_LEVEL

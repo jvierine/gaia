@@ -23,7 +23,7 @@ type StarSample = {at:string;flux:number|null;background:number|null;amplitude:n
 const STAR_CHANNELS = ['mean','r','g','b'] as const;
 /// The average reads warm, the colour channels read as themselves.
 const CHANNEL_COLOUR:Record<string,string> = {mean:'#f5a524',r:'#ff5f56',g:'#3ddc84',b:'#5aa9ff'};
-type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;saturated:boolean;best_flux:number|null;relative:number|null};
+type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;saturated:boolean;certain:boolean;usable:boolean;washed_out:boolean;optical_depth:number|null;best_flux:number|null;relative:number|null};
 type Distribution={star_key:string;samples:number;days:number;channels:Record<string,{flux:number[];amplitude:number[];background:number[]}>};
 type StarNight={night:number;from:string;to:string;frames:number;looked_for:number;detections:number};
 type StarFrame={image_id:string|null;observation_utc?:string;width?:number|null;height?:number|null;field?:[number,number][]|null;stars:FrameStar[]};
@@ -508,8 +508,19 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
               {placed.map(r=>{const on=selected.includes(r.star_key);
                 const size=r0*(r.detected?1.6:1.1)*(on?1.5:1);
                 const x=r.x as number,y=r.y as number;
+                // A star this camera should see whenever the sky is clear, and
+                // did not: that is a total fading, not a missing measurement,
+                // unless the frame is washed out and the detector explains it.
+                const certainMiss=r.certain&&!r.usable;
                 return <g key={r.star_key} className={on?'chosen':''} onClick={()=>toggle(r.star_key)}>
-                  {r.saturated
+                  {certainMiss
+                    ?<g fill="none" strokeWidth={r0*0.5}>
+                      <circle cx={x} cy={y} r={size*1.7}
+                        stroke={r.washed_out?'#7e93a5':relativeColour(0)}
+                        strokeDasharray={r.washed_out?`${r0*0.9} ${r0*0.7}`:undefined}/>
+                      {on&&<circle cx={x} cy={y} r={size*2.4} stroke="#fff" strokeWidth={r0*0.35}/>}
+                    </g>
+                    :r.saturated
                     // Background plus star has reached the top of the range, so
                     // the peak is clipped and this flux is an underestimate.
                     // Crossed out rather than filled: the colour is still the
@@ -526,7 +537,9 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
                     strokeWidth={r0*(on?0.55:0.3)}
                     strokeDasharray={r.detected?undefined:`${r0*0.8} ${r0*0.6}`}/>}
                   <title>{`V ${r.vt_mag.toFixed(2)}  elevation ${r.elevation_deg?.toFixed(1)??'?'}\u00b0
-${r.saturated?'SATURATED: background plus star fills the range, so this flux is an underestimate\n':''}${r.detected?`flux ${r.flux?.toPrecision(4)} of best ${r.best_flux?.toPrecision(4)}
+${certainMiss?(r.washed_out
+  ?'MISSING, but the frame is washed out: the detector explains it, so no fading is claimed\n'
+  :`TOTAL FADING: bright enough and high enough to be seen in a clear sky, and not found${r.optical_depth==null?'':`, tau at least ${r.optical_depth.toFixed(2)}`}\n`):''}${r.saturated?'SATURATED: background plus star fills the range, so this flux is an underestimate\n':''}${r.detected?`flux ${r.flux?.toPrecision(4)} of best ${r.best_flux?.toPrecision(4)}
 ${r.relative==null?'':(r.relative*100).toFixed(0)+'% of its own maximum, '+(magnitudesDown(r.relative)?.toFixed(2)??'?')+' mag down'}`:'not detected in this frame'}
 SNR ${r.flux_snr==null?'n/a':r.flux_snr.toFixed(1)}`}</title>
                 </g>})}
@@ -534,7 +547,7 @@ SNR ${r.flux_snr==null?'n/a':r.flux_snr.toFixed(1)}`}</title>
             <div className="star-ramp"><small>faded</small>
               {[0,0.04,0.16,0.36,0.64,1].map(v=><i key={v} style={{background:relativeColour(v)}}/>)}
               <small>at its best</small></div>
-            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found; crosses saturated, their peak clipped by a background that bright aurora has lifted, so their intensity reads low. The web divides the camera's field into the region nearest each identified star, every boundary taking the colour of the more faded star across it, so a clouded star is ringed in dark red all the way round. Click a star to plot it.</small>
+            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found; crosses saturated, their peak clipped by a background that bright aurora has lifted, so their intensity reads low. A dark red circle is a star brighter than magnitude 3.5 and above 20 degrees that this camera should have seen and did not: a total fading, counted as cloud. The same circle in grey means the frame's sky is above 240 counts, where a full detector explains the miss and no fading is claimed. The web divides the camera's field into the region nearest each identified star, every boundary taking the colour of the more faded star across it, so a clouded star is ringed in dark red all the way round. Click a star to plot it.</small>
           </>})():<>
         <div className="star-plot-head"><strong>Star positions in the frame</strong><small>colour is brightness variation</small></div>
         <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label="Star image positions coloured by brightness variation">

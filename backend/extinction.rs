@@ -268,11 +268,12 @@ impl NightFit {
     }
 
     /// Vertical cloud optical depth for one measurement, over and above the
-    /// clear-sky extinction already accounted for by `k`.
+    /// clear-sky extinction already accounted for by `k`, capped at the depth
+    /// beyond which the sky is simply opaque.
     pub fn optical_depth(&self, star_key: &str, elevation_deg: f64, flux: f64) -> Option<f64> {
         let clear = self.clear_flux(star_key, elevation_deg)?;
         let zenith = (90.0 - elevation_deg).to_radians();
-        starphot::optical_depth(flux, clear, zenith)
+        starphot::optical_depth(flux, clear, zenith).map(|tau| tau.min(TOTAL_FADING_DEPTH))
     }
 }
 
@@ -300,6 +301,13 @@ pub const WASHED_OUT_BACKGROUND: f64 = 240.0;
 /// when the frame offers no fainter detection to measure against. Transmission
 /// of `e^-6` is under a quarter of a percent: opaque, which is what a total
 /// fading means.
+///
+/// It is also the ceiling on any stored depth. Beyond it the sky transmits
+/// nothing measurable and the difference between 6 and 40 is not a difference
+/// in the weather; it is the clear-sky law being extrapolated far outside the
+/// air mass the fit actually saw, which is where a large coefficient turns a
+/// zero point into an absurd reference flux. Capping keeps an unusable number
+/// out of the archive while still recording that the line of sight was closed.
 pub const TOTAL_FADING_DEPTH: f64 = 6.0;
 
 /// Writes the optical depth of every measurement this fit covers, and clears it
@@ -442,7 +450,7 @@ fn record_total_fadings(
         } else {
             TOTAL_FADING_DEPTH
         };
-        set.execute(rusqlite::params![rowid, depth.max(0.0)])?;
+        set.execute(rusqlite::params![rowid, depth.clamp(0.0, TOTAL_FADING_DEPTH)])?;
         written += 1;
     }
     Ok(written)
@@ -992,6 +1000,33 @@ mod tests {
                         WHERE star_key='star-0' AND image_id='f2'", [], |r| r.get(0))
             .unwrap();
         assert!(noise.expect("noise-level counts as a miss") > 0.5);
+    }
+
+    #[test]
+    fn a_depth_is_capped_where_the_sky_is_already_opaque() {
+        // A reference extrapolated well outside the air mass a fit saw can
+        // produce a ratio of e^40, which is not weather. Beyond opacity the
+        // number carries no information and must not be stored as though it
+        // did.
+        let mut zero_points = BTreeMap::new();
+        zero_points.insert("s".to_string(), 40.0_f64);
+        let fit = NightFit {
+            k_mag_per_airmass: 0.2,
+            zero_points,
+            stars: 1,
+            samples: 10,
+            airmass_span: 1.0,
+            envelope_scatter: 0.1,
+            curvature: 0.01,
+        };
+        let deep = fit.optical_depth("s", 90.0, 1.0).expect("a depth");
+        assert!(
+            (deep - TOTAL_FADING_DEPTH).abs() < 1e-9,
+            "an absurd ratio should cap at the opaque depth, got {deep}"
+        );
+        // An ordinary fading is untouched by the cap.
+        let ordinary = fit.optical_depth("s", 90.0, (40.0_f64 - 0.5).exp()).expect("a depth");
+        assert!(ordinary > 0.3 && ordinary < 0.6, "ordinary depth altered: {ordinary}");
     }
 
     #[test]

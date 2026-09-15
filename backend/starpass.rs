@@ -390,16 +390,26 @@ pub fn backfill_depths(conn: &Connection, limit: usize) -> Result<usize> {
         let offset = longitude / 15.0 * 3600.0;
         let from = night as f64 * 86400.0 + 43200.0 - offset;
         let (from_utc, to_utc) = (rfc3339(from), rfc3339(from + 86400.0));
-        let has: i64 = conn
+        // A window is done when it has depths and none of them exceeds the
+        // opaque cap. A value above it was written before the cap existed and
+        // is meaningless, so the window is rewritten rather than left.
+        let (has, over): (i64, i64) = conn
             .query_row(
-                "SELECT count(*) FROM star_photometry \
+                "SELECT count(optical_depth),COALESCE(sum(optical_depth > ?5),0) \
+                 FROM star_photometry \
                  WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 \
-                   AND observation_utc<?4 AND optical_depth IS NOT NULL",
-                rusqlite::params![source_id, channel, from_utc, to_utc],
-                |r| r.get(0),
+                   AND observation_utc<?4",
+                rusqlite::params![
+                    source_id,
+                    channel,
+                    from_utc,
+                    to_utc,
+                    extinction::TOTAL_FADING_DEPTH
+                ],
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .unwrap_or(1);
-        if has > 0 {
+            .unwrap_or((1, 0));
+        if has > 0 && over == 0 {
             continue;
         }
         if let Ok(Some(fit)) = extinction::load(conn, &source_id, night, &channel) {
@@ -494,17 +504,23 @@ pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usiz
                     // were made, and a night nothing new lands in would
                     // otherwise never get them. Writing them from the stored
                     // fit costs one pass over the window and no refit.
-                    let has_depths: i64 = conn
+                    let (has_depths, over_cap): (i64, i64) = conn
                         .query_row(
-                            "SELECT count(*) FROM star_photometry \
+                            "SELECT count(optical_depth),COALESCE(sum(optical_depth > ?5),0) \
+                             FROM star_photometry \
                              WHERE source_id=?1 AND channel=?2 \
-                               AND observation_utc>=?3 AND observation_utc<?4 \
-                               AND optical_depth IS NOT NULL",
-                            rusqlite::params![source_id, channel, from_utc, to_utc],
-                            |r| r.get(0),
+                               AND observation_utc>=?3 AND observation_utc<?4",
+                            rusqlite::params![
+                                source_id,
+                                channel,
+                                from_utc,
+                                to_utc,
+                                extinction::TOTAL_FADING_DEPTH
+                            ],
+                            |r| Ok((r.get(0)?, r.get(1)?)),
                         )
-                        .unwrap_or(1);
-                    if has_depths == 0 {
+                        .unwrap_or((1, 0));
+                    if has_depths == 0 || over_cap > 0 {
                         if let Ok(Some(fit)) =
                             extinction::load(conn, &source_id, night, channel)
                         {

@@ -345,6 +345,13 @@ pub struct GaussianFit {
     pub flux_snr: f64,
 }
 
+/// A star peaks at `background + amplitude`. Once that reaches the top of the
+/// range the profile is clipped flat and the fitted flux is an underestimate,
+/// which must never be read as a fading: bright aurora lifts the background
+/// until the stars have no headroom left, and that is a full detector, not
+/// cloud.
+pub const SATURATION_LEVEL: f64 = 250.0;
+
 impl GaussianFit {
     /// Ratio of major to minor width. At 1 the star is round and the angle
     /// carries no information.

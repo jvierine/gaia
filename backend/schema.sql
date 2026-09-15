@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS star_photometry(
   flux REAL, rms_residual REAL,
   residual_std REAL, amplitude_snr REAL, flux_snr REAL,
   background_dx REAL, background_dy REAL, background_dxy REAL,
+  -- Vertical cloud optical depth, over and above the clear-sky extinction the
+  -- camera-night fit accounts for. Null means no number was claimed: the night
+  -- could not be fitted, the star was not detected, it was too close to the
+  -- noise, or its peak was clipped by a background the aurora had lifted.
+  optical_depth REAL,
   PRIMARY KEY(source_id,image_id,star_key,channel)
 );
 CREATE INDEX IF NOT EXISTS star_photometry_series

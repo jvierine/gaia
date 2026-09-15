@@ -20,6 +20,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     add_column(&conn, "camera_settings", "selected_calibration_id", "TEXT")?;
     add_column(&conn, "camera_settings", "mask_enabled", "INTEGER NOT NULL DEFAULT 1")?;
     add_column(&conn, "camera_settings", "quality_exponent", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column(&conn, "star_photometry", "optical_depth", "REAL")?;
     for column in [
         "residual_std",
         "amplitude_snr",

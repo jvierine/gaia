@@ -800,12 +800,6 @@ struct StarNightsQuery {
     days: Option<f64>,
 }
 
-/// A star peaks at `background + amplitude`. Once that reaches the top of the
-/// range the profile is clipped flat, and the fitted flux is an underestimate:
-/// exactly the case that must not be read as cloud. Bright aurora is what
-/// causes it, by lifting the background until the stars have no headroom left.
-const SATURATION_LEVEL: f64 = 250.0;
-
 /// The window a star request covers: an explicit night range when one is given,
 /// otherwise the trailing hours the panel has always used.
 fn star_window(from: &Option<String>, to: &Option<String>, hours: Option<f64>) -> (String, String) {
@@ -943,6 +937,16 @@ async fn extinction_state(
     let all = filter.is_empty();
     let limit = query.limit.unwrap_or(20).clamp(1, 500);
 
+    let depths: (i64, i64, Option<f64>, Option<f64>) = conn
+        .query_row(
+            "SELECT count(optical_depth), count(*),
+                    avg(optical_depth), max(optical_depth)
+             FROM star_photometry WHERE ?1 OR source_id=?2",
+            rusqlite::params![all, filter],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .map_err(internal)?;
+
     let counts: (i64, i64, String, i64, i64, String) = conn
         .query_row(
             "SELECT (SELECT count(*) FROM extinction_nights WHERE ?1 OR source_id=?2),
@@ -1017,6 +1021,12 @@ async fn extinction_state(
         "cameras_attempted": counts.4,
         "newest_attempt": if counts.5.is_empty() { Value::Null } else { json!(counts.5) },
         "attempts_refused": refused,
+        // How far the reference has been carried: a depth exists only for
+        // measurements a fitted night explains and the gates accept.
+        "measurements": depths.1,
+        "with_optical_depth": depths.0,
+        "mean_optical_depth": depths.2,
+        "max_optical_depth": depths.3,
         "by_channel": channels,
         "recent": fits,
     })))
@@ -1192,7 +1202,8 @@ async fn source_star_frame(
     let mut statement = conn
         .prepare(
             "SELECT p.star_key,p.vt_mag,p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,
-                    p.elevation_deg,p.flux,p.flux_snr,p.amplitude,m.best,p.background
+                    p.elevation_deg,p.flux,p.flux_snr,p.amplitude,m.best,p.background,
+                    p.optical_depth
              FROM star_photometry p
              LEFT JOIN (SELECT star_key,max(flux) AS best FROM star_photometry
                         WHERE source_id=?1 AND channel=?2 AND amplitude IS NOT NULL
@@ -1232,9 +1243,10 @@ async fn source_star_frame(
                     // The peak reached the top of the range, so the profile is
                     // clipped and this flux is an underestimate. Aurora causes
                     // it by lifting the background out from under the stars.
+                    "optical_depth": r.get::<_, Option<f64>>(12)?,
                     "saturated": match (detected, r.get::<_, Option<f64>>(11)?) {
                         (Some(amplitude), Some(background)) => {
-                            amplitude + background >= SATURATION_LEVEL
+                            amplitude + background >= starphot::SATURATION_LEVEL
                         }
                         _ => false,
                     },
@@ -1415,7 +1427,7 @@ async fn source_star_series(
                     p.angle_deg,p.centroid_offset_px,p.elevation_deg,p.azimuth_deg,
                     p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,p.rms_residual,
                     p.residual_std,p.amplitude_snr,p.flux_snr,
-                    p.background_dx,p.background_dy,p.background_dxy,
+                    p.background_dx,p.background_dy,p.background_dxy,p.optical_depth,
                     s.moon_elevation_deg,s.moon_illuminated_fraction,s.moon_sky_brightness,
                     s.moon_apparent_magnitude,s.sun_elevation_deg
              FROM star_photometry p
@@ -1452,6 +1464,10 @@ async fn source_star_series(
                     "background_dx": r.get::<_,Option<f64>>(18)?,
                     "background_dy": r.get::<_,Option<f64>>(19)?,
                     "background_dxy": r.get::<_,Option<f64>>(20)?,
+                    // Null wherever no depth could honestly be claimed: the
+                    // night was not fitted, or this measurement was saturated,
+                    // undetectable, or the star was never found.
+                    "optical_depth": r.get::<_,Option<f64>>(26)?,
                     "moon_elevation_deg": r.get::<_,Option<f64>>(21)?,
                     "moon_illuminated_fraction": r.get::<_,Option<f64>>(22)?,
                     "moon_sky_brightness": r.get::<_,Option<f64>>(23)?,

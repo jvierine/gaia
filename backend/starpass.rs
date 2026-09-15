@@ -139,6 +139,8 @@ pub struct Report {
     /// Camera-night-channels examined and refused: too few stars, too little
     /// air mass. A normal outcome, counted so it is visible.
     pub fits_refused: usize,
+    /// Measurements given an optical depth by those fits.
+    pub optical_depths: usize,
 }
 
 fn unix_seconds(utc: &str) -> Option<f64> {
@@ -374,7 +376,7 @@ const FIT_CHANNELS: [&str; 4] = ["mean", "r", "g", "b"];
 /// A night is refitted whenever it has photometry newer than its stored fit, so
 /// a night in progress improves through the evening and settles once the camera
 /// stops contributing to it.
-pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usize, usize)> {
+pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usize, usize, usize)> {
     // Least recently tried first, and never-tried before either. A cycle can
     // only afford a few fits, so without this the walk restarts at the same
     // camera every time and the far end of the archive is never reached.
@@ -395,10 +397,11 @@ pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usiz
     let current_night = extinction::night_index(now, 0.0);
     let mut stored = 0usize;
     let mut refused = 0usize;
+    let mut depths = 0usize;
     for (source_id, longitude) in cameras {
         for back in 0..settings.fit_nights {
             if stored + refused >= settings.max_fits_per_cycle {
-                return Ok((stored, refused));
+                return Ok((stored, refused, depths));
             }
             let night = extinction::night_index(now, longitude) - back;
             // The night in local solar time, converted back to a UTC window.
@@ -462,8 +465,22 @@ pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usiz
                 let outcome = extinction::fit_night(&samples);
                 if let Some(fit) = &outcome {
                     extinction::record(conn, &source_id, night, channel, fit)?;
+                    // The reference is only useful once it has been carried
+                    // through to the measurements it explains.
+                    depths += extinction::record_depths(
+                        conn, &source_id, channel, &from_utc, &to_utc, fit,
+                    )?;
                     stored += 1;
                 } else {
+                    // A night that cannot be fitted leaves no depth behind, not
+                    // even a stale one from an earlier fit of the same night.
+                    conn.execute(
+                        "UPDATE star_photometry SET optical_depth=NULL \
+                         WHERE source_id=?1 AND channel=?2 \
+                           AND observation_utc>=?3 AND observation_utc<?4 \
+                           AND optical_depth IS NOT NULL",
+                        rusqlite::params![source_id, channel, from_utc, to_utc],
+                    )?;
                     refused += 1;
                 }
                 conn.execute(
@@ -482,7 +499,7 @@ pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usiz
             }
         }
     }
-    Ok((stored, refused))
+    Ok((stored, refused, depths))
 }
 
 /// A measurement has to stand clear of the noise before it can define a clear
@@ -568,9 +585,10 @@ pub fn run_cycle(
     // Then the clear-sky reference over what has been measured. It is cheap
     // next to the fitting, and it is what turns a flux into an optical depth.
     match fit_recent_nights(conn, settings) {
-        Ok((stored, refused)) => {
+        Ok((stored, refused, depths)) => {
             report.fits = stored;
             report.fits_refused = refused;
+            report.optical_depths = depths;
         }
         Err(error) => tracing::warn!(%error, "clear-sky fit failed"),
     }
@@ -627,6 +645,7 @@ pub async fn run_loop(db_path: PathBuf, settings: Settings) {
                         failed = report.failed,
                         fits = report.fits,
                         fits_refused = report.fits_refused,
+                        depths = report.optical_depths,
                         "star photometry cycle"
                     );
                 }

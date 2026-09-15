@@ -276,6 +276,72 @@ impl NightFit {
     }
 }
 
+/// A measurement has to clear this in both signal-to-noise ratios before it is
+/// allowed to become an optical depth. A fit to noise returns a small positive
+/// flux, and read against a clear-sky reference that is a thin cloud; refusing
+/// it is the difference between an overcast sky reading as overcast and reading
+/// as hazy.
+pub const MIN_DEPTH_SNR: f64 = 5.0;
+
+/// Writes the optical depth of every measurement this fit covers, and clears it
+/// from those it does not.
+///
+/// Three kinds of measurement are deliberately left null rather than given a
+/// number. A star that was looked for and not found has no flux. One whose
+/// peak is clipped reports a flux that is an underestimate, and bright aurora
+/// makes that common. One indistinguishable from the noise is not a
+/// measurement. In each case the honest answer is no depth, which downstream
+/// becomes no weight rather than a guessed one.
+///
+/// Every row in the window is cleared first, so a refit that newly refuses a
+/// star does not leave its old depth behind to be read as current.
+pub fn record_depths(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    channel: &str,
+    from_utc: &str,
+    to_utc: &str,
+    fit: &NightFit,
+) -> Result<usize> {
+    conn.execute(
+        "UPDATE star_photometry SET optical_depth=NULL
+         WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 AND observation_utc<?4",
+        rusqlite::params![source_id, channel, from_utc, to_utc],
+    )?;
+    let mut rows = conn.prepare(
+        "SELECT rowid,star_key,elevation_deg,flux FROM star_photometry
+         WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 AND observation_utc<?4
+           AND amplitude IS NOT NULL AND flux IS NOT NULL AND flux>0
+           AND amplitude_snr >= ?5 AND flux_snr >= ?5
+           AND background IS NOT NULL AND background + amplitude < ?6",
+    )?;
+    let found: Vec<(i64, String, f64, f64)> = rows
+        .query_map(
+            rusqlite::params![
+                source_id,
+                channel,
+                from_utc,
+                to_utc,
+                MIN_DEPTH_SNR,
+                crate::starphot::SATURATION_LEVEL
+            ],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut set = conn.prepare("UPDATE star_photometry SET optical_depth=?2 WHERE rowid=?1")?;
+    let mut written = 0usize;
+    for (rowid, star_key, elevation, flux) in found {
+        // A star with no zero point in this fit was dropped by the guards, so
+        // the fit says nothing about it and it keeps no depth.
+        let Some(depth) = fit.optical_depth(&star_key, elevation, flux) else {
+            continue;
+        };
+        set.execute(rusqlite::params![rowid, depth])?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 /// Persists a fit. The zero points go with it: without them the coefficient
 /// cannot be turned back into a reference flux.
 pub fn record(
@@ -663,6 +729,145 @@ mod tests {
         assert!(fit.airmass_span > 1.0, "span {}", fit.airmass_span);
         assert!(fit.curvature > 0.0, "curvature {}", fit.curvature);
         assert!(fit.envelope_scatter < 0.05, "envelope scatter {}", fit.envelope_scatter);
+    }
+
+    /// Plants one night of one star and returns the connection, so a test can
+    /// ask what became of each measurement.
+    fn night_in_a_table(conn: &rusqlite::Connection) {
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        let cols = "source_id,image_id,observation_utc,star_key,channel,ra_hours_j2000,\
+            dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,predicted_x,predicted_y,\
+            background,amplitude,flux,amplitude_snr,flux_snr";
+        let mut insert = conn
+            .prepare(&format!(
+                "INSERT INTO star_photometry({cols}) VALUES(?1,?2,?3,?4,'mean',1.0,45.0,2.0,\
+                 120.0,?5,100.0,100.0,?6,?7,?8,?9,?10)"
+            ))
+            .unwrap();
+        // Four stars sweeping air mass, clear, so the fit is well determined.
+        for star in 0..4 {
+            for step in 0..12 {
+                let elevation = 70.0 - step as f64 * 4.5 - star as f64 * 2.0;
+                let x = airmass(elevation);
+                let flux = (9.0 + star as f64 * 0.3 - BETA * 0.20 * x).exp();
+                insert
+                    .execute(rusqlite::params![
+                        "cam",
+                        format!("img-{step}"),
+                        format!("2026-09-14T{:02}:00:00+00:00", 18 + step / 3),
+                        format!("star-{star}"),
+                        elevation,
+                        50.0,
+                        120.0,
+                        flux,
+                        40.0,
+                        40.0
+                    ])
+                    .unwrap();
+            }
+        }
+        // One saturated: background plus peak fills the range.
+        insert
+            .execute(rusqlite::params![
+                "cam", "img-sat", "2026-09-14T19:30:00+00:00", "star-0", 60.0,
+                200.0_f64, 60.0_f64, 5000.0_f64, 40.0_f64, 40.0_f64
+            ])
+            .unwrap();
+        // One in the noise: detected, but neither ratio clears the gate.
+        insert
+            .execute(rusqlite::params![
+                "cam", "img-noise", "2026-09-14T19:31:00+00:00", "star-0", 60.0,
+                50.0_f64, 3.0_f64, 90.0_f64, 1.2_f64, 1.5_f64
+            ])
+            .unwrap();
+        // One never found: no flux at all.
+        conn.execute(
+            "INSERT INTO star_photometry(source_id,image_id,observation_utc,star_key,channel,\
+                ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,predicted_x,predicted_y)\
+             VALUES('cam','img-miss','2026-09-14T19:32:00+00:00','star-0','mean',1.0,45.0,2.0,120.0,60.0,100.0,100.0)",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_depth_is_stored_only_where_one_can_honestly_be_claimed() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        night_in_a_table(&conn);
+        let mut samples = Vec::new();
+        let mut q = conn
+            .prepare(
+                "SELECT star_key,elevation_deg,flux FROM star_photometry \
+                 WHERE amplitude IS NOT NULL AND flux_snr>=5",
+            )
+            .unwrap();
+        for row in q
+            .query_map([], |r| {
+                Ok(Sample { star_key: r.get(0)?, elevation_deg: r.get(1)?, flux: r.get(2)? })
+            })
+            .unwrap()
+        {
+            samples.push(row.unwrap());
+        }
+        let fit = fit_night(&samples).expect("the planted night must fit");
+        let written = record_depths(
+            &conn, "cam", "mean", "2026-09-14T00:00:00+00:00", "2026-09-15T00:00:00+00:00", &fit,
+        )
+        .unwrap();
+        assert_eq!(written, 48, "every clear measurement should get a depth");
+
+        let depth = |image: &str| -> Option<f64> {
+            conn.query_row(
+                "SELECT optical_depth FROM star_photometry WHERE image_id=?1 LIMIT 1",
+                [image],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert!(depth("img-0").is_some(), "a clear measurement must carry a depth");
+        assert!(depth("img-sat").is_none(), "a clipped peak must not become a fading");
+        assert!(depth("img-noise").is_none(), "noise must not become thin cloud");
+        assert!(depth("img-miss").is_none(), "a star never found has no depth");
+
+        // The planted sky is clear, so the depths sit at zero rather than
+        // inventing cloud out of the fit's own scatter.
+        let worst: f64 = conn
+            .query_row("SELECT max(optical_depth) FROM star_photometry", [], |r| r.get(0))
+            .unwrap();
+        assert!(worst < 0.05, "clear sky came out as tau {worst}");
+    }
+
+    #[test]
+    fn a_refit_does_not_leave_a_stale_depth_behind() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        night_in_a_table(&conn);
+        conn.execute("UPDATE star_photometry SET optical_depth=9.9", []).unwrap();
+        let mut samples = Vec::new();
+        let mut q = conn
+            .prepare("SELECT star_key,elevation_deg,flux FROM star_photometry WHERE flux_snr>=5")
+            .unwrap();
+        for row in q
+            .query_map([], |r| {
+                Ok(Sample { star_key: r.get(0)?, elevation_deg: r.get(1)?, flux: r.get(2)? })
+            })
+            .unwrap()
+        {
+            samples.push(row.unwrap());
+        }
+        let fit = fit_night(&samples).expect("fit");
+        record_depths(
+            &conn, "cam", "mean", "2026-09-14T00:00:00+00:00", "2026-09-15T00:00:00+00:00", &fit,
+        )
+        .unwrap();
+        let stale: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM star_photometry WHERE optical_depth=9.9",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0, "an old depth must not survive a refit that refuses the row");
     }
 
     #[test]

@@ -833,6 +833,10 @@ fn star_window(from: &Option<String>, to: &Option<String>, hours: Option<f64>) -
 struct StarFrameQuery {
     /// Instant to scrub to, RFC 3339. The nearest measured frame is returned.
     at: String,
+    /// "next" or "prev" to step to the neighbouring measured frame instead of
+    /// the nearest one. Stepping is by measured frame, not by wall-clock
+    /// interval, so a gap in the archive is one step rather than many.
+    step: Option<String>,
     channel: Option<String>,
     hours: Option<f64>,
     from: Option<String>,
@@ -978,15 +982,27 @@ async fn source_star_frame(
     }
     let (from, to) = star_window(&query.from, &query.to, query.hours);
     let conn = db::open(&s.db_path).map_err(internal)?;
-    // The nearest measured frame to the requested instant, inside the window.
+    // The nearest measured frame to the requested instant, or its neighbour
+    // when stepping. Both stay inside the window.
+    let order = match query.step.as_deref() {
+        Some("next") => {
+            "AND julianday(observation_utc) > julianday(?4) ORDER BY julianday(observation_utc)"
+        }
+        Some("prev") => {
+            "AND julianday(observation_utc) < julianday(?4) ORDER BY julianday(observation_utc) DESC"
+        }
+        _ => "AND ?4 IS NOT NULL ORDER BY abs(julianday(observation_utc) - julianday(?4))",
+    };
     let frame: Option<(String, String)> = conn
         .query_row(
-            "SELECT image_id,observation_utc FROM star_photometry
-             WHERE source_id=?1 AND channel=?2
-               AND julianday(observation_utc) >= julianday(?3)
-               AND julianday(observation_utc) < julianday(?5)
-             GROUP BY image_id
-             ORDER BY abs(julianday(observation_utc) - julianday(?4)) LIMIT 1",
+            &format!(
+                "SELECT image_id,observation_utc FROM star_photometry
+                 WHERE source_id=?1 AND channel=?2
+                   AND julianday(observation_utc) >= julianday(?3)
+                   AND julianday(observation_utc) < julianday(?5)
+                   {order}
+                 LIMIT 1"
+            ),
             rusqlite::params![id, channel, from, query.at, to],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )

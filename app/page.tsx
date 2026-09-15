@@ -7,6 +7,9 @@ import { Activity, Aperture, CircleHelp, Database, Lightbulb, Satellite, Send, X
 import { useEffect, useMemo, useRef, useState } from 'react';
 import GaiaGlobeView from '../src/GaiaGlobeView';
 import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
+// `extent` is imported under another name: the panel already has a local one
+// for the scatter, and a shadowed import would silently call the wrong function.
+import {densityColour,extent as binExtent,histogram1d,histogram2d} from '../src/histogram';
 
 type ViewName = 'globe' | 'cameras' | 'status' | 'calibrate' | 'about';
 type Camera = {id:string;name:string;producer:string;state:string;timestamp_mode:string;latitude_deg:number|null;longitude_deg:number|null;calibrated:boolean;processing?:{state:string;total?:number;done?:number;ready?:number;error?:string|null};enabled:boolean;quality_exponent:number;images_24h:number;message?:string|null};
@@ -16,8 +19,10 @@ type Calibration = {id:string;created_utc:string;valid_from_utc:string|null;vali
 const PLAYBACK_STEP_MS = 150;
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
 type StarSummary = {star_key:string;vt_mag:number;ra_hours_j2000:number;dec_deg_j2000:number;image_x:number|null;image_y:number|null;elevation_deg:number|null;frames:number;found:number;median_flux:number|null;clear_flux:number|null;median_background:number|null;variation:number|null};
-type StarSample = {at:string;flux:number|null;background:number|null;sigma_major:number|null;sigma_minor:number|null;angle_deg:number|null;centroid_offset_px:number|null;elevation_deg:number};
+type StarSample = {at:string;flux:number|null;background:number|null;amplitude:number|null;sigma_major:number|null;sigma_minor:number|null;angle_deg:number|null;centroid_offset_px:number|null;elevation_deg:number};
 const STAR_CHANNELS = ['mean','r','g','b'] as const;
+/// The average reads warm, the colour channels read as themselves.
+const CHANNEL_COLOUR:Record<string,string> = {mean:'#f5a524',r:'#ff5f56',g:'#3ddc84',b:'#5aa9ff'};
 type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;saturated:boolean;best_flux:number|null;relative:number|null};
 type StarNight={night:number;from:string;to:string;frames:number;looked_for:number;detections:number};
 type StarFrame={image_id:string|null;observation_utc?:string;width?:number|null;height?:number|null;field?:[number,number][]|null;stars:FrameStar[]};
@@ -137,9 +142,15 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [cursor,setCursor]=useState<number|null>(null);
   const [frame,setFrame]=useState<StarFrame|null>(null);
   const [frameBusy,setFrameBusy]=useState(false);
+  // A cursor the step buttons have already fetched a frame for, so moving to it
+  // does not immediately fetch the same frame again.
+  const satisfied=useRef<number|null>(null);
   // Magnification of the frame view, with the centre it is magnified about in
   // image pixels. Stars are a pixel or two across, so this is the difference
   // between seeing a fit and guessing at it.
+  // Which of the two left-hand views is showing: the series through time, or
+  // the distributions those series are drawn from.
+  const [leftTab,setLeftTab]=useState<'series'|'histograms'>('series');
   const [zoom,setZoom]=useState(1);
   const [centre,setCentre]=useState<[number,number]|null>(null);
   const pan=useRef<{x:number;y:number;cx:number;cy:number}|null>(null);
@@ -165,7 +176,8 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   },[camera.id,channel,span]);
   useEffect(()=>{
     const controller=new AbortController();
-    for(const key of selected){
+    const wanted=leftTab==='histograms'?[...STAR_CHANNELS]:[channel];
+    for(const key of selected)for(const channel of wanted){
       if(series[`${span}:${channel}:${key}`])continue;
       void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/series?star=${encodeURIComponent(key)}&channel=${channel}&${span}`,{cache:'no-store',signal:controller.signal})
         .then(async r=>r.ok?await r.json() as {samples:StarSample[]}:{samples:[]})
@@ -173,7 +185,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         .catch(()=>{});
     }
     return()=>controller.abort();
-  },[selected,channel,span,camera.id,series]);
+  },[selected,channel,span,camera.id,series,leftTab]);
   useEffect(()=>{
     const controller=new AbortController();
     void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/nights?channel=${channel}&days=60`,{cache:'no-store',signal:controller.signal})
@@ -188,6 +200,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   useEffect(()=>{setZoom(1);setCentre(null)},[frame?.image_id]);
   useEffect(()=>{
     if(cursor==null){setFrame(null);return}
+    if(satisfied.current===cursor){satisfied.current=null;return}
     const controller=new AbortController();
     // The pointer moves far faster than the request; wait for it to settle.
     const timer=window.setTimeout(()=>{setFrameBusy(true);
@@ -198,6 +211,19 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         .finally(()=>{if(!controller.signal.aborted)setFrameBusy(false)})},120);
     return()=>{controller.abort();window.clearTimeout(timer)};
   },[cursor,camera.id,channel,span]);
+  // Stepping is by measured frame, so a gap in the archive is one press rather
+  // than a hunt with the slider.
+  const stepFrame=async(step:'next'|'prev')=>{
+    if(cursor==null)return;
+    setFrameBusy(true);
+    try{
+      const body=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/frame?at=${encodeURIComponent(new Date(cursor).toISOString())}&step=${step}&channel=${channel}&${span}`,{cache:'no-store'})
+        .then(async r=>r.ok?await r.json() as StarFrame:null);
+      if(!body?.image_id||!body.observation_utc)return;
+      const at=Date.parse(body.observation_utc);
+      satisfied.current=at;setFrame(body);setCursor(at);
+    }catch{}finally{setFrameBusy(false)}
+  };
   const toggle=(key:string)=>setSelected(prev=>prev.includes(key)?prev.filter(k=>k!==key):[...prev,key]);
   const palette=['#56f0c5','#f3b647','#72ccef','#ff8fa3','#baff78','#c9a0ff'];
   const picked=selected.map((k,i)=>({key:k,colour:palette[i%palette.length],samples:series[`${span}:${channel}:${k}`]||[]}));
@@ -236,6 +262,52 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         {picked.map(p=><path key={p.key} d={path(p.samples,get,lo,hi,w,h)} fill="none" stroke={p.colour} strokeWidth="1.4"/>)}
         {cursorX!=null&&<line x1={cursorX} x2={cursorX} y1="0" y2={h} className="star-cursor"/>}
       </svg></div>;};
+  // Samples of one quantity, for one channel, across every selected star.
+  const pooled=(chan:string,pick:(x:StarSample)=>number|null)=>selected
+    .flatMap(k=>series[`${span}:${chan}:${k}`]||[])
+    .map(pick)
+    .filter((v):v is number=>v!=null&&Number.isFinite(v));
+  const histogramPlot=(label:string,pick:(x:StarSample)=>number|null,unit:string)=>{
+    const byChannel=STAR_CHANNELS.map(c=>({channel:c,values:pooled(c,pick)}));
+    const all=byChannel.flatMap(c=>c.values);
+    // One span for all four, so the channels can be compared by eye.
+    const [lo,hi]=binExtent(all);
+    const bins=40,w=560,h=118;
+    const series4=byChannel.map(c=>({...c,bins:histogram1d(c.values,bins,[lo,hi])}));
+    const peak=series4.reduce((m,c)=>Math.max(m,c.bins.peak),0)||1;
+    const outline=(counts:number[])=>{
+      let d=`M0 ${h}`;
+      counts.forEach((n,i)=>{const x0=i/bins*w,x1=(i+1)/bins*w,y=h-n/peak*h;
+        d+=`L${x0.toFixed(1)} ${y.toFixed(1)}L${x1.toFixed(1)} ${y.toFixed(1)}`});
+      return `${d}L${w} ${h}`;};
+    return <div className="star-plot"><div className="star-plot-head"><strong>{label}</strong>
+      <small>{lo.toPrecision(3)} to {hi.toPrecision(3)} {unit} · {all.length} samples</small></div>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={`${label} distribution`}>
+        <rect x="0" y="0" width={w} height={h} className="star-plot-bg"/>
+        {[0.25,0.5,0.75].map(f=><line key={f} x1="0" x2={w} y1={h*f} y2={h*f} className="star-grid"/>)}
+        {series4.map(c=>c.bins.total>0&&<path key={c.channel} d={outline(c.bins.counts)} fill="none"
+          stroke={CHANNEL_COLOUR[c.channel]} strokeWidth={c.channel==='mean'?1.9:1.2}
+          opacity={c.channel==='mean'?1:.85}/>)}
+      </svg></div>;};
+  const jointPlot=()=>{
+    const samples=selected.flatMap(k=>series[`${span}:${channel}:${k}`]||[]);
+    const xs=samples.map(x=>x.amplitude),ys=samples.map(x=>x.background);
+    const grid=histogram2d(xs as number[],ys as number[],48,34);
+    const w=560,h=238;
+    const cw=w/grid.columns,ch=h/grid.rows;
+    return <div className="star-plot"><div className="star-plot-head"><strong>Peak against background</strong>
+      <small>{channel==='mean'?'average':channel.toUpperCase()} · {grid.total} samples</small></div>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img"
+        aria-label="Joint distribution of star peak and sky background">
+        <rect x="0" y="0" width={w} height={h} className="star-plot-bg"/>
+        {grid.counts.map((n,i)=>{const colour=densityColour(n/(grid.peak||1));if(!colour)return null;
+          const cx=(i%grid.columns)*cw,cy=h-(Math.floor(i/grid.columns)+1)*ch;
+          return <rect key={i} x={cx} y={cy} width={cw+0.5} height={ch+0.5} fill={colour}/>})}
+      </svg>
+      <div className="star-axes">
+        <small>horizontal: peak above background, {grid.xLow.toPrecision(3)} to {grid.xHigh.toPrecision(3)}</small>
+        <small>vertical: sky background, {grid.yLow.toPrecision(3)} to {grid.yHigh.toPrecision(3)}</small></div>
+    </div>;};
   const extent=(pick:(r:StarSummary)=>number)=>{
     const vals=stars.map(pick).filter(Number.isFinite);
     if(!vals.length)return[0,1];const lo=Math.min(...vals),hi=Math.max(...vals);
@@ -268,6 +340,19 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
     {!loading&&!error&&stars.length===0&&<div className="history-empty">No star photometry recorded for this camera yet.</div>}
     {stars.length>0&&<div className="star-panels">
       <div className="star-series">
+        <div className="star-subtabs" role="tablist" aria-label="Left panel view">
+          <button type="button" role="tab" aria-selected={leftTab==='series'} onClick={()=>setLeftTab('series')}>Time series</button>
+          <button type="button" role="tab" aria-selected={leftTab==='histograms'} onClick={()=>setLeftTab('histograms')}>Histograms</button>
+          <small>{leftTab==='series'?'brightness and sky through the window':'distributions over the window, all four channels'}</small>
+        </div>
+        {leftTab==='histograms'?<>
+          {histogramPlot('Total intensity above background',x=>x.flux,'counts')}
+          {histogramPlot('Peak intensity above background',x=>x.amplitude,'counts')}
+          {histogramPlot('Fitted sky background',x=>x.background,'counts')}
+          {jointPlot()}
+          <div className="star-legend">{STAR_CHANNELS.map(c=><span key={c}><i style={{background:CHANNEL_COLOUR[c]}}/>{c==='mean'?'average':c.toUpperCase()}</span>)}
+            {selected.length===0&&<small>Select stars in the frame to pool their samples.</small>}</div>
+        </>:<>
         {plot('Total intensity above background',x=>x.flux,'counts',true)}
         {times.length>0&&<div className="star-scrub">
           <input type="range" aria-label="Time along the brightness series"
@@ -281,7 +366,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         {plot('Fitted image background',x=>x.background,'counts')}
         <div className="star-legend">{picked.map(p=>{const row=stars.find(r=>r.star_key===p.key);
           return <span key={p.key}><i style={{background:p.colour}}/>{row?`V ${row.vt_mag.toFixed(2)} at ${row.elevation_deg?.toFixed(0)}\u00b0 el`:p.key}<small>{p.samples.length} pts</small></span>})}
-          {picked.length===0&&<small>Select stars in the scatter to plot them.</small>}</div>
+          {picked.length===0&&<small>Select stars in the scatter to plot them.</small>}</div></>}
       </div>
       <div className="star-scatter">
         {frame&&frame.image_id?(()=>{
@@ -326,6 +411,12 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
               <button type="button" aria-label="Zoom in" onClick={()=>setZoom(z=>Math.min(16,z*1.6))}>+</button>
               <button type="button" aria-label="Zoom out" onClick={()=>setZoom(z=>Math.max(1,z/1.6))}>&minus;</button>
               <button type="button" aria-label="Fit the whole frame" onClick={()=>{setZoom(1);setCentre(null)}}>Fit</button>
+              <span className="star-step">
+                <button type="button" aria-label="Previous frame" title="Step back one measured frame"
+                  disabled={frameBusy} onClick={()=>void stepFrame('prev')}>‹ Prev</button>
+                <button type="button" aria-label="Next frame" title="Step forward one measured frame"
+                  disabled={frameBusy} onClick={()=>void stepFrame('next')}>Next ›</button>
+              </span>
               <small>{zoom<1.05?'whole frame':`${zoom.toFixed(1)}\u00d7`}</small>
             </div>
             <svg className="star-frame" viewBox={vbox.join(' ')} role="img"

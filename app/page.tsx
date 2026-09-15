@@ -472,7 +472,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         </select>
         <small role="status">{keoBusy?'sampling the cut in both cameras\u2026'
           :keoError?keoError
-          :keogram?`${keogram.rows.length} paired frames every ${Math.round(keogram.cadence_seconds/60)} min, ${keogram.samples} samples across ${(2*keogram.half_width_km).toFixed(0)} km`
+          :keogram?`${keogram.rows.length} paired frames of ${keogram.frames_available}, about every ${Math.max(1,Math.round(keogram.cadence_seconds/60))} min, ${keogram.samples} samples across ${(2*keogram.half_width_km).toFixed(0)} km`
           :'pick a camera to compare against'}</small>
       </div>
       {keogram&&keogram.rows.length>0&&<>

@@ -33,6 +33,7 @@ export type KeogramPair = {
   from: string;
   to: string;
   unpaired_steps: number;
+  frames_available: number;
   pixel_source: string;
 };
 

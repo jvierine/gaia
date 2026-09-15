@@ -36,11 +36,16 @@ pub const DEFAULT_HALF_WIDTH_KM: f64 = 300.0;
 pub const DEFAULT_SAMPLES: usize = 128;
 pub const MAX_SAMPLES: usize = 512;
 
-/// Seconds between keogram rows, and the most rows one request will build. The
-/// cap is what keeps a careless window from turning into an hour of decoding:
-/// a request that would exceed it is thinned, not truncated, so the keogram
-/// still spans the window the operator asked for.
-pub const DEFAULT_CADENCE_SECONDS: i64 = 300;
+/// Least time between keogram rows, and the most rows one request will build.
+///
+/// This is a *minimum spacing* applied to the frames a camera actually has,
+/// not a clock the rows must land on. A regular grid was the first design and
+/// it was wrong: the cameras keep their own schedules, so most grid instants
+/// had no frame within tolerance and three quarters of a window's real pairs
+/// were thrown away. The cap is what keeps a careless window from turning into
+/// an hour of decoding; a request that would exceed it is thinned further, so
+/// the keogram loses resolution rather than its tail.
+pub const DEFAULT_CADENCE_SECONDS: i64 = 120;
 pub const MAX_ROWS: usize = 300;
 
 /// How far apart two frames may be and still count as simultaneous. Auroral
@@ -251,28 +256,45 @@ fn profile(s: &AppState, source_id: &str, at: chrono::DateTime<chrono::Utc>, sam
         .collect())
 }
 
-/// Times to build rows at: a regular grid across the window, thinned to stay
-/// under `MAX_ROWS` so a wide window loses cadence rather than its tail.
-fn grid(
-    from: chrono::DateTime<chrono::Utc>,
-    to: chrono::DateTime<chrono::Utc>,
-    cadence_seconds: i64,
-) -> (Vec<chrono::DateTime<chrono::Utc>>, i64) {
-    let span = (to - from).num_seconds().max(0);
-    let cadence = cadence_seconds.max(1);
-    let wanted = (span / cadence) as usize + 1;
-    let step = if wanted > MAX_ROWS {
-        cadence * ((wanted as i64 + MAX_ROWS as i64 - 1) / MAX_ROWS as i64)
-    } else {
-        cadence
+/// Which of a camera's own frames become keogram rows: the first, then every
+/// frame at least `cadence_seconds` after the one before it.
+///
+/// Anchoring on the frames rather than on a clock is what makes the row count
+/// reflect what the camera recorded. Widening the spacing until the result fits
+/// under `MAX_ROWS` keeps a long window affordable without dropping its end.
+fn thin(frames: &[Frame], cadence_seconds: i64) -> Vec<usize> {
+    let keep = |spacing: i64| {
+        let mut out: Vec<usize> = Vec::new();
+        let mut last: Option<chrono::DateTime<chrono::Utc>> = None;
+        for (index, frame) in frames.iter().enumerate() {
+            if last.is_none_or(|u| (frame.at - u).num_seconds() >= spacing) {
+                last = Some(frame.at);
+                out.push(index);
+            }
+        }
+        out
     };
-    let mut out = Vec::new();
-    let mut at = from;
-    while at <= to && out.len() < MAX_ROWS {
-        out.push(at);
-        at += chrono::Duration::seconds(step);
+    let mut spacing = cadence_seconds.max(1);
+    let mut chosen = keep(spacing);
+    // Widen geometrically rather than truncating, so the last row of a long
+    // window is still its last frame.
+    while chosen.len() > MAX_ROWS {
+        spacing = (spacing * 2).max(spacing + 1);
+        chosen = keep(spacing);
     }
-    (out, step)
+    chosen
+}
+
+/// Median spacing of the rows actually built, which is what the panel should
+/// report: the requested cadence is a floor, and the camera's own interval
+/// usually sets the real number.
+fn median_spacing_seconds(times: &[chrono::DateTime<chrono::Utc>]) -> i64 {
+    if times.len() < 2 {
+        return 0;
+    }
+    let mut gaps: Vec<i64> = times.windows(2).map(|w| (w[1] - w[0]).num_seconds()).collect();
+    gaps.sort_unstable();
+    gaps[gaps.len() / 2]
 }
 
 /// Build the keogram pair for one window.
@@ -302,6 +324,7 @@ pub fn build(
 
     let from = chrono::DateTime::parse_from_rfc3339(from_utc)?.with_timezone(&chrono::Utc);
     let to = chrono::DateTime::parse_from_rfc3339(to_utc)?.with_timezone(&chrono::Utc);
+    let _ = (from, to);
     let (frames_a, frames_b) = (
         frames(&conn, &a.id, from_utc, to_utc)?,
         frames(&conn, &b.id, from_utc, to_utc)?,
@@ -318,17 +341,15 @@ pub fn build(
 
     let mut samplers: HashMap<String, Sampler> = HashMap::new();
     let mut rows = Vec::new();
+    let mut built: Vec<chrono::DateTime<chrono::Utc>> = Vec::new();
     let mut skipped_unpaired = 0usize;
-    let (steps, step_seconds) = grid(from, to, cadence_seconds);
-    for at in steps {
-        let (Some(fa), Some(fb)) = (nearest(&frames_a, at), nearest(&frames_b, at)) else {
+    for index in thin(&frames_a, cadence_seconds) {
+        let fa = &frames_a[index];
+        let Some(fb) = nearest(&frames_b, fa.at) else {
             skipped_unpaired += 1;
             continue;
         };
-        if (fa.at - fb.at).num_seconds().abs() > MAX_SKEW_SECONDS {
-            skipped_unpaired += 1;
-            continue;
-        }
+        let at = fa.at;
         for (station, frame) in [(&a, fa), (&b, fb)] {
             if !samplers.contains_key(&station.id) {
                 samplers.insert(station.id.clone(), sampler(s, &station.id, frame.at, &points)?);
@@ -336,6 +357,7 @@ pub fn build(
         }
         let pa = profile(s, &a.id, fa.at, &samplers[&a.id])?;
         let pb = profile(s, &b.id, fb.at, &samplers[&b.id])?;
+        built.push(at);
         rows.push(json!({
             "at": at.to_rfc3339(),
             "a_at": fa.at.to_rfc3339(),
@@ -362,7 +384,8 @@ pub fn build(
         "colocated": separation < 1.0,
         "half_width_km": half_width_km,
         "samples": samples,
-        "cadence_seconds": step_seconds,
+        "cadence_seconds": median_spacing_seconds(&built),
+        "frames_available": frames_a.len(),
         "arc_km": arc_km,
         "from": from.to_rfc3339(),
         "to": to.to_rfc3339(),
@@ -428,19 +451,46 @@ mod tests {
         assert!(spread > 1.0, "co-located cut collapsed to a point");
     }
 
+    fn run(start: &str, interval: i64, count: i64) -> Vec<Frame> {
+        let base = chrono::DateTime::parse_from_rfc3339(start).unwrap().with_timezone(&chrono::Utc);
+        (0..count)
+            .map(|i| Frame { at: base + chrono::Duration::seconds(i * interval), id: format!("f{i}") })
+            .collect()
+    }
+
     #[test]
-    fn a_wide_window_loses_cadence_rather_than_its_tail() {
-        let from = chrono::DateTime::parse_from_rfc3339("2026-09-12T18:00:00+00:00").unwrap().with_timezone(&chrono::Utc);
-        let to = from + chrono::Duration::hours(24);
-        let (rows, step_seconds) = grid(from, to, 60);
-        assert!(step_seconds >= 60);
-        assert!(rows.len() <= MAX_ROWS, "{} rows exceeds the cap", rows.len());
-        // The last row still reaches the end of the window, within one step.
-        let step = (rows[1] - rows[0]).num_seconds();
-        assert!((to - *rows.last().unwrap()).num_seconds() < step);
-        // A narrow window keeps the cadence it asked for.
-        let (narrow, _) = grid(from, from + chrono::Duration::hours(1), 300);
-        assert_eq!((narrow[1] - narrow[0]).num_seconds(), 300);
+    fn rows_come_from_the_frames_the_camera_has() {
+        // A camera on a 240 s interval asked for 120 s rows keeps every frame:
+        // the cadence is a floor, not a clock the frames have to land on. The
+        // grid this replaced kept one step in four here.
+        let frames = run("2026-09-13T20:00:00+00:00", 240, 30);
+        assert_eq!(thin(&frames, 120).len(), 30);
+        // Asking for less often than the camera runs drops frames in between.
+        let sparse = thin(&frames, 600);
+        assert_eq!(sparse.len(), 10);
+        assert_eq!(sparse[1], 3, "the next kept frame is the first >= 600 s later");
+    }
+
+    #[test]
+    fn a_long_window_loses_resolution_rather_than_its_tail() {
+        // A night of 15 s frames is far more than the cap allows.
+        let frames = run("2026-09-13T18:00:00+00:00", 15, 2880);
+        let chosen = thin(&frames, 30);
+        assert!(chosen.len() <= MAX_ROWS, "{} rows exceeds the cap", chosen.len());
+        assert!(chosen.len() > MAX_ROWS / 2, "thinned much further than needed");
+        assert_eq!(chosen[0], 0, "the window still starts where it started");
+        assert!(
+            frames.len() - 1 - chosen[chosen.len() - 1] < 32,
+            "the end of the window was truncated instead of thinned"
+        );
+    }
+
+    #[test]
+    fn the_reported_cadence_is_the_one_the_rows_actually_have() {
+        let frames = run("2026-09-13T20:00:00+00:00", 240, 6);
+        let times: Vec<_> = thin(&frames, 120).iter().map(|i| frames[*i].at).collect();
+        assert_eq!(median_spacing_seconds(&times), 240, "not the 120 s that was asked for");
+        assert_eq!(median_spacing_seconds(&times[..1]), 0);
     }
 
     #[test]

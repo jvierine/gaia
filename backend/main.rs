@@ -6,6 +6,7 @@ mod equalize;
 mod extinction;
 mod geometry;
 mod igrf_grid;
+mod keogram;
 mod image_time;
 mod meteor_backfill;
 mod model;
@@ -1431,6 +1432,62 @@ async fn source_stars(
 }
 
 /// The brightness and background time series of one star, for plotting.
+#[derive(Deserialize)]
+struct KeogramQuery {
+    /// The partner camera. The camera the panel is already showing supplies the
+    /// other half of the pair.
+    partner: String,
+    from: Option<String>,
+    to: Option<String>,
+    hours: Option<f64>,
+    samples: Option<usize>,
+    cadence_seconds: Option<i64>,
+    half_width_km: Option<f64>,
+}
+
+/// Which cameras this one can be compared against.
+async fn source_keogram_pairs(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let here = keogram::station(&conn, &id)
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    let pairs = keogram::pairs(&conn, &id).map_err(internal)?;
+    Ok(Json(json!({
+        "source_id": here.id,
+        "source_name": here.name,
+        "maximum_separation_km": keogram::MAX_SEPARATION_KM,
+        "pairs": pairs,
+    })))
+}
+
+/// The keogram pair itself. This decodes one texture per camera per row, so it
+/// is deliberately bounded rather than fast: see `keogram::MAX_ROWS`.
+async fn source_keogram(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<KeogramQuery>,
+) -> ApiResult<Json<Value>> {
+    let (from, to) = star_window(&query.from, &query.to, query.hours);
+    let built = tokio::task::spawn_blocking(move || {
+        keogram::build(
+            &s,
+            &id,
+            &query.partner,
+            &from,
+            &to,
+            query.samples.unwrap_or(keogram::DEFAULT_SAMPLES),
+            query.cadence_seconds.unwrap_or(keogram::DEFAULT_CADENCE_SECONDS),
+            query.half_width_km.unwrap_or(keogram::DEFAULT_HALF_WIDTH_KM),
+        )
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(built))
+}
+
 /// One star's measurements over a window, as the panel wants them.
 ///
 /// Every field is read by column name rather than by position. The positional
@@ -1777,6 +1834,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/calibrations", post(calibration))
         .route("/api/sources/{id}/stars", get(source_stars))
         .route("/api/sources/{id}/stars/series", get(source_star_series))
+        .route("/api/sources/{id}/keogram-pairs", get(source_keogram_pairs))
+        .route("/api/sources/{id}/keogram", get(source_keogram))
         .route("/api/sources/{id}/stars/frame", get(source_star_frame))
         .route("/api/sources/{id}/stars/nights", get(source_star_nights))
         .route("/api/extinction", get(extinction_state))

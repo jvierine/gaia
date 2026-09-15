@@ -10,6 +10,8 @@ import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
 // `extent` is imported under another name: the panel already has a local one
 // for the scatter, and a shadowed import would silently call the wrong function.
 import {densityColour,extent as binExtent,histogram1d,histogram2d,tickLabel,ticks} from '../src/histogram';
+import {addInterval,fractionToTime,keogramImage,removeAt,scatterPoints,selectedSeconds,
+        type Interval,type KeogramPair} from '../src/keogram';
 
 type ViewName = 'globe' | 'cameras' | 'status' | 'calibrate' | 'about';
 type Camera = {id:string;name:string;producer:string;state:string;timestamp_mode:string;latitude_deg:number|null;longitude_deg:number|null;calibrated:boolean;processing?:{state:string;total?:number;done?:number;ready?:number;error?:string|null};enabled:boolean;quality_exponent:number;images_24h:number;message?:string|null};
@@ -23,6 +25,7 @@ type StarSample = {at:string;flux:number|null;background:number|null;amplitude:n
 const STAR_CHANNELS = ['mean','r','g','b'] as const;
 /// The average reads warm, the colour channels read as themselves.
 const CHANNEL_COLOUR:Record<string,string> = {mean:'#f5a524',r:'#ff5f56',g:'#3ddc84',b:'#5aa9ff'};
+type KeogramOption={partner_id:string;partner_name:string;separation_km:number;colocated:boolean};
 type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;saturated:boolean;certain:boolean;usable:boolean;washed_out:boolean;optical_depth:number|null;best_flux:number|null;relative:number|null};
 type Distribution={star_key:string;samples:number;days:number;channels:Record<string,{flux:number[];amplitude:number[];background:number[]}>};
 type StarNight={night:number;from:string;to:string;frames:number;looked_for:number;detections:number};
@@ -126,6 +129,62 @@ function Credits(){
 /// Per-star brightness and background over time, and where those stars sit in
 /// the frame. Cloud shows up as a star dimming, so these are the raw inputs to
 /// the cloud-thickness estimate rather than a derived product.
+/// One keogram, drawn as pixels rather than as marks. A canvas is the honest
+/// container for this: the data is already an image, one column per frame and
+/// one row per sample along the cut, and turning it into thousands of SVG rects
+/// would cost far more and show exactly the same thing.
+function KeogramCanvas({rows,side,samples,label}:
+  {rows:KeogramPair['rows'];side:'a'|'b';samples:number;label:string}){
+  const ref=useRef<HTMLCanvasElement|null>(null);
+  useEffect(()=>{
+    const canvas=ref.current;if(!canvas)return;
+    const {width,height,data}=keogramImage(rows,side,samples);
+    canvas.width=width;canvas.height=height;
+    const context=canvas.getContext('2d');if(!context)return;
+    context.clearRect(0,0,width,height);
+    // The clamped array is typed over ArrayBufferLike, which ImageData's own
+    // signature narrows to ArrayBuffer; the buffer here is always the plain one.
+    context.putImageData(new ImageData(data as ImageData['data'],width,height),0,0);
+  },[rows,side,samples]);
+  // The element is stretched by CSS; the backing store stays one pixel per
+  // sample, so no interpolation invents structure that was never measured.
+  return <canvas ref={ref} className="keogram-canvas" role="img" aria-label={label}/>;
+}
+
+/// The two cameras' intensities against each other, one point per sample pair.
+/// Drawn with additive alpha so the density of the cloud is visible: a fit will
+/// be driven by where the points pile up, and the operator should see that pile
+/// rather than a uniform smear.
+function KeogramScatter({sets,size}:
+  {sets:ReturnType<typeof scatterPoints>;size:number}){
+  const ref=useRef<HTMLCanvasElement|null>(null);
+  useEffect(()=>{
+    const canvas=ref.current;if(!canvas)return;
+    canvas.width=size;canvas.height=size;
+    const context=canvas.getContext('2d');if(!context)return;
+    context.clearRect(0,0,size,size);
+    // Fixed 0-255 axes: these are 8-bit intensities, and a rescaled axis would
+    // hide both saturation and a dark, unusable window.
+    context.strokeStyle='rgba(255,255,255,0.12)';context.lineWidth=1;
+    for(let i=0;i<=4;i++){const at=Math.round(i/4*(size-1))+0.5;
+      context.beginPath();context.moveTo(at,0);context.lineTo(at,size);context.stroke();
+      context.beginPath();context.moveTo(0,at);context.lineTo(size,at);context.stroke();}
+    // The line of equal response, for reference: points above it mean the
+    // vertical camera reads brighter than the horizontal one.
+    context.strokeStyle='rgba(255,255,255,0.28)';
+    context.beginPath();context.moveTo(0,size);context.lineTo(size,0);context.stroke();
+    const colour={r:'rgba(255,90,80,0.35)',g:'rgba(80,220,120,0.35)',b:'rgba(90,150,255,0.35)'};
+    for(const set of sets){
+      context.fillStyle=colour[set.channel];
+      for(const [x,y] of set.points){
+        context.fillRect(x/255*(size-1),size-1-y/255*(size-1),1.6,1.6);
+      }
+    }
+  },[sets,size]);
+  return <canvas ref={ref} className="keogram-scatter" role="img"
+    aria-label="Intensities of the two cameras against each other, by colour channel"/>;
+}
+
 function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [channel,setChannel]=useState<string>('mean');
   const [hours,setHours]=useState(24);
@@ -151,7 +210,18 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   // between seeing a fit and guessing at it.
   // Which of the two left-hand views is showing: the series through time, or
   // the distributions those series are drawn from.
-  const [leftTab,setLeftTab]=useState<'series'|'histograms'>('series');
+  const [leftTab,setLeftTab]=useState<'series'|'histograms'|'keograms'>('series');
+  // The keogram pair: which partner camera, the extracted pair, and the time
+  // intervals the operator has brushed out of it as fit material.
+  const [pairOptions,setPairOptions]=useState<KeogramOption[]>([]);
+  const [partner,setPartner]=useState<string>('');
+  const [keogram,setKeogram]=useState<KeogramPair|null>(null);
+  const [keoBusy,setKeoBusy]=useState(false);
+  const [keoError,setKeoError]=useState('');
+  const [intervals,setIntervals]=useState<Interval[]>([]);
+  // An in-progress brush, in panel fractions, so it can be drawn before it is
+  // committed on pointer release.
+  const [brush,setBrush]=useState<{from:number;to:number}|null>(null);
   // The histograms are built from the whole archive for one star, not from the
   // window on screen. A star at high latitude barely changes elevation, so its
   // air mass hardly varies night to night and its clear-sky level is far better
@@ -216,6 +286,29 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
       .finally(()=>{if(!controller.signal.aborted)setDistBusy(false)});
     return()=>controller.abort();
   },[leftTab,histStar,camera.id]);
+  useEffect(()=>{
+    if(leftTab!=='keograms')return;
+    const controller=new AbortController();
+    void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/keogram-pairs`,{cache:'no-store',signal:controller.signal})
+      .then(async r=>r.ok?await r.json() as {pairs:KeogramOption[]}:{pairs:[]})
+      .then(body=>{if(controller.signal.aborted)return;
+        setPairOptions(body.pairs);
+        setPartner(prev=>body.pairs.some(p=>p.partner_id===prev)?prev:(body.pairs[0]?.partner_id??''));})
+      .catch(()=>{});
+    return()=>controller.abort();
+  },[leftTab,camera.id]);
+  useEffect(()=>{setPartner('');setKeogram(null);setIntervals([])},[camera.id]);
+  useEffect(()=>{
+    if(leftTab!=='keograms'||!partner){setKeogram(null);return}
+    const controller=new AbortController();setKeoBusy(true);setKeoError('');
+    void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/keogram?partner=${encodeURIComponent(partner)}&${span}`,{cache:'no-store',signal:controller.signal})
+      .then(async r=>{if(!r.ok)throw new Error(await r.text()||'Could not build the keogram pair.');
+        return await r.json() as KeogramPair})
+      .then(body=>{if(!controller.signal.aborted){setKeogram(body);setIntervals([])}})
+      .catch(e=>{if(!controller.signal.aborted){setKeogram(null);setKeoError(String(e.message||e))}})
+      .finally(()=>{if(!controller.signal.aborted)setKeoBusy(false)});
+    return()=>controller.abort();
+  },[leftTab,partner,camera.id,span]);
   // A new camera, channel or window invalidates the scrubbed frame.
   useEffect(()=>{setCursor(null);setFrame(null)},[camera.id,channel,span]);
   useEffect(()=>{setZoom(1);setCentre(null)},[frame?.image_id]);
@@ -328,6 +421,86 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
           stroke={CHANNEL_COLOUR[c.channel]} strokeWidth={c.channel==='mean'?1.8:1.1}
           opacity={c.channel==='mean'?1:.85}/>)}
       </svg></div>;};
+  // Pointer position within a keogram panel, as a fraction of its width. Both
+  // panels share the time axis, so a brush started on one applies to both.
+  const brushFraction=(event:React.PointerEvent<HTMLDivElement>)=>{
+    const box=event.currentTarget.getBoundingClientRect();
+    return Math.min(1,Math.max(0,(event.clientX-box.left)/Math.max(1,box.width)));};
+  const keogramPanel=()=>{
+    const rows=keogram?.rows??[];
+    const scatter=scatterPoints({rows},intervals);
+    const counted=scatter[0]?.points.length??0;
+    const chosen=intervals.length?selectedSeconds(intervals)/60:0;
+    const band=(i:Interval)=>{
+      const first=rows.length?Date.parse(rows[0].at):0;
+      const last=rows.length>1?Date.parse(rows[rows.length-1].at):first+1;
+      const at=(t:number)=>Math.min(100,Math.max(0,(t-first)/Math.max(1,last-first)*100));
+      return {left:`${at(i.from)}%`,width:`${Math.max(0.4,at(i.to)-at(i.from))}%`};};
+    const strip=(side:'a'|'b',name:string,coverage:number)=>
+      <div className="keogram-strip">
+        <div className="star-plot-head"><strong>{name}</strong>
+          <small>{(coverage*100).toFixed(0)}% of the cut in view</small></div>
+        <div className="keogram-frame"
+          onPointerDown={event=>{event.currentTarget.setPointerCapture(event.pointerId);
+            setBrush({from:brushFraction(event),to:brushFraction(event)})}}
+          onPointerMove={event=>{if(brush)setBrush({from:brush.from,to:brushFraction(event)})}}
+          onPointerUp={event=>{
+            if(!brush)return;
+            const from=fractionToTime(rows,Math.min(brush.from,brush.to));
+            const to=fractionToTime(rows,Math.max(brush.from,brush.to));
+            // A click rather than a drag: take back whatever is under it.
+            if(Math.abs(brush.to-brush.from)<0.004)setIntervals(prev=>removeAt(prev,from));
+            else setIntervals(prev=>addInterval(prev,{from,to}));
+            setBrush(null);}}>
+          <KeogramCanvas rows={rows} side={side} samples={keogram?.samples??1}
+            label={`Keogram for ${name}`}/>
+          {intervals.map((i,n)=><span key={n} className="keogram-band" style={band(i)}/>)}
+          {brush&&<span className="keogram-band keogram-band-live" style={{
+            left:`${Math.min(brush.from,brush.to)*100}%`,
+            width:`${Math.abs(brush.to-brush.from)*100}%`}}/>}
+        </div>
+      </div>;
+    return <>
+      <div className="keogram-pick">
+        <span className="eyebrow">PAIR</span>
+        <select value={partner} onChange={event=>setPartner(event.target.value)}
+          aria-label="Camera to pair with">
+          {pairOptions.length===0&&<option value="">no overlapping camera</option>}
+          {pairOptions.map(p=><option key={p.partner_id} value={p.partner_id}>
+            {p.partner_name} {p.colocated?'\u00b7 co-located':`\u00b7 ${p.separation_km.toFixed(0)} km`}
+          </option>)}
+        </select>
+        <small role="status">{keoBusy?'sampling the cut in both cameras\u2026'
+          :keoError?keoError
+          :keogram?`${keogram.rows.length} paired frames every ${Math.round(keogram.cadence_seconds/60)} min, ${keogram.samples} samples across ${(2*keogram.half_width_km).toFixed(0)} km`
+          :'pick a camera to compare against'}</small>
+      </div>
+      {keogram&&keogram.rows.length>0&&<>
+        {strip('a',keogram.a.name,keogram.a.coverage)}
+        {strip('b',keogram.b.name,keogram.b.coverage)}
+        <div className="keogram-axis"><small>
+          {new Date(keogram.from).toISOString().replace('T',' ').slice(0,16)} UTC</small>
+          <small>drag to select a window, click inside one to drop it</small>
+          <small>{new Date(keogram.to).toISOString().replace('T',' ').slice(0,16)} UTC</small></div>
+        <div className="star-plot"><div className="star-plot-head">
+          <strong>{keogram.a.name} against {keogram.b.name}</strong>
+          <small>{counted} sample pairs{intervals.length?` from ${chosen.toFixed(0)} min selected`:' (whole window)'}</small></div>
+          <KeogramScatter sets={scatter} size={320}/>
+          <div className="star-legend">
+            <span><i style={{background:'rgb(255,90,80)'}}/>red</span>
+            <span><i style={{background:'rgb(80,220,120)'}}/>green</span>
+            <span><i style={{background:'rgb(90,150,255)'}}/>blue</span>
+            <small>Horizontal: {keogram.a.name}. Vertical: {keogram.b.name}. The faint
+              diagonal is equal response. A straight line through a channel is the
+              pair\u2019s gain ratio; its slope is what the equalization solve wants,
+              and it can only be read from a window with real structure in it.
+              Intensities come from {keogram.pixel_source}.</small>
+          </div>
+        </div>
+      </>}
+      {keogram&&keogram.rows.length===0&&!keoBusy&&
+        <div className="history-empty">No simultaneous frames from both cameras in this window.</div>}
+    </>;};
   const jointPlot=()=>{
     const set=distribution?.channels?.[channel];
     // Background along the horizontal, star peak up the vertical: the eye then
@@ -396,9 +569,12 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         <div className="star-subtabs" role="tablist" aria-label="Left panel view">
           <button type="button" role="tab" aria-selected={leftTab==='series'} onClick={()=>setLeftTab('series')}>Time series</button>
           <button type="button" role="tab" aria-selected={leftTab==='histograms'} onClick={()=>setLeftTab('histograms')}>Histograms</button>
-          <small>{leftTab==='series'?'brightness and sky through the window above':'one star over the whole archive, all four channels'}</small>
+          <button type="button" role="tab" aria-selected={leftTab==='keograms'} onClick={()=>setLeftTab('keograms')}>Keogram pairs</button>
+          <small>{leftTab==='series'?'brightness and sky through the window above'
+            :leftTab==='histograms'?'one star over the whole archive, all four channels'
+            :'two cameras along the sky they both see, for intensity equalization'}</small>
         </div>
-        {leftTab==='histograms'?<>
+        {leftTab==='keograms'?keogramPanel():leftTab==='histograms'?<>
           <div className="star-histstar">
             <span className="eyebrow">STAR</span>
             {selected.map(k=>{const row=stars.find(r=>r.star_key===k);

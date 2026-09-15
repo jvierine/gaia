@@ -852,6 +852,109 @@ struct StarSeriesQuery {
     to: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ExtinctionQuery {
+    /// Limit the listing to one camera. Omitted, the whole archive is summarised.
+    source: Option<String>,
+    /// How many recent fits to list. The summary counts are never truncated.
+    limit: Option<i64>,
+}
+
+/// The clear-sky reference, as the archive currently holds it.
+///
+/// This exists to be readable without opening the database. The fit runs in a
+/// background pass whose only product is two tables, and checking whether it is
+/// working had meant taking a copy of the live database from another account,
+/// which has twice left it unwritable and the API down. A read-only endpoint
+/// costs nothing and removes the reason to ever do that.
+async fn extinction_state(
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ExtinctionQuery>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let filter = query.source.clone().unwrap_or_default();
+    let all = filter.is_empty();
+    let limit = query.limit.unwrap_or(20).clamp(1, 500);
+
+    let counts: (i64, i64, String, i64, i64, String) = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM extinction_nights WHERE ?1 OR source_id=?2),
+                    (SELECT count(DISTINCT source_id) FROM extinction_nights WHERE ?1 OR source_id=?2),
+                    (SELECT COALESCE(max(fitted_utc),'') FROM extinction_nights WHERE ?1 OR source_id=?2),
+                    (SELECT count(*) FROM extinction_attempts WHERE ?1 OR source_id=?2),
+                    (SELECT count(DISTINCT source_id) FROM extinction_attempts WHERE ?1 OR source_id=?2),
+                    (SELECT COALESCE(max(attempted_utc),'') FROM extinction_attempts WHERE ?1 OR source_id=?2)",
+            rusqlite::params![all, filter],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .map_err(internal)?;
+
+    let mut by_channel = conn
+        .prepare(
+            "SELECT channel,count(*),avg(k_mag_per_airmass),min(k_mag_per_airmass),
+                    max(k_mag_per_airmass),avg(stars)
+             FROM extinction_nights WHERE ?1 OR source_id=?2 GROUP BY channel ORDER BY channel",
+        )
+        .map_err(internal)?;
+    let channels: Vec<Value> = by_channel
+        .query_map(rusqlite::params![all, filter], |r| {
+            Ok(json!({
+                "channel": r.get::<_, String>(0)?,
+                "fits": r.get::<_, i64>(1)?,
+                "mean_k": r.get::<_, Option<f64>>(2)?,
+                "min_k": r.get::<_, Option<f64>>(3)?,
+                "max_k": r.get::<_, Option<f64>>(4)?,
+                "mean_moving_stars": r.get::<_, Option<f64>>(5)?,
+            }))
+        })
+        .map_err(internal)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(internal)?;
+
+    let mut recent = conn
+        .prepare(
+            "SELECT source_id,night,channel,k_mag_per_airmass,stars,samples,airmass_span,
+                    envelope_scatter,curvature,fitted_utc
+             FROM extinction_nights WHERE ?1 OR source_id=?2
+             ORDER BY fitted_utc DESC LIMIT ?3",
+        )
+        .map_err(internal)?;
+    let fits: Vec<Value> = recent
+        .query_map(rusqlite::params![all, filter, limit], |r| {
+            Ok(json!({
+                "source_id": r.get::<_, String>(0)?,
+                "night": r.get::<_, i64>(1)?,
+                "channel": r.get::<_, String>(2)?,
+                "k_mag_per_airmass": r.get::<_, f64>(3)?,
+                "moving_stars": r.get::<_, i64>(4)?,
+                "samples": r.get::<_, i64>(5)?,
+                "airmass_span": r.get::<_, f64>(6)?,
+                "envelope_scatter": r.get::<_, Option<f64>>(7)?,
+                "curvature": r.get::<_, f64>(8)?,
+                "fitted_utc": r.get::<_, String>(9)?,
+            }))
+        })
+        .map_err(internal)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(internal)?;
+
+    // A refusal is a result, not a failure, so both are reported: a healthy
+    // pass refuses most camera-nights, because most cannot constrain extinction.
+    let refused = counts.3 - counts.0.min(counts.3);
+    Ok(Json(json!({
+        "source": query.source,
+        "fits": counts.0,
+        "cameras_fitted": counts.1,
+        "newest_fit": if counts.2.is_empty() { Value::Null } else { json!(counts.2) },
+        "attempts": counts.3,
+        "cameras_attempted": counts.4,
+        "newest_attempt": if counts.5.is_empty() { Value::Null } else { json!(counts.5) },
+        "attempts_refused": refused,
+        "by_channel": channels,
+        "recent": fits,
+    })))
+}
+
 /// The observing nights this camera has photometry for, newest first.
 ///
 /// A night runs local solar noon to noon, the same definition the clear-sky fit
@@ -1451,6 +1554,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/stars/series", get(source_star_series))
         .route("/api/sources/{id}/stars/frame", get(source_star_frame))
         .route("/api/sources/{id}/stars/nights", get(source_star_nights))
+        .route("/api/extinction", get(extinction_state))
         .route(
             "/api/sources/{id}/calibrations",
             get(source_calibrations).post(set_selected_calibration),

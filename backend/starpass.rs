@@ -438,12 +438,37 @@ pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usiz
                     |r| r.get(0),
                 )
                 .unwrap_or(0);
-            if complete as usize >= FIT_CHANNELS.len()
-                && decided.as_deref().is_some_and(|d| d > newest.as_str())
-            {
-                continue;
-            }
+            let settled = complete as usize >= FIT_CHANNELS.len()
+                && decided.as_deref().is_some_and(|d| d > newest.as_str());
             for channel in FIT_CHANNELS {
+                if settled {
+                    // The night has been decided and has no new data, so it
+                    // does not need fitting again. It may still be missing its
+                    // optical depths: the depths were added after these fits
+                    // were made, and a night nothing new lands in would
+                    // otherwise never get them. Writing them from the stored
+                    // fit costs one pass over the window and no refit.
+                    let has_depths: i64 = conn
+                        .query_row(
+                            "SELECT count(*) FROM star_photometry \
+                             WHERE source_id=?1 AND channel=?2 \
+                               AND observation_utc>=?3 AND observation_utc<?4 \
+                               AND optical_depth IS NOT NULL",
+                            rusqlite::params![source_id, channel, from_utc, to_utc],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(1);
+                    if has_depths == 0 {
+                        if let Ok(Some(fit)) =
+                            extinction::load(conn, &source_id, night, channel)
+                        {
+                            depths += extinction::record_depths(
+                                conn, &source_id, channel, &from_utc, &to_utc, &fit,
+                            )?;
+                        }
+                    }
+                    continue;
+                }
                 let mut q = conn.prepare(
                     "SELECT star_key,elevation_deg,flux FROM star_photometry \
                      WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 \

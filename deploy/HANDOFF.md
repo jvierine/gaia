@@ -535,18 +535,22 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
-## Pending backend install: night selection and saturation (2026-09-15)
+## Pending backend install: stalled-fit fixes and frame stepping (2026-09-15)
 
-The running `gaia-server` was installed 2026-09-14 19:23 at commit `d1adbb8`,
-so it has the clear-sky reference, the frame endpoint and the camera field
-outline. What it lacks is night selection and the saturation flag. bgu001
+The running `gaia-server` was installed 2026-09-15 15:37 at commit `b8d2d86`,
+so it has night selection, the saturation flag, the camera field outline and
+the clear-sky reference. What it lacks are the three fixes that unstall the
+clear-sky fit, and frame stepping. bgu001
 cannot do it: `/mnt/data/juha/gaia-build` is j-owned and the live unit is j's
-USER `gaia-revontuli.service`. A release build of `b8d2d86` is staged at
-`/mnt/data/juha/gaia/staging/gaia-server-b8d2d86`, sha256
-`2846ab2bea063131bb75c08978f430e06b46df8cb3e28a837ea37568a1570c33`. As j:
+USER `gaia-revontuli.service`. A release build of `c7a26cb` is staged at
+`/mnt/data/juha/gaia/staging/gaia-server-c7a26cb`, sha256
+`d8e0c63b73677d694ca79764a4272e69488d5876c956dd79025d439499214e57`. As j:
 
-    cp /mnt/data/juha/gaia/staging/gaia-server-b8d2d86 /mnt/data/juha/gaia-build/release/gaia-server
+    cp /mnt/data/juha/gaia/staging/gaia-server-c7a26cb /mnt/data/juha/gaia-build/release/gaia-server
     systemctl --user restart gaia-revontuli.service
+
+`gaia-server-b8d2d86` stays in staging on purpose: it is the binary currently
+installed, and the way back.
 
 Earlier staged builds are removed as they are superseded, so the staging
 directory only ever holds the one to install.
@@ -817,3 +821,19 @@ after checking `-wal` is 0 bytes so nothing committed is lost.
 only safe on a file nothing is writing: used on the live database it yields a
 copy that fails `PRAGMA quick_check`. There is no safe way to copy the live
 database from another account. Take copies as `j`, or from a stopped service.
+
+### What the c7a26cb install adds over the running build
+
+The three fixes in `df27305`, which matter most. The pending-frame query took
+two minutes sixteen on the live archive and ran every cycle; it now takes
+milliseconds. `run_cycle` no longer returns before the clear-sky fit when no
+frame is pending. Refused fits are recorded in a new `extinction_attempts`
+table and cameras are walked least-recently-tried first, so the pass can no
+longer spend its whole budget re-deciding the same few camera-nights: measured
+on a copy of the archive, 18 cameras in 75 seconds against ten in a day.
+
+Frame stepping, a `step=next|prev` parameter on `stars/frame`, for the Prev and
+Next buttons beside the zoom controls.
+
+Until this is installed the clear-sky reference stays stalled at the fits it
+had, and those two buttons return the nearest frame instead of the neighbour.

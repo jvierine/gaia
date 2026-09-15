@@ -535,18 +535,17 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
-## Pending backend install: stalled-fit fixes and frame stepping (2026-09-15)
+## Pending backend install: the extinction endpoint (2026-09-15)
 
-The running `gaia-server` was installed 2026-09-15 15:37 at commit `b8d2d86`,
-so it has night selection, the saturation flag, the camera field outline and
-the clear-sky reference. What it lacks are the three fixes that unstall the
-clear-sky fit, and frame stepping. bgu001
+The running `gaia-server` was installed 2026-09-15 17:47 at commit `c7a26cb`,
+so it has the stalled-fit fixes and frame stepping. What it lacks is the
+read-only endpoint that makes the clear-sky reference checkable. bgu001
 cannot do it: `/mnt/data/juha/gaia-build` is j-owned and the live unit is j's
-USER `gaia-revontuli.service`. A release build of `c7a26cb` is staged at
-`/mnt/data/juha/gaia/staging/gaia-server-c7a26cb`, sha256
-`d8e0c63b73677d694ca79764a4272e69488d5876c956dd79025d439499214e57`. As j:
+USER `gaia-revontuli.service`. A release build of `c7c9fef` is staged at
+`/mnt/data/juha/gaia/staging/gaia-server-c7c9fef`, sha256
+`7d9dfd4de51a35c5937f48353dd8b3b1a809c586ba64d4e4de51a582eeedffcc`. As j:
 
-    cp /mnt/data/juha/gaia/staging/gaia-server-c7a26cb /mnt/data/juha/gaia-build/release/gaia-server
+    cp /mnt/data/juha/gaia/staging/gaia-server-c7c9fef /mnt/data/juha/gaia-build/release/gaia-server
     systemctl --user restart gaia-revontuli.service
 
 `gaia-server-b8d2d86` stays in staging on purpose: it is the binary currently
@@ -822,7 +821,7 @@ only safe on a file nothing is writing: used on the live database it yields a
 copy that fails `PRAGMA quick_check`. There is no safe way to copy the live
 database from another account. Take copies as `j`, or from a stopped service.
 
-### What the c7a26cb install adds over the running build
+### What the c7a26cb install added, now in place
 
 The three fixes in `df27305`, which matter most. The pending-frame query took
 two minutes sixteen on the live archive and ran every cycle; it now takes
@@ -837,3 +836,19 @@ Next buttons beside the zoom controls.
 
 Until this is installed the clear-sky reference stays stalled at the fits it
 had, and those two buttons return the nearest frame instead of the neighbour.
+
+### What the c7c9fef install adds over the running build
+
+`GET /api/extinction`, read-only. It summarises the clear-sky reference across
+the archive, or one camera with `?source=`: fits, cameras fitted, newest fit,
+attempts, cameras attempted, how many were refused, the coefficient by colour
+channel, and the most recent fits in full.
+
+It exists so the pass can be checked without opening the database. Reading
+`gaia.sqlite3` from an account other than `j` has taken the API down twice; this
+removes the reason to do it.
+
+    curl -s localhost:18765/api/extinction | python3 -m json.tool
+
+A healthy pass refuses most camera-nights, so a large `attempts_refused` beside
+a small `fits` is the expected shape, not a fault.

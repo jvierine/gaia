@@ -365,6 +365,52 @@ impl OptparCache {
     }
 }
 
+/// Writes the optical depths of fitted nights that have none, whatever their
+/// age.
+///
+/// The fit pass only looks a night or two back, so a night fitted last week is
+/// never revisited and a depth added after it was fitted would never reach it.
+/// This walks the stored fits instead of the recent nights, and is self
+/// limiting: a night it fills is not a candidate again.
+pub fn backfill_depths(conn: &Connection, limit: usize) -> Result<usize> {
+    let mut q = conn.prepare(
+        "SELECT e.source_id,e.night,e.channel,COALESCE(s.longitude_deg,0) \
+         FROM extinction_nights e JOIN sources s ON s.id=e.source_id \
+         ORDER BY e.night DESC, e.source_id, e.channel",
+    )?;
+    let candidates: Vec<(String, i64, String, f64)> = q
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut written = 0usize;
+    let mut filled = 0usize;
+    for (source_id, night, channel, longitude) in candidates {
+        if filled >= limit {
+            break;
+        }
+        let offset = longitude / 15.0 * 3600.0;
+        let from = night as f64 * 86400.0 + 43200.0 - offset;
+        let (from_utc, to_utc) = (rfc3339(from), rfc3339(from + 86400.0));
+        let has: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM star_photometry \
+                 WHERE source_id=?1 AND channel=?2 AND observation_utc>=?3 \
+                   AND observation_utc<?4 AND optical_depth IS NOT NULL",
+                rusqlite::params![source_id, channel, from_utc, to_utc],
+                |r| r.get(0),
+            )
+            .unwrap_or(1);
+        if has > 0 {
+            continue;
+        }
+        if let Ok(Some(fit)) = extinction::load(conn, &source_id, night, &channel) {
+            written +=
+                extinction::record_depths(conn, &source_id, &channel, &from_utc, &to_utc, &fit)?;
+            filled += 1;
+        }
+    }
+    Ok(written)
+}
+
 /// Channels the clear-sky reference is fitted in. Cloud extinction is
 /// wavelength dependent, so each is fitted separately.
 const FIT_CHANNELS: [&str; 4] = ["mean", "r", "g", "b"];
@@ -609,6 +655,12 @@ pub fn run_cycle(
 
     // Then the clear-sky reference over what has been measured. It is cheap
     // next to the fitting, and it is what turns a flux into an optical depth.
+    // Fitted nights older than the fit window still need their depths written
+    // once, and this is what reaches them.
+    match backfill_depths(conn, 12) {
+        Ok(written) => report.optical_depths += written,
+        Err(error) => tracing::warn!(%error, "clear-sky depth backfill failed"),
+    }
     match fit_recent_nights(conn, settings) {
         Ok((stored, refused, depths)) => {
             report.fits = stored;

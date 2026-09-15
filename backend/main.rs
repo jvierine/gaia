@@ -790,6 +790,43 @@ async fn set_selected_calibration(
 struct StarsQuery {
     channel: Option<String>,
     hours: Option<f64>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StarNightsQuery {
+    channel: Option<String>,
+    days: Option<f64>,
+}
+
+/// A star peaks at `background + amplitude`. Once that reaches the top of the
+/// range the profile is clipped flat, and the fitted flux is an underestimate:
+/// exactly the case that must not be read as cloud. Bright aurora is what
+/// causes it, by lifting the background until the stars have no headroom left.
+const SATURATION_LEVEL: f64 = 250.0;
+
+/// The window a star request covers: an explicit night range when one is given,
+/// otherwise the trailing hours the panel has always used.
+fn star_window(from: &Option<String>, to: &Option<String>, hours: Option<f64>) -> (String, String) {
+    let parses = |v: &Option<String>| {
+        v.as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc).to_rfc3339())
+    };
+    match (parses(from), parses(to)) {
+        (Some(a), Some(b)) if a < b => (a, b),
+        _ => {
+            let hours = hours.unwrap_or(24.0).clamp(0.1, 24.0 * 400.0);
+            let now = Utc::now();
+            (
+                (now - chrono::Duration::milliseconds((hours * 3_600_000.0) as i64)).to_rfc3339(),
+                // Open at the top: a frame is never in the future, and clamping
+                // to now would drop one recorded in the same second.
+                (now + chrono::Duration::days(1)).to_rfc3339(),
+            )
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -798,6 +835,8 @@ struct StarFrameQuery {
     at: String,
     channel: Option<String>,
     hours: Option<f64>,
+    from: Option<String>,
+    to: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -805,6 +844,80 @@ struct StarSeriesQuery {
     star: String,
     channel: Option<String>,
     hours: Option<f64>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+/// The observing nights this camera has photometry for, newest first.
+///
+/// A night runs local solar noon to noon, the same definition the clear-sky fit
+/// uses, so one period of darkness is one entry instead of being split at
+/// midnight UTC. Selecting by night is what an operator wants: a run of frames
+/// under one sky, rather than a trailing number of hours that cuts an evening
+/// in half.
+async fn source_star_nights(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<StarNightsQuery>,
+) -> ApiResult<Json<Value>> {
+    let channel = query.channel.unwrap_or_else(|| "mean".into());
+    if !starphot::CHANNELS.contains(&channel.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
+    }
+    let days = query.days.unwrap_or(30.0).clamp(1.0, 400.0);
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let longitude: f64 = conn
+        .query_row("SELECT COALESCE(longitude_deg,0) FROM sources WHERE id=?1", [&id], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0.0);
+    let mut statement = conn
+        .prepare(
+            "SELECT observation_utc,count(*),sum(amplitude IS NOT NULL) FROM star_photometry
+             WHERE source_id=?1 AND channel=?2
+               AND julianday(observation_utc) >= julianday('now', ?3)
+             GROUP BY image_id ORDER BY observation_utc",
+        )
+        .map_err(internal)?;
+    let rows = statement
+        .query_map(rusqlite::params![id, channel, format!("-{days} days")], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        })
+        .map_err(internal)?;
+    let mut nights: std::collections::BTreeMap<i64, (i64, i64, i64)> = Default::default();
+    for row in rows {
+        let (at, looked, found) = row.map_err(internal)?;
+        let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&at) else { continue };
+        let night = extinction::night_index(parsed.timestamp() as f64, longitude);
+        let entry = nights.entry(night).or_insert((0, 0, 0));
+        entry.0 += 1;
+        entry.1 += looked;
+        entry.2 += found;
+    }
+    // The UTC span of a night, so the client can ask for it without repeating
+    // the local-solar arithmetic.
+    let span = |night: i64| {
+        let offset = longitude / 15.0 * 3600.0;
+        let from = night as f64 * 86400.0 + 43200.0 - offset;
+        let stamp = |t: f64| {
+            chrono::DateTime::from_timestamp(t as i64, 0)
+                .unwrap_or_else(Utc::now)
+                .to_rfc3339()
+        };
+        (stamp(from), stamp(from + 86400.0))
+    };
+    let listed: Vec<Value> = nights
+        .iter()
+        .rev()
+        .map(|(night, (frames, looked, found))| {
+            let (from, to) = span(*night);
+            json!({
+                "night": night, "from": from, "to": to,
+                "frames": frames, "looked_for": looked, "detections": found,
+            })
+        })
+        .collect();
+    Ok(Json(json!({"source_id": id, "channel": channel, "nights": listed})))
 }
 
 /// The horizon of a camera, projected into its own image, as a closed polygon.
@@ -863,18 +976,18 @@ async fn source_star_frame(
     if !starphot::CHANNELS.contains(&channel.as_str()) {
         return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
     }
-    let hours = query.hours.unwrap_or(24.0).clamp(0.1, 24.0 * 14.0);
-    let window = format!("-{hours} hours");
+    let (from, to) = star_window(&query.from, &query.to, query.hours);
     let conn = db::open(&s.db_path).map_err(internal)?;
     // The nearest measured frame to the requested instant, inside the window.
     let frame: Option<(String, String)> = conn
         .query_row(
             "SELECT image_id,observation_utc FROM star_photometry
              WHERE source_id=?1 AND channel=?2
-               AND julianday(observation_utc) >= julianday('now', ?3)
+               AND julianday(observation_utc) >= julianday(?3)
+               AND julianday(observation_utc) < julianday(?5)
              GROUP BY image_id
              ORDER BY abs(julianday(observation_utc) - julianday(?4)) LIMIT 1",
-            rusqlite::params![id, channel, window, query.at],
+            rusqlite::params![id, channel, from, query.at, to],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .ok();
@@ -893,12 +1006,13 @@ async fn source_star_frame(
     let mut statement = conn
         .prepare(
             "SELECT p.star_key,p.vt_mag,p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,
-                    p.elevation_deg,p.flux,p.flux_snr,p.amplitude,m.best
+                    p.elevation_deg,p.flux,p.flux_snr,p.amplitude,m.best,p.background
              FROM star_photometry p
              LEFT JOIN (SELECT star_key,max(flux) AS best FROM star_photometry
                         WHERE source_id=?1 AND channel=?2 AND amplitude IS NOT NULL
                           AND flux_snr >= 5
-                          AND julianday(observation_utc) >= julianday('now', ?3)
+                          AND julianday(observation_utc) >= julianday(?3)
+                          AND julianday(observation_utc) < julianday(?5)
                         GROUP BY star_key) m ON m.star_key=p.star_key
              WHERE p.source_id=?1 AND p.channel=?2 AND p.image_id=?4
              ORDER BY p.vt_mag",
@@ -906,7 +1020,7 @@ async fn source_star_frame(
         .map_err(internal)?;
     let rows = statement
         .query_map(
-            rusqlite::params![id, channel, window, image_id],
+            rusqlite::params![id, channel, from, image_id, to],
             |r| {
                 let predicted: (Option<f64>, Option<f64>) = (r.get(2)?, r.get(3)?);
                 let centroid: (Option<f64>, Option<f64>) = (r.get(4)?, r.get(5)?);
@@ -929,6 +1043,15 @@ async fn source_star_frame(
                     "flux_snr": r.get::<_, Option<f64>>(8)?,
                     "detected": detected.is_some(),
                     "best_flux": best,
+                    // The peak reached the top of the range, so the profile is
+                    // clipped and this flux is an underestimate. Aurora causes
+                    // it by lifting the background out from under the stars.
+                    "saturated": match (detected, r.get::<_, Option<f64>>(11)?) {
+                        (Some(amplitude), Some(background)) => {
+                            amplitude + background >= SATURATION_LEVEL
+                        }
+                        _ => false,
+                    },
                     // Fraction of this star's own best in the window. Null when
                     // the star was not found, which the client draws as absent
                     // rather than as dark.
@@ -981,7 +1104,7 @@ async fn source_stars(
     if !starphot::CHANNELS.contains(&channel.as_str()) {
         return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
     }
-    let hours = query.hours.unwrap_or(24.0).clamp(0.1, 24.0 * 14.0);
+    let (from, to) = star_window(&query.from, &query.to, query.hours);
     let conn = db::open(&s.db_path).map_err(internal)?;
     let mut statement = conn
         .prepare(
@@ -989,13 +1112,14 @@ async fn source_stars(
                     elevation_deg,flux,background,residual_std,flux_snr
              FROM star_photometry
              WHERE source_id=?1 AND channel=?2
-               AND julianday(observation_utc) >= julianday('now', ?3)
+               AND julianday(observation_utc) >= julianday(?3)
+               AND julianday(observation_utc) < julianday(?4)
              ORDER BY star_key,observation_utc",
         )
         .map_err(internal)?;
     let rows = statement
         .query_map(
-            rusqlite::params![id, channel, format!("-{hours} hours")],
+            rusqlite::params![id, channel, from, to],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -1083,7 +1207,7 @@ async fn source_stars(
             })
         })
         .collect();
-    Ok(Json(json!({"source_id":id,"channel":channel,"hours":hours,"stars":stars})))
+    Ok(Json(json!({"source_id":id,"channel":channel,"from":from,"to":to,"stars":stars})))
 }
 
 /// The brightness and background time series of one star, for plotting.
@@ -1097,7 +1221,7 @@ async fn source_star_series(
     if !starphot::CHANNELS.contains(&channel.as_str()) {
         return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
     }
-    let hours = query.hours.unwrap_or(24.0).clamp(0.1, 24.0 * 14.0);
+    let (from, to) = star_window(&query.from, &query.to, query.hours);
     let conn = db::open(&s.db_path).map_err(internal)?;
     let mut statement = conn
         .prepare(
@@ -1111,13 +1235,14 @@ async fn source_star_series(
              FROM star_photometry p
              LEFT JOIN frame_sky s ON s.source_id=p.source_id AND s.image_id=p.image_id
              WHERE p.source_id=?1 AND p.star_key=?2 AND p.channel=?3
-               AND julianday(p.observation_utc) >= julianday('now', ?4)
+               AND julianday(p.observation_utc) >= julianday(?4)
+               AND julianday(p.observation_utc) < julianday(?5)
              ORDER BY p.observation_utc",
         )
         .map_err(internal)?;
     let samples: Vec<Value> = statement
         .query_map(
-            rusqlite::params![id, star, channel, format!("-{hours} hours")],
+            rusqlite::params![id, star, channel, from, to],
             |r| {
                 Ok(json!({
                     "at": r.get::<_,String>(0)?,
@@ -1157,7 +1282,7 @@ async fn source_star_series(
         .filter_map(|v| v["flux"].as_f64())
         .collect();
     Ok(Json(json!({
-        "source_id": id, "star_key": star, "channel": channel, "hours": hours,
+        "source_id": id, "star_key": star, "channel": channel, "from": from, "to": to,
         "clear_flux": starphot::percentile(&fluxes, 0.9),
         "variation": starphot::brightness_variation(&fluxes),
         "samples": samples,
@@ -1309,6 +1434,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/stars", get(source_stars))
         .route("/api/sources/{id}/stars/series", get(source_star_series))
         .route("/api/sources/{id}/stars/frame", get(source_star_frame))
+        .route("/api/sources/{id}/stars/nights", get(source_star_nights))
         .route(
             "/api/sources/{id}/calibrations",
             get(source_calibrations).post(set_selected_calibration),

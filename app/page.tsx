@@ -18,7 +18,8 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
 type StarSummary = {star_key:string;vt_mag:number;ra_hours_j2000:number;dec_deg_j2000:number;image_x:number|null;image_y:number|null;elevation_deg:number|null;frames:number;found:number;median_flux:number|null;clear_flux:number|null;median_background:number|null;variation:number|null};
 type StarSample = {at:string;flux:number|null;background:number|null;sigma_major:number|null;sigma_minor:number|null;angle_deg:number|null;centroid_offset_px:number|null;elevation_deg:number};
 const STAR_CHANNELS = ['mean','r','g','b'] as const;
-type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;best_flux:number|null;relative:number|null};
+type FrameStar={star_key:string;vt_mag:number;x:number|null;y:number|null;elevation_deg:number|null;flux:number|null;flux_snr:number|null;detected:boolean;saturated:boolean;best_flux:number|null;relative:number|null};
+type StarNight={night:number;from:string;to:string;frames:number;looked_for:number;detections:number};
 type StarFrame={image_id:string|null;observation_utc?:string;width?:number|null;height?:number|null;field?:[number,number][]|null;stars:FrameStar[]};
 /// A star at its own best through the window reads bright, one that has faded
 /// reads dark and red. The quantity is the star's intensity as a fraction of
@@ -122,6 +123,11 @@ function Credits(){
 function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [channel,setChannel]=useState<string>('mean');
   const [hours,setHours]=useState(24);
+  // Observing nights this camera has, and the run of them being shown. A night
+  // is local solar noon to noon, so one period of darkness is one entry and a
+  // selection never cuts an evening in half.
+  const [nights,setNights]=useState<StarNight[]>([]);
+  const [range,setRange]=useState<{from:number;to:number}|null>(null);
   const [stars,setStars]=useState<StarSummary[]>([]);
   const [selected,setSelected]=useState<string[]>([]);
   const [series,setSeries]=useState<Record<string,StarSample[]>>({});
@@ -137,9 +143,17 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [zoom,setZoom]=useState(1);
   const [centre,setCentre]=useState<[number,number]|null>(null);
   const pan=useRef<{x:number;y:number;cx:number;cy:number}|null>(null);
+  // The window every request in this panel asks for: the selected run of
+  // nights when there is one, the trailing hours otherwise.
+  const chosen=range?nights.filter(n=>n.night>=range.from&&n.night<=range.to):[];
+  const span=chosen.length
+    ?`from=${encodeURIComponent(chosen[chosen.length-1].from)}&to=${encodeURIComponent(chosen[0].to)}`
+    :`hours=${hours}`;
+  const pickNight=(night:number,extend:boolean)=>setRange(prev=>
+    extend&&prev?{from:Math.min(prev.from,night),to:Math.max(prev.to,night)}:{from:night,to:night});
   useEffect(()=>{
     const controller=new AbortController();setLoading(true);setError('');
-    void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars?channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
+    void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars?channel=${channel}&${span}`,{cache:'no-store',signal:controller.signal})
       .then(async r=>{if(!r.ok)throw new Error('Could not load star photometry.');return await r.json() as {stars:StarSummary[]}})
       .then(body=>{const rows=body.stars.filter(x=>x.image_x!=null&&x.image_y!=null);setStars(rows);
         setSelected(prev=>{const keep=prev.filter(k=>rows.some(r=>r.star_key===k));
@@ -148,36 +162,45 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
       .catch(e=>{if(!controller.signal.aborted)setError(String(e.message||e))})
       .finally(()=>{if(!controller.signal.aborted)setLoading(false)});
     return()=>controller.abort();
-  },[camera.id,channel,hours]);
+  },[camera.id,channel,span]);
   useEffect(()=>{
     const controller=new AbortController();
     for(const key of selected){
-      if(series[`${channel}:${key}`])continue;
-      void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/series?star=${encodeURIComponent(key)}&channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
+      if(series[`${span}:${channel}:${key}`])continue;
+      void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/series?star=${encodeURIComponent(key)}&channel=${channel}&${span}`,{cache:'no-store',signal:controller.signal})
         .then(async r=>r.ok?await r.json() as {samples:StarSample[]}:{samples:[]})
-        .then(body=>setSeries(prev=>({...prev,[`${channel}:${key}`]:body.samples})))
+        .then(body=>setSeries(prev=>({...prev,[`${span}:${channel}:${key}`]:body.samples})))
         .catch(()=>{});
     }
     return()=>controller.abort();
-  },[selected,channel,hours,camera.id,series]);
+  },[selected,channel,span,camera.id,series]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/nights?channel=${channel}&days=60`,{cache:'no-store',signal:controller.signal})
+      .then(async r=>r.ok?await r.json() as {nights:StarNight[]}:{nights:[]})
+      .then(body=>setNights(body.nights))
+      .catch(()=>{});
+    return()=>controller.abort();
+  },[camera.id,channel]);
+  useEffect(()=>{setRange(null)},[camera.id]);
   // A new camera, channel or window invalidates the scrubbed frame.
-  useEffect(()=>{setCursor(null);setFrame(null)},[camera.id,channel,hours]);
+  useEffect(()=>{setCursor(null);setFrame(null)},[camera.id,channel,span]);
   useEffect(()=>{setZoom(1);setCentre(null)},[frame?.image_id]);
   useEffect(()=>{
     if(cursor==null){setFrame(null);return}
     const controller=new AbortController();
     // The pointer moves far faster than the request; wait for it to settle.
     const timer=window.setTimeout(()=>{setFrameBusy(true);
-      void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/frame?at=${encodeURIComponent(new Date(cursor).toISOString())}&channel=${channel}&hours=${hours}`,{cache:'no-store',signal:controller.signal})
+      void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/stars/frame?at=${encodeURIComponent(new Date(cursor).toISOString())}&channel=${channel}&${span}`,{cache:'no-store',signal:controller.signal})
         .then(async r=>r.ok?await r.json() as StarFrame:null)
         .then(body=>{if(!controller.signal.aborted)setFrame(body)})
         .catch(()=>{})
         .finally(()=>{if(!controller.signal.aborted)setFrameBusy(false)})},120);
     return()=>{controller.abort();window.clearTimeout(timer)};
-  },[cursor,camera.id,channel,hours]);
+  },[cursor,camera.id,channel,span]);
   const toggle=(key:string)=>setSelected(prev=>prev.includes(key)?prev.filter(k=>k!==key):[...prev,key]);
   const palette=['#56f0c5','#f3b647','#72ccef','#ff8fa3','#baff78','#c9a0ff'];
-  const picked=selected.map((k,i)=>({key:k,colour:palette[i%palette.length],samples:series[`${channel}:${k}`]||[]}));
+  const picked=selected.map((k,i)=>({key:k,colour:palette[i%palette.length],samples:series[`${span}:${channel}:${k}`]||[]}));
   const times=picked.flatMap(p=>p.samples.map(x=>Date.parse(x.at))).filter(Number.isFinite);
   const t0=times.length?Math.min(...times):0,t1=times.length?Math.max(...times):1;
   const band=(get:(x:StarSample)=>number|null)=>{
@@ -226,9 +249,21 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
       <span className="eyebrow">CHANNEL</span>
       {STAR_CHANNELS.map(c=><button key={c} type="button" aria-pressed={channel===c} onClick={()=>setChannel(c)}>{c==='mean'?'mean':c.toUpperCase()}</button>)}
       <span className="eyebrow">WINDOW</span>
-      {[6,24,72].map(v=><button key={v} type="button" aria-pressed={hours===v} onClick={()=>setHours(v)}>{v} h</button>)}
+      {[6,24,72].map(v=><button key={v} type="button" aria-pressed={!range&&hours===v} onClick={()=>{setRange(null);setHours(v)}}>{v} h</button>)}
       <small role="status">{loading?'Loading\u2026':`${stars.length} stars, ${selected.length} selected`}</small>
     </div>
+    {nights.length>0&&<div className="star-nights" role="group" aria-label="Observing nights">
+      <span className="eyebrow">NIGHT</span>
+      {nights.map(n=>{const on=!!range&&n.night>=range.from&&n.night<=range.to;
+        // A night runs local noon to noon, so name it by the evening it starts.
+        const label=new Date(n.from).toISOString().slice(5,10);
+        return <button key={n.night} type="button" aria-pressed={on}
+          title={`${n.frames} frames, ${n.detections} detections\nClick to show this night, shift-click to extend across consecutive nights`}
+          onClick={event=>pickNight(n.night,event.shiftKey)}>{label}</button>})}
+      <small role="status">{range
+        ?`${chosen.length} night${chosen.length===1?'':'s'}, ${chosen.reduce((t,n)=>t+n.frames,0)} frames \u00b7 shift-click to extend`
+        :'or pick a night; shift-click a second to span consecutive nights'}</small>
+    </div>}
     {error&&<p role="alert">{error}</p>}
     {!loading&&!error&&stars.length===0&&<div className="history-empty">No star photometry recorded for this camera yet.</div>}
     {stars.length>0&&<div className="star-panels">
@@ -318,16 +353,27 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
               <g className="star-cells">{cells.map((e,i)=><line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
                 stroke={relativeColour(fainter(e.a,e.b))} strokeWidth={r0*0.7} strokeLinecap="round"/>)}</g>
               {placed.map(r=>{const on=selected.includes(r.star_key);
+                const size=r0*(r.detected?1.6:1.1)*(on?1.5:1);
+                const x=r.x as number,y=r.y as number;
                 return <g key={r.star_key} className={on?'chosen':''} onClick={()=>toggle(r.star_key)}>
-                  <circle cx={r.x as number} cy={r.y as number}
-                    r={r0*(r.detected?1.6:1.1)*(on?1.5:1)}
+                  {r.saturated
+                    // Background plus star has reached the top of the range, so
+                    // the peak is clipped and this flux is an underestimate.
+                    // Crossed out rather than filled: the colour is still the
+                    // fading, but the number behind it is not to be trusted.
+                    ?<g stroke={relativeColour(r.relative)} strokeWidth={r0*0.55} strokeLinecap="round">
+                      <line x1={x-size} y1={y-size} x2={x+size} y2={y+size}/>
+                      <line x1={x-size} y1={y+size} x2={x+size} y2={y-size}/>
+                      {on&&<circle cx={x} cy={y} r={size*1.5} fill="none" stroke="#fff" strokeWidth={r0*0.4}/>}
+                    </g>
+                    :<circle cx={x} cy={y} r={size}
                     fill={r.detected?relativeColour(r.relative):'none'}
                     fillOpacity={r.detected?0.9:0}
                     stroke={on?'#fff':r.detected?'rgba(0,0,0,.55)':'rgba(255,255,255,.45)'}
                     strokeWidth={r0*(on?0.55:0.3)}
-                    strokeDasharray={r.detected?undefined:`${r0*0.8} ${r0*0.6}`}/>
+                    strokeDasharray={r.detected?undefined:`${r0*0.8} ${r0*0.6}`}/>}
                   <title>{`V ${r.vt_mag.toFixed(2)}  elevation ${r.elevation_deg?.toFixed(1)??'?'}\u00b0
-${r.detected?`flux ${r.flux?.toPrecision(4)} of best ${r.best_flux?.toPrecision(4)}
+${r.saturated?'SATURATED: background plus star fills the range, so this flux is an underestimate\n':''}${r.detected?`flux ${r.flux?.toPrecision(4)} of best ${r.best_flux?.toPrecision(4)}
 ${r.relative==null?'':(r.relative*100).toFixed(0)+'% of its own maximum, '+(magnitudesDown(r.relative)?.toFixed(2)??'?')+' mag down'}`:'not detected in this frame'}
 SNR ${r.flux_snr==null?'n/a':r.flux_snr.toFixed(1)}`}</title>
                 </g>})}
@@ -335,7 +381,7 @@ SNR ${r.flux_snr==null?'n/a':r.flux_snr.toFixed(1)}`}</title>
             <div className="star-ramp"><small>faded</small>
               {[0,0.04,0.16,0.36,0.64,1].map(v=><i key={v} style={{background:relativeColour(v)}}/>)}
               <small>at its best</small></div>
-            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found. The web divides the camera's field into the region nearest each identified star, every boundary taking the colour of the more faded star across it, so a clouded star is ringed in dark red all the way round. Click a star to plot it.</small>
+            <small className="star-hint">Colour is this star's intensity as a fraction of its own maximum over the window, so faint and bright stars read alike; the ramp is square-root spaced because a star's best is its single clearest moment near the top of its arc. Dashed rings were looked for and not found; crosses saturated, their peak clipped by a background that bright aurora has lifted, so their intensity reads low. The web divides the camera's field into the region nearest each identified star, every boundary taking the colour of the more faded star across it, so a clouded star is ringed in dark red all the way round. Click a star to plot it.</small>
           </>})():<>
         <div className="star-plot-head"><strong>Star positions in the frame</strong><small>colour is brightness variation</small></div>
         <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label="Star image positions coloured by brightness variation">

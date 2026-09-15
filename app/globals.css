@@ -196,3 +196,8 @@
 .star-zoom button:hover{border-color:var(--accent)}
 .star-zoom small{color:var(--muted);font-variant-numeric:tabular-nums}
 .star-frame{touch-action:none}
+
+.star-nights{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap;margin:-.15rem 0 .5rem}
+.star-nights button{background:rgba(8,28,40,.75);color:var(--text);border:1px solid rgba(103,200,215,.3);border-radius:6px;padding:.1rem .45rem;font:inherit;font-variant-numeric:tabular-nums;cursor:pointer}
+.star-nights button[aria-pressed=true]{background:var(--accent);color:#04121a;border-color:var(--accent)}
+.star-nights small{color:var(--muted)}

@@ -119,3 +119,15 @@ CREATE TABLE IF NOT EXISTS star_zero_points(
   PRIMARY KEY(source_id,night,channel,star_key)
 );
 CREATE INDEX IF NOT EXISTS extinction_by_camera ON extinction_nights(source_id,night);
+
+-- Every clear-sky fit the pass has tried, whether or not it produced a
+-- coefficient. A refusal is a result: this camera-night, with the data it had,
+-- could not constrain extinction. Recording it stops the pass spending its
+-- whole budget re-deciding the same hopeless nights and never reaching the rest
+-- of the archive.
+CREATE TABLE IF NOT EXISTS extinction_attempts(
+  source_id TEXT NOT NULL REFERENCES sources(id), night INTEGER NOT NULL, channel TEXT NOT NULL,
+  attempted_utc TEXT NOT NULL, fitted INTEGER NOT NULL,
+  PRIMARY KEY(source_id,night,channel)
+);
+CREATE INDEX IF NOT EXISTS extinction_attempts_recent ON extinction_attempts(source_id,attempted_utc);

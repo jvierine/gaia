@@ -164,17 +164,28 @@ const CALIBRATION_FOR_FRAME: &str = "c.id=COALESCE(\
 /// newest first. A sky row is the mark that the pass has seen a frame, so this
 /// set drains even for frames that are never worth photometering.
 pub fn pending_frames(conn: &Connection, settings: &Settings) -> Result<Vec<Frame>> {
-    let sql = format!(
-        "SELECT i.id,s.id,i.archive_path,i.observation_utc,s.latitude_deg,s.longitude_deg,c.hdf5_path \
-         FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON {CALIBRATION_FOR_FRAME} \
+    // The cutoff is compared as a string, not through julianday(). Every
+    // observation_utc in the archive is RFC 3339 with a +00:00 offset, so the
+    // ordering is the same, and it lets this use idx_images_observation instead
+    // of evaluating a function over every row. Wrapped in julianday() the same
+    // query took over two minutes on the live archive; this takes milliseconds.
+    let cutoff = (chrono::Utc::now()
+        - chrono::Duration::milliseconds((settings.lookback_hours * 3_600_000.0) as i64))
+    .to_rfc3339();
+    // Candidates only. Resolving which calibration covers each frame is a
+    // correlated subquery, far too expensive to run over every image in the
+    // window; it is done below for the few frames actually selected.
+    let mut q = conn.prepare(
+        "SELECT i.id,s.id,i.archive_path,i.observation_utc,s.latitude_deg,s.longitude_deg \
+         FROM images i JOIN sources s ON s.id=i.source_id \
          WHERE s.enabled=1 AND s.latitude_deg IS NOT NULL AND s.longitude_deg IS NOT NULL \
-           AND julianday(i.observation_utc) >= julianday('now') - ?1/24.0 \
-           AND NOT EXISTS(SELECT 1 FROM frame_sky f WHERE f.source_id=s.id AND f.image_id=i.id) \
-         ORDER BY i.observation_utc DESC LIMIT ?2"
-    );
-    let mut q = conn.prepare(&sql)?;
+           AND i.observation_utc >= ?1 \
+           AND EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) \
+           AND NOT EXISTS(SELECT 1 FROM frame_sky f WHERE f.source_id=i.source_id AND f.image_id=i.id) \
+         ORDER BY i.observation_utc DESC LIMIT ?2",
+    )?;
     let rows = q.query_map(
-        rusqlite::params![settings.lookback_hours, settings.max_sky_rows_per_cycle as i64],
+        rusqlite::params![cutoff, settings.max_sky_rows_per_cycle as i64],
         |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -183,13 +194,25 @@ pub fn pending_frames(conn: &Connection, settings: &Settings) -> Result<Vec<Fram
                 r.get::<_, String>(3)?,
                 r.get::<_, f64>(4)?,
                 r.get::<_, f64>(5)?,
-                r.get::<_, String>(6)?,
             ))
         },
     )?;
+    let candidates = rows.collect::<Result<Vec<_>, _>>()?;
+    // The shared expression keys off i.observation_utc; here the frame's time is
+    // bound directly, so that reference becomes the parameter.
+    let calibration = format!(
+        "SELECT c.hdf5_path FROM sources s JOIN calibrations c ON {} WHERE s.id=?1",
+        CALIBRATION_FOR_FRAME.replace("i.observation_utc", "?2")
+    );
+    let mut lens = conn.prepare(&calibration)?;
     let mut out = Vec::new();
-    for row in rows {
-        let (image_id, source_id, archive_path, observation_utc, lat, lon, cal) = row?;
+    for (image_id, source_id, archive_path, observation_utc, lat, lon) in candidates {
+        // The calibration expression keys off i.observation_utc, so the frame's
+        // time is supplied as that column for this single-row lookup.
+        let cal: Option<String> = lens
+            .query_row(rusqlite::params![source_id, observation_utc], |r| r.get(0))
+            .ok();
+        let Some(cal) = cal else { continue };
         // A frame whose timestamp cannot be read has no sky position, so it has
         // no measurement either. Left pending rather than recorded wrongly.
         let Some(unix) = unix_seconds(&observation_utc) else {
@@ -352,11 +375,16 @@ const FIT_CHANNELS: [&str; 4] = ["mean", "r", "g", "b"];
 /// a night in progress improves through the evening and settles once the camera
 /// stops contributing to it.
 pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usize, usize)> {
+    // Least recently tried first, and never-tried before either. A cycle can
+    // only afford a few fits, so without this the walk restarts at the same
+    // camera every time and the far end of the archive is never reached.
     let mut cameras = conn.prepare(
-        "SELECT DISTINCT p.source_id, s.longitude_deg FROM star_photometry p \
-         JOIN sources s ON s.id=p.source_id \
+        "SELECT p.source_id, s.longitude_deg, \
+                (SELECT max(a.attempted_utc) FROM extinction_attempts a WHERE a.source_id=p.source_id) AS tried \
+         FROM star_photometry p JOIN sources s ON s.id=p.source_id \
          WHERE s.longitude_deg IS NOT NULL \
-           AND julianday(p.observation_utc) >= julianday('now') - ?1",
+           AND julianday(p.observation_utc) >= julianday('now') - ?1 \
+         GROUP BY p.source_id ORDER BY tried IS NOT NULL, tried",
     )?;
     let rows = cameras.query_map(rusqlite::params![settings.fit_nights + 1], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
@@ -388,15 +416,28 @@ pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usiz
                 )
                 .unwrap_or(None);
             let Some(newest) = newest else { continue };
-            let fitted: Option<String> = conn
+            // Every channel already decided on data at least this recent. A
+            // refusal counts: it means this night cannot be fitted as it stands,
+            // and re-deciding it every five minutes starves every camera behind
+            // it in the list.
+            let decided: Option<String> = conn
                 .query_row(
-                    "SELECT min(fitted_utc) FROM extinction_nights \
+                    "SELECT min(attempted_utc) FROM extinction_attempts \
                      WHERE source_id=?1 AND night=?2",
                     rusqlite::params![source_id, night],
                     |r| r.get(0),
                 )
                 .unwrap_or(None);
-            if fitted.as_deref().is_some_and(|f| f > newest.as_str()) {
+            let complete: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM extinction_attempts WHERE source_id=?1 AND night=?2",
+                    rusqlite::params![source_id, night],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if complete as usize >= FIT_CHANNELS.len()
+                && decided.as_deref().is_some_and(|d| d > newest.as_str())
+            {
                 continue;
             }
             for channel in FIT_CHANNELS {
@@ -418,13 +459,26 @@ pub fn fit_recent_nights(conn: &Connection, settings: &Settings) -> Result<(usiz
                         },
                     )?
                     .collect::<Result<Vec<_>, _>>()?;
-                match extinction::fit_night(&samples) {
-                    Some(fit) => {
-                        extinction::record(conn, &source_id, night, channel, &fit)?;
-                        stored += 1;
-                    }
-                    None => refused += 1,
+                let outcome = extinction::fit_night(&samples);
+                if let Some(fit) = &outcome {
+                    extinction::record(conn, &source_id, night, channel, fit)?;
+                    stored += 1;
+                } else {
+                    refused += 1;
                 }
+                conn.execute(
+                    "INSERT INTO extinction_attempts(source_id,night,channel,attempted_utc,fitted) \
+                     VALUES(?1,?2,?3,?4,?5) \
+                     ON CONFLICT(source_id,night,channel) DO UPDATE SET \
+                        attempted_utc=excluded.attempted_utc,fitted=excluded.fitted",
+                    rusqlite::params![
+                        source_id,
+                        night,
+                        channel,
+                        chrono::Utc::now().to_rfc3339(),
+                        outcome.is_some() as i64
+                    ],
+                )?;
             }
         }
     }
@@ -458,9 +512,6 @@ pub fn run_cycle(
 ) -> Result<Report> {
     let mut report = Report::default();
     let pending = pending_frames(conn, settings)?;
-    if pending.is_empty() {
-        return Ok(report);
-    }
     // Sun and Moon first, for every pending frame. This is arithmetic only, and
     // writing it now both fills the sky record and drains the pending set.
     let mut dark: HashMap<String, Vec<Frame>> = HashMap::new();

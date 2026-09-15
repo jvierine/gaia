@@ -41,11 +41,11 @@ fills them all exist, and the writer has been running in production since
 of them detecting stars. The clear-sky reference exists too, and after three
 faults were found and fixed it is accumulating: 59 fits over 20 cameras at the
 time of writing, at \num{0.18} magnitudes per air mass against a literature
-clear sky near \num{0.20}, a figure the estimator was never told. What still
-does not exist is the step from a measurement to a cloud number. No flux has yet
-become an optical depth, so no cloud weight reaches the composite and no cloud
-map is published. That is now the whole of the remaining work, and none of it is
-research: the reference it was waiting for is in place.
+clear sky near \num{0.20}, a figure the estimator was never told. Every measurement a fitted
+camera-night explains now carries a vertical optical depth, with saturated,
+undetectable and unexplained measurements deliberately left null rather than
+guessed. What remains is to spend that number: no cloud weight yet reaches the
+composite and no cloud map is published. Neither is research.
 \end{abstract}
 
 \section{What changed since the first issue}
@@ -802,6 +802,48 @@ state of the reference can be read without touching the database. A quantity
 that cannot be observed without risk will not be observed, and will therefore be
 assumed.
 
+\section{From a reference to a depth}
+\label{sec:depth}
+
+Every measurement a fitted camera-night explains now carries a vertical optical
+depth, from that night's coefficient and the star's own zero point:
+\[
+  \tau_{\mathrm v} = \cos z\,\bigl[\ln F_{\mathrm{clear}}(X) - \ln F\bigr],
+  \qquad \ln F_{\mathrm{clear}}(X) = \ln F_0 - \beta k X .
+\]
+The reference is the clear-sky flux \emph{at that sample's own air mass}, which
+is the whole point of fitting $k$: before it, a star compared against a single
+number for the night was compared against the wrong elevation.
+
+\paragraph{Where no number is claimed.} Three kinds of measurement are left
+null rather than given a depth, because in each case a number would be a
+fiction. A star looked for and not found has no flux. A star whose peak is
+clipped reports an underestimate, and bright aurora makes that common, so its
+depth would read as a fading rather than as a full detector. A star
+indistinguishable from its own noise is not a measurement, and a fit to noise
+returns a small positive flux that a clear-sky reference turns into thin cloud.
+
+Camera-nights the fit refuses, which are the majority, keep no depth at all.
+That is the stated fallback, and it must stay one downstream: a missing depth
+has to become \emph{no weight}, never a guessed one. A refit clears its window
+before writing, so a depth that the new fit would refuse cannot survive as a
+stale number.
+
+\paragraph{Verified against planted cloud.} On a synthetic night whose cloud
+arrives in episodes independent of elevation, the coefficient comes back at
+\num{0.200} against a planted \num{0.200}, clear samples read a depth of
+\num{0.0}, and clouded ones average \num{0.80} against planted cloud of
+\num{0.3} to \num{1.2}. Of 180 measurements 178 carry a depth; the two
+exceptions are exactly the saturated sample and the one buried in noise.
+
+An earlier version of that test planted cloud that thickened as elevation fell.
+That is the degenerate case of Sec.~\ref{sec:airmass}: no clear sky survives at
+high air mass, so the fit charged the weather to the atmosphere and returned
+$k=\num{0.808}$. The data was wrong, not the estimator, but it is worth
+recording that this failure looks exactly like success --- depths are produced,
+they are larger where the cloud was --- until the coefficient itself is checked
+against something. It is the cheapest available audit of the whole chain.
+
 \section{Where the cloud weight now has to go}
 \label{sec:weightpath}
 
@@ -841,14 +883,9 @@ term should follow that pattern rather than work around it.
 \label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{Carry the reference through to a stored optical depth.} This is
-    the whole of what is left between the archive and a cloud number. The
-    reference exists and is accumulating (Sec.~\ref{sec:reference},
-    Sec.~\ref{sec:stall}), and $\tau$ follows from it in one line, but nothing
-    yet writes a $\tau$ per measurement. Three things must be decided with it:
-    saturated measurements excluded, undetectable ones excluded, and a stated
-    fallback for the camera-nights the fit refuses, which are the majority --- no
-    weight at all rather than a guessed one.
+  \item \textbf{Spend the optical depth.} It is now stored
+    (Sec.~\ref{sec:depth}); nothing yet reads it. Two things should:
+    \texttt{cloud\_weight} in the composite, and a cell value in the cloud map.
   \item \textbf{Gate $\tau$ on detectability}, so a fit that is indistinguishable
     from noise is treated as an absent star rather than a faint one.
   \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:

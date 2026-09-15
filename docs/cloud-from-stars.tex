@@ -815,13 +815,37 @@ The reference is the clear-sky flux \emph{at that sample's own air mass}, which
 is the whole point of fitting $k$: before it, a star compared against a single
 number for the night was compared against the wrong elevation.
 
-\paragraph{Where no number is claimed.} Three kinds of measurement are left
-null rather than given a depth, because in each case a number would be a
-fiction. A star looked for and not found has no flux. A star whose peak is
-clipped reports an underestimate, and bright aurora makes that common, so its
-depth would read as a fading rather than as a full detector. A star
-indistinguishable from its own noise is not a measurement, and a fit to noise
-returns a small positive flux that a clear-sky reference turns into thin cloud.
+\paragraph{A missing star is the strongest signal there is.} A star brighter
+than $V=\num{3.5}$ and more than \SI{20}{\degree} above the horizon is one the
+camera sees whenever the sky is clear. Its absence is therefore a measurement,
+and the most informative one available: a total fading leaves exactly no flux
+behind, so treating these as ``no data'' discards precisely the deepest cloud
+and biases the archive towards clear. Noise-level and zero-level intensity above
+background now count as a fading for such a star.
+
+What is credited is a lower bound wherever the frame provides one. The star fell
+at least as far as the faintest star that frame did detect, so
+\[
+  \tau_{\mathrm v} \;\ge\; \cos z\,\ln\frac{F_{\mathrm{clear}}(X)}{F_{\mathrm{faintest}}} .
+\]
+Where a frame detected nothing at all there is no floor to measure against and
+the fading is credited as total, an optical depth of 6, under a quarter of a
+percent transmitted.
+
+\paragraph{Unless the detector is full.} Above \num{240} counts the sky itself
+fills the range and a missing star is explained by the detector rather than by
+the weather, so nothing is claimed. The test uses the brightest background the
+frame shows rather than a typical one, which errs towards not claiming a fading:
+the cost of a missed cloud is a slightly optimistic mosaic, while the cost of an
+invented one is a camera wrongly suppressed.
+
+\paragraph{Where no number is claimed.} Three kinds of measurement are still
+left null, because in each case a number would be a fiction. A faint or low star
+that was not found may simply have been beyond this camera on this night. A star
+whose peak is clipped reports an underestimate, so its depth would read as a
+fading rather than as a full detector. And a star indistinguishable from its own
+noise is not a measurement --- unless it is one of the certain ones above, where
+the absence itself is the measurement.
 
 Camera-nights the fit refuses, which are the majority, keep no depth at all.
 That is the stated fallback, and it must stay one downstream: a missing depth
@@ -834,7 +858,9 @@ arrives in episodes independent of elevation, the coefficient comes back at
 \num{0.200} against a planted \num{0.200}, clear samples read a depth of
 \num{0.0}, and clouded ones average \num{0.80} against planted cloud of
 \num{0.3} to \num{1.2}. Of 180 measurements 178 carry a depth; the two
-exceptions are exactly the saturated sample and the one buried in noise.
+exceptions are exactly the saturated sample and the one buried in noise. On a
+second night with three frames fully overcast, all nine bright, high misses are
+credited at the total depth and all nine faint or low misses are left alone.
 
 An earlier version of that test planted cloud that thickened as elevation fell.
 That is the degenerate case of Sec.~\ref{sec:airmass}: no clear sky survives at

@@ -535,6 +535,39 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
+## Pending install: paired keograms (2026-09-15)
+
+Two new endpoints and a new sub-tab. `/api/sources/{id}/keogram-pairs` lists
+the cameras a given one can be compared against -- enabled, located,
+calibrated, and within 746 km, which is twice the ground reach at the taper
+knee. `/api/sources/{id}/keogram?partner=...` samples the equidistant cut in
+both cameras on a common time grid and returns the two profiles per row.
+
+Cost, since it is the thing to watch: one texture decode per camera per row.
+Rows are capped at 300 and a wide window is thinned rather than truncated, so
+a 24 h request loses cadence instead of its tail. Textures come from
+`projection-cache`, shared with the composite, so a window that has been
+published is cheap and one that has not pays a full-resolution decode per
+frame the first time only. If the endpoint is ever slow, that is why.
+
+Both halves have to go in together -- the panel calls endpoints the old binary
+does not serve. As bgu001, from the repository root:
+
+    tar xzf /mnt/data/juha/gaia/staging/web-dist-fb60ef1.tar.gz
+
+then the binary, by whichever route is available (the release directory is
+owned by j; `kill -9` is what makes `Restart=on-failure` fire, a plain TERM
+would leave the service down):
+
+    sudo install -o j -g j -m 755 /mnt/data/juha/gaia/staging/gaia-server-fb60ef1 /mnt/data/juha/gaia-build/release/gaia-server.new
+    sudo mv /mnt/data/juha/gaia-build/release/gaia-server.new /mnt/data/juha/gaia-build/release/gaia-server
+    sudo kill -9 $(pgrep -u j -f '/mnt/data/juha/gaia-build/release/gaia-server')
+
+sha256: binary `fa9405f76e1b25601e0644552b2eab374cf1c0d2fea14342631d796111e7e833`,
+bundle `bba348e19727cbf60d47e7fb419fba1b27a313af3dd66d6658bb2e21c821b86c`.
+Back out with `gaia-server-3d7fae9` and `web-dist-9bd0b5a.tar.gz`. No schema
+change either way.
+
 ## Pending backend install: the star series read the wrong column (2026-09-15)
 
 `/api/sources/{id}/stars/series` listed `p.optical_depth` as its 22nd column

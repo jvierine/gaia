@@ -535,17 +535,17 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
-## Pending backend install: camera field outline (2026-09-14)
+## Pending backend install: night selection and saturation (2026-09-15)
 
-The running `gaia-server` was installed 2026-09-14 09:27 at commit `66cb4d3`,
-so it already has the clear-sky reference and the frame endpoint. What it lacks
-is the camera field outline that endpoint now returns. bgu001
+The running `gaia-server` was installed 2026-09-14 19:23 at commit `d1adbb8`,
+so it has the clear-sky reference, the frame endpoint and the camera field
+outline. What it lacks is night selection and the saturation flag. bgu001
 cannot do it: `/mnt/data/juha/gaia-build` is j-owned and the live unit is j's
-USER `gaia-revontuli.service`. A release build of `d1adbb8` is staged at
-`/mnt/data/juha/gaia/staging/gaia-server-d1adbb8`, sha256
-`2c4c85e82212cb8a2d321fdc5a55287cddac2f579f66ca0bb8a2759030504bff`. As j:
+USER `gaia-revontuli.service`. A release build of `b8d2d86` is staged at
+`/mnt/data/juha/gaia/staging/gaia-server-b8d2d86`, sha256
+`2846ab2bea063131bb75c08978f430e06b46df8cb3e28a837ea37568a1570c33`. As j:
 
-    cp /mnt/data/juha/gaia/staging/gaia-server-d1adbb8 /mnt/data/juha/gaia-build/release/gaia-server
+    cp /mnt/data/juha/gaia/staging/gaia-server-b8d2d86 /mnt/data/juha/gaia-build/release/gaia-server
     systemctl --user restart gaia-revontuli.service
 
 Earlier staged builds are removed as they are superseded, so the staging
@@ -745,7 +745,7 @@ from the repo, so that panel is already live in front of the older backend. The
 request 404s there and the panel simply stays on its aggregate scatter, which is
 inert rather than harmful, but scrubbing does nothing until this build is in.
 
-### What the d1adbb8 install adds over the running build
+### What the d1adbb8 install added, now in place
 
 `GET /api/sources/{id}/stars/frame` gains a `field` member: the camera's own
 horizon projected into its image, so the star photometry tab can cut the Voronoi
@@ -767,3 +767,22 @@ still runs to the frame corners on fisheye cameras.
 - Inspect the final commit message before pushing, including trailers inserted automatically by tools. Disable automatic AI attribution in your tool settings. These rules apply to every GAIA branch and release commit.
 
 2026-09-14: At Juha’s explicit request, main history is being rewritten to remove Claude/Anthropic co-author trailers only. Human identities, timestamps and file trees are preserved. The public-viewer release branch has no such trailers and is unchanged. Other checkouts must fetch and realign with rewritten origin/main before further pushes; preserve uncommitted work and do not merge the old history back. A private pre-rewrite Git bundle and old-to-new commit map are retained under /mnt/data/juha/gaia for recovery and interpretation of older deployment revision references.
+
+### What the b8d2d86 install adds over the running build
+
+`GET /api/sources/{id}/stars/nights` lists the observing nights a camera has,
+local solar noon to noon, with frame and detection counts. The three star
+endpoints take an explicit `from` and `to` beside the old `hours` and report
+which window they answered with, so the photometry panel can show one night, or
+a run of consecutive nights, instead of a trailing number of hours.
+
+`stars/frame` marks each star `saturated` when its fitted background plus
+amplitude reaches the top of the range. Bright aurora lifts the background until
+stars have no headroom, and a clipped peak reports a flux that is an
+underestimate, which must not be read as cloud. The panel draws those as crosses
+rather than discs. On Kiruna's night of 14 September, 54 of 140 identified stars
+were saturated at 00:47 with the background at 172, and one at 01:59 with it at
+151.
+
+Until this is installed the panel falls back to the trailing window and no star
+is ever marked saturated.

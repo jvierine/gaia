@@ -1431,6 +1431,182 @@ async fn source_stars(
 }
 
 /// The brightness and background time series of one star, for plotting.
+/// One star's measurements over a window, as the panel wants them.
+///
+/// Every field is read by column name rather than by position. The positional
+/// form has now twice silently handed back a neighbouring column -- most
+/// recently the sun's elevation in place of the optical depth, which looks
+/// exactly like a plausible depth and so survived review. A name cannot
+/// slide when a column is inserted in the middle of the list.
+fn star_series_samples(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    star: &str,
+    channel: &str,
+    from: &str,
+    to: &str,
+) -> rusqlite::Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        "SELECT p.observation_utc,p.flux,p.background,p.amplitude,p.sigma_major,p.sigma_minor,
+                p.angle_deg,p.centroid_offset_px,p.elevation_deg,p.azimuth_deg,
+                p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,p.rms_residual,
+                p.residual_std,p.amplitude_snr,p.flux_snr,
+                p.background_dx,p.background_dy,p.background_dxy,p.optical_depth,
+                s.moon_elevation_deg,s.moon_illuminated_fraction,s.moon_sky_brightness,
+                s.moon_apparent_magnitude,s.sun_elevation_deg
+         FROM star_photometry p
+         LEFT JOIN frame_sky s ON s.source_id=p.source_id AND s.image_id=p.image_id
+         WHERE p.source_id=?1 AND p.star_key=?2 AND p.channel=?3
+           AND julianday(p.observation_utc) >= julianday(?4)
+           AND julianday(p.observation_utc) < julianday(?5)
+         ORDER BY p.observation_utc",
+    )?;
+    let rows = statement.query_map(
+        rusqlite::params![source_id, star, channel, from, to],
+        |r| {
+            // Nullable everywhere but the timestamp: a measurement that failed
+            // to fit still has a row, and the panel draws the gap.
+            let number = |name: &str| r.get::<_, Option<f64>>(name);
+            Ok(json!({
+                "at": r.get::<_,String>("observation_utc")?,
+                "flux": number("flux")?,
+                "background": number("background")?,
+                "amplitude": number("amplitude")?,
+                "sigma_major": number("sigma_major")?,
+                "sigma_minor": number("sigma_minor")?,
+                "angle_deg": number("angle_deg")?,
+                "centroid_offset_px": number("centroid_offset_px")?,
+                "elevation_deg": number("elevation_deg")?,
+                "azimuth_deg": number("azimuth_deg")?,
+                "predicted_x": number("predicted_x")?,
+                "predicted_y": number("predicted_y")?,
+                "centroid_x": number("centroid_x")?,
+                "centroid_y": number("centroid_y")?,
+                "rms_residual": number("rms_residual")?,
+                "residual_std": number("residual_std")?,
+                "amplitude_snr": number("amplitude_snr")?,
+                "flux_snr": number("flux_snr")?,
+                "background_dx": number("background_dx")?,
+                "background_dy": number("background_dy")?,
+                "background_dxy": number("background_dxy")?,
+                // Null wherever no depth could honestly be claimed: the
+                // night was not fitted, or this measurement was saturated,
+                // undetectable, or the star was never found.
+                "optical_depth": number("optical_depth")?,
+                "moon_elevation_deg": number("moon_elevation_deg")?,
+                "moon_illuminated_fraction": number("moon_illuminated_fraction")?,
+                "moon_sky_brightness": number("moon_sky_brightness")?,
+                "moon_apparent_magnitude": number("moon_apparent_magnitude")?,
+                "sun_elevation_deg": number("sun_elevation_deg")?,
+            }))
+        },
+    )?;
+    rows.collect()
+}
+
+#[cfg(test)]
+mod star_series_tests {
+    use super::star_series_samples;
+
+    /// The photometry tables reference sources and images; these tests exercise
+    /// the query in isolation, without the rest of the archive.
+    fn seeded() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn
+    }
+
+    /// Every column gets a value nothing else has, so reading a neighbouring
+    /// one cannot look right. This is the test that was missing when the
+    /// handler returned the sun's elevation as the optical depth: -15.1 is a
+    /// perfectly believable depth, and only a sentinel catches it.
+    #[test]
+    fn every_field_comes_from_its_own_column() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO star_photometry(
+                source_id,image_id,observation_utc,star_key,channel,
+                ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,
+                predicted_x,predicted_y,centroid_x,centroid_y,centroid_offset_px,
+                background,amplitude,sigma_major,sigma_minor,angle_deg,
+                flux,rms_residual,residual_std,amplitude_snr,flux_snr,
+                background_dx,background_dy,background_dxy,optical_depth)
+             VALUES('cam','img','2026-09-12T20:33:00+00:00','star','mean',
+                1.0,2.0,3.0,110.0,120.0,
+                130.0,140.0,150.0,160.0,170.0,
+                180.0,190.0,200.0,210.0,220.0,
+                230.0,240.0,250.0,260.0,270.0,
+                280.0,290.0,300.0,310.0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO frame_sky(
+                source_id,image_id,observation_utc,sun_elevation_deg,moon_azimuth_deg,
+                moon_elevation_deg,moon_illuminated_fraction,moon_phase_angle_deg,
+                moon_distance_km,moon_apparent_magnitude,moon_sky_brightness)
+             VALUES('cam','img','2026-09-12T20:33:00+00:00',410.0,420.0,
+                430.0,440.0,450.0,460.0,470.0,480.0)",
+            [],
+        )
+        .unwrap();
+
+        let rows = star_series_samples(
+            &conn, "cam", "star", "mean", "2026-09-12T00:00:00+00:00",
+            "2026-09-13T00:00:00+00:00",
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        let s = &rows[0];
+        assert_eq!(s["at"], "2026-09-12T20:33:00+00:00");
+        for (field, want) in [
+            ("azimuth_deg", 110.0), ("elevation_deg", 120.0),
+            ("predicted_x", 130.0), ("predicted_y", 140.0),
+            ("centroid_x", 150.0), ("centroid_y", 160.0),
+            ("centroid_offset_px", 170.0), ("background", 180.0),
+            ("amplitude", 190.0), ("sigma_major", 200.0),
+            ("sigma_minor", 210.0), ("angle_deg", 220.0),
+            ("flux", 230.0), ("rms_residual", 240.0),
+            ("residual_std", 250.0), ("amplitude_snr", 260.0),
+            ("flux_snr", 270.0), ("background_dx", 280.0),
+            ("background_dy", 290.0), ("background_dxy", 300.0),
+            ("optical_depth", 310.0),
+            ("sun_elevation_deg", 410.0), ("moon_elevation_deg", 430.0),
+            ("moon_illuminated_fraction", 440.0),
+            ("moon_apparent_magnitude", 470.0), ("moon_sky_brightness", 480.0),
+        ] {
+            assert_eq!(s[field].as_f64(), Some(want), "{field} read the wrong column");
+        }
+    }
+
+    /// A frame with no sky row still yields its photometry, with the sky
+    /// fields null rather than the row vanishing.
+    #[test]
+    fn a_frame_without_a_sky_row_still_returns_its_measurement() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO star_photometry(
+                source_id,image_id,observation_utc,star_key,channel,
+                ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,
+                predicted_x,predicted_y,flux)
+             VALUES('cam','img','2026-09-12T20:33:00+00:00','star','mean',
+                1.0,2.0,3.0,110.0,120.0,130.0,140.0,230.0)",
+            [],
+        )
+        .unwrap();
+        let rows = star_series_samples(
+            &conn, "cam", "star", "mean", "2026-09-12T00:00:00+00:00",
+            "2026-09-13T00:00:00+00:00",
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["flux"].as_f64(), Some(230.0));
+        assert!(rows[0]["sun_elevation_deg"].is_null());
+        assert!(rows[0]["optical_depth"].is_null());
+    }
+}
+
 async fn source_star_series(
     Path(id): Path<String>,
     State(s): State<AppState>,
@@ -1443,64 +1619,8 @@ async fn source_star_series(
     }
     let (from, to) = star_window(&query.from, &query.to, query.hours);
     let conn = db::open(&s.db_path).map_err(internal)?;
-    let mut statement = conn
-        .prepare(
-            "SELECT p.observation_utc,p.flux,p.background,p.amplitude,p.sigma_major,p.sigma_minor,
-                    p.angle_deg,p.centroid_offset_px,p.elevation_deg,p.azimuth_deg,
-                    p.predicted_x,p.predicted_y,p.centroid_x,p.centroid_y,p.rms_residual,
-                    p.residual_std,p.amplitude_snr,p.flux_snr,
-                    p.background_dx,p.background_dy,p.background_dxy,p.optical_depth,
-                    s.moon_elevation_deg,s.moon_illuminated_fraction,s.moon_sky_brightness,
-                    s.moon_apparent_magnitude,s.sun_elevation_deg
-             FROM star_photometry p
-             LEFT JOIN frame_sky s ON s.source_id=p.source_id AND s.image_id=p.image_id
-             WHERE p.source_id=?1 AND p.star_key=?2 AND p.channel=?3
-               AND julianday(p.observation_utc) >= julianday(?4)
-               AND julianday(p.observation_utc) < julianday(?5)
-             ORDER BY p.observation_utc",
-        )
-        .map_err(internal)?;
-    let samples: Vec<Value> = statement
-        .query_map(
-            rusqlite::params![id, star, channel, from, to],
-            |r| {
-                Ok(json!({
-                    "at": r.get::<_,String>(0)?,
-                    "flux": r.get::<_,Option<f64>>(1)?,
-                    "background": r.get::<_,Option<f64>>(2)?,
-                    "amplitude": r.get::<_,Option<f64>>(3)?,
-                    "sigma_major": r.get::<_,Option<f64>>(4)?,
-                    "sigma_minor": r.get::<_,Option<f64>>(5)?,
-                    "angle_deg": r.get::<_,Option<f64>>(6)?,
-                    "centroid_offset_px": r.get::<_,Option<f64>>(7)?,
-                    "elevation_deg": r.get::<_,f64>(8)?,
-                    "azimuth_deg": r.get::<_,f64>(9)?,
-                    "predicted_x": r.get::<_,f64>(10)?,
-                    "predicted_y": r.get::<_,f64>(11)?,
-                    "centroid_x": r.get::<_,Option<f64>>(12)?,
-                    "centroid_y": r.get::<_,Option<f64>>(13)?,
-                    "rms_residual": r.get::<_,Option<f64>>(14)?,
-                    "residual_std": r.get::<_,Option<f64>>(15)?,
-                    "amplitude_snr": r.get::<_,Option<f64>>(16)?,
-                    "flux_snr": r.get::<_,Option<f64>>(17)?,
-                    "background_dx": r.get::<_,Option<f64>>(18)?,
-                    "background_dy": r.get::<_,Option<f64>>(19)?,
-                    "background_dxy": r.get::<_,Option<f64>>(20)?,
-                    // Null wherever no depth could honestly be claimed: the
-                    // night was not fitted, or this measurement was saturated,
-                    // undetectable, or the star was never found.
-                    "optical_depth": r.get::<_,Option<f64>>(26)?,
-                    "moon_elevation_deg": r.get::<_,Option<f64>>(21)?,
-                    "moon_illuminated_fraction": r.get::<_,Option<f64>>(22)?,
-                    "moon_sky_brightness": r.get::<_,Option<f64>>(23)?,
-                    "moon_apparent_magnitude": r.get::<_,Option<f64>>(24)?,
-                    "sun_elevation_deg": r.get::<_,Option<f64>>(25)?,
-                }))
-            },
-        )
-        .map_err(internal)?
-        .filter_map(Result::ok)
-        .collect();
+    let samples =
+        star_series_samples(&conn, &id, &star, &channel, &from, &to).map_err(internal)?;
     let fluxes: Vec<f64> = samples
         .iter()
         .filter_map(|v| v["flux"].as_f64())

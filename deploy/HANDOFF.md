@@ -535,17 +535,17 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
-## Pending backend install: the extinction endpoint (2026-09-15)
+## Pending backend install: the season-long distribution (2026-09-15)
 
-The running `gaia-server` was installed 2026-09-15 17:47 at commit `c7a26cb`,
-so it has the stalled-fit fixes and frame stepping. What it lacks is the
-read-only endpoint that makes the clear-sky reference checkable. bgu001
+The running `gaia-server` was installed 2026-09-15 18:28 at commit `c7c9fef`,
+so it has the stalled-fit fixes, frame stepping and the extinction endpoint.
+What it lacks is the endpoint the histograms read. bgu001
 cannot do it: `/mnt/data/juha/gaia-build` is j-owned and the live unit is j's
-USER `gaia-revontuli.service`. A release build of `c7c9fef` is staged at
-`/mnt/data/juha/gaia/staging/gaia-server-c7c9fef`, sha256
-`7d9dfd4de51a35c5937f48353dd8b3b1a809c586ba64d4e4de51a582eeedffcc`. As j:
+USER `gaia-revontuli.service`. A release build of `a36b511` is staged at
+`/mnt/data/juha/gaia/staging/gaia-server-a36b511`, sha256
+`69c004aab1e45602f203642a7339bc2f499496c183f49a0b06bc79985e479413`. As j:
 
-    cp /mnt/data/juha/gaia/staging/gaia-server-c7c9fef /mnt/data/juha/gaia-build/release/gaia-server
+    cp /mnt/data/juha/gaia/staging/gaia-server-a36b511 /mnt/data/juha/gaia-build/release/gaia-server
     systemctl --user restart gaia-revontuli.service
 
 `gaia-server-b8d2d86` stays in staging on purpose: it is the binary currently
@@ -837,7 +837,7 @@ Next buttons beside the zoom controls.
 Until this is installed the clear-sky reference stays stalled at the fits it
 had, and those two buttons return the nearest frame instead of the neighbour.
 
-### What the c7c9fef install adds over the running build
+### What the c7c9fef install added, now in place
 
 `GET /api/extinction`, read-only. It summarises the clear-sky reference across
 the archive, or one camera with `?source=`: fits, cameras fitted, newest fit,
@@ -852,3 +852,18 @@ removes the reason to do it.
 
 A healthy pass refuses most camera-nights, so a large `attempts_refused` beside
 a small `fits` is the expected shape, not a fault.
+
+### What the a36b511 install adds over the running build
+
+`GET /api/sources/{id}/stars/distribution?star=…` returns every detected
+measurement of one star, in all four channels, as bare columns: flux, amplitude
+and background, three numbers per measurement rather than the twenty-five a
+sample row carries. The default window is the whole archive.
+
+The star photometry histograms read it. They cover the whole archive rather than
+the window on screen because a star at this latitude barely changes elevation,
+so its air mass hardly varies night to night and its clear-sky level — what a
+fading is measured against — is far better determined over months than hours.
+The window still governs the time series, the frame view and the night picker.
+
+Until this is installed the histogram tab has nothing to draw.

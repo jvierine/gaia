@@ -566,6 +566,28 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
+## Pending install: cloud weight, flat cells (2026-09-16)
+
+Supersedes the entry below. Two changes on top of it: a frame needs at least
+three usable stars before it publishes a field at all, and the Hann taper
+across each cell is off, leaving the flat cell value with the smooth
+transition across the boundaries.
+
+The star floor came from the first live publish: fourteen fields in forty-one
+were one value across the whole image -- a single star scaling an entire
+all-sky camera -- and eight of those dimmed the camera, the worst to 4.7 per
+cent. `GAIA_CLOUD_HANN=1` restores the taper without a rebuild, and both
+manifests now publish which field actually built the mosaic.
+
+Binary only; the frontend is unchanged since `a455d39` and needs no
+re-extraction.
+
+    sudo install -o j -g j -m 755 /mnt/data/juha/gaia/staging/gaia-server-807546a /mnt/data/juha/gaia-build/release/gaia-server.new
+    sudo mv /mnt/data/juha/gaia-build/release/gaia-server.new /mnt/data/juha/gaia-build/release/gaia-server
+    sudo kill -9 $(pgrep -u j -f '/mnt/data/juha/gaia-build/release/gaia-server')
+
+Let any publish in flight finish first, or it is interrupted mid-run.
+
 ## Pending install: the cloud weight in the composite (2026-09-16)
 
 A weight from the star fading now multiplies both composites -- the server-side

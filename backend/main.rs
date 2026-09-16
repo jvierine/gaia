@@ -761,9 +761,31 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
 
-    // The observing night the archive is currently in, by local solar time at
-    // this station, so a night is not cut in half at midnight UTC.
-    let night = extinction::night_index(Utc::now().timestamp() as f64, longitude);
+    // The most recent night that actually has stars, by local solar time at
+    // this station so a night is not cut in half at midnight UTC.
+    //
+    // Not simply the night the clock is in. Checking a camera at eleven in the
+    // morning is the ordinary case, and by then the current bucket has rolled
+    // over at local solar noon and holds nothing but daylight -- the panel
+    // answered "no stars measured yet tonight" for every camera in the archive.
+    // Taking the night of the newest measurement gives last night when it is
+    // daytime and tonight once tonight has started.
+    let newest: Option<String> = conn
+        .query_row(
+            "SELECT max(observation_utc) FROM star_photometry
+             WHERE source_id=?1 AND channel='mean' AND centroid_x IS NOT NULL",
+            [source_id],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+    let newest_epoch = newest
+        .as_deref()
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.timestamp() as f64);
+    let now = Utc::now().timestamp() as f64;
+    let night = extinction::night_index(newest_epoch.unwrap_or(now), longitude);
+    let current = night == extinction::night_index(now, longitude);
     let boundary = |n: i64| {
         DateTime::from_timestamp(
             ((n as f64) * 86400.0 + 43200.0 - longitude / 15.0 * 3600.0) as i64,
@@ -790,10 +812,11 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
     let Some((image_id, observation_utc, found)) = best else {
         return Ok(json!({
             "source_id": source_id, "night": night, "from": from, "to": to,
+            "current_night": current,
             "calibration_id": calibration_id, "calibration_star_count": star_count,
             "calibration_residual_px": residual,
             "frame": Value::Null,
-            "note": "no stars measured yet tonight",
+            "note": "no stars have been measured for this camera",
         }));
     };
 
@@ -839,6 +862,7 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
     let richer = star_count.is_some_and(|n| found > n);
     Ok(json!({
         "source_id": source_id, "night": night, "from": from, "to": to,
+        "current_night": current,
         "calibration_id": calibration_id, "calibration_star_count": star_count,
         "calibration_residual_px": residual, "hdf5_path": hdf5,
         "frame": {

@@ -795,7 +795,7 @@ const stamp=(value:string|null)=>value?new Date(value).toISOString().replace('T'
 /// Compare the calibrations held for one camera and choose which one maps it.
 type DriftStar={star_key:string;vt_mag:number;azimuth_deg:number;elevation_deg:number;
   predicted_x:number;predicted_y:number;centroid_x:number|null;centroid_y:number|null;offset_px:number|null};
-type Drift={night:number;calibration_id:string|null;calibration_star_count:number|null;
+type Drift={night:number;current_night?:boolean;calibration_id:string|null;calibration_star_count:number|null;
   calibration_residual_px:number|null;
   frame:{image_id:string;observation_utc:string;width:number|null;height:number|null;found:number;
     rms_offset_px:number|null}|null;
@@ -835,19 +835,19 @@ function CalibrationDrift({camera}:{camera:Camera}){
   const stars=drift?.stars??[];
   const w=frame?.width??0,h=frame?.height??0;
   return <div className="drift-panel">
-    <span className="eyebrow">LENS DRIFT, TONIGHT&rsquo;S BEST FRAME</span>
-    {busy?<p role="status">Looking for tonight&rsquo;s richest frame&hellip;</p>
+    <span className="eyebrow">LENS DRIFT, RICHEST FRAME OF THE LAST NIGHT OBSERVED</span>
+    {busy?<p role="status">Looking for the richest frame of the last night observed&hellip;</p>
       :error?<p role="alert">{error}</p>
-      :!frame?<div className="history-empty">{drift?.note||'No stars measured tonight yet.'}</div>
+      :!frame?<div className="history-empty">{drift?.note||'No stars have been measured for this camera.'}</div>
       :<>
       <div className="drift-meta">
         <span><strong>{frame.found}</strong> stars found</span>
         <span>calibration in force used <strong>{drift?.calibration_star_count??'an unrecorded number of'}</strong></span>
         <span>offset <strong>{frame.rms_offset_px==null?'\u2014':`${frame.rms_offset_px.toFixed(2)} px`}</strong> RMS</span>
-        <time>{frame.observation_utc.replace('T',' ').slice(0,19)} UTC</time>
+        <time>{frame.observation_utc.replace('T',' ').slice(0,19)} UTC{drift?.current_night?' \u00b7 tonight':' \u00b7 last night observed'}</time>
       </div>
       {w>0&&h>0&&<svg className="drift-image" viewBox={`0 0 ${w} ${h}`} role="img"
-        aria-label="Predicted and fitted star positions on tonight's richest frame">
+        aria-label="Predicted and fitted star positions on the richest frame of the last night observed">
         <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
           x={0} y={0} width={w} height={h} preserveAspectRatio="none"/>
         {/* Purple where the ephemeris and lens model say the star is; amber

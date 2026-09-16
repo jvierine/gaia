@@ -566,6 +566,41 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
+## Pending install: movable keogram windows and the lens drift check (2026-09-16)
+
+Supersedes the entry below and includes it.
+
+**Keograms.** A selected window carries its own rows, so selections survive
+moving between nights and several feed one scatter. Either end drags either
+way. Windows retire when the pair changes.
+
+**Lens drift.** New `GET /api/sources/{id}/calibration/drift` returns
+tonight's richest frame with each star's projected and fitted position; the
+Calibration tab draws them purple and amber on the frame. New
+`POST /api/sources/{id}/calibration/refit` refits the eight optical
+parameters and writes a real AIDA/WISC HDF5 into
+`<archive>/calibrations/<source>/`, adding it to the list **unselected**.
+
+Two things to watch. The refit shells out to `python3` with `h5py` and
+`numpy` -- both are present on Revontuli now, and the endpoint fails cleanly
+with the python error if they ever are not. And `/original` is the full-size
+frame, so the drift panel downloads one archived image per open; that is the
+same image the frame browser already serves, but it is not a thumbnail.
+
+Both halves. As bgu001, from the repository root:
+
+    tar xzf /mnt/data/juha/gaia/staging/web-dist-.tar.gz
+    chmod 664 web-dist/index.html web-dist/assets/*
+
+then the binary:
+
+    sudo install -o j -g j -m 755 /mnt/data/juha/gaia/staging/gaia-server- /mnt/data/juha/gaia-build/release/gaia-server.new
+    sudo mv /mnt/data/juha/gaia-build/release/gaia-server.new /mnt/data/juha/gaia-build/release/gaia-server
+    sudo kill -9 $(pgrep -u j -f '/mnt/data/juha/gaia-build/release/gaia-server')
+
+Back out with `gaia-server-807546a` and `web-dist-a455d39.tar.gz`. No schema
+change. Let any publish in flight finish first.
+
 ## Pending install: cloud weight, flat cells (2026-09-16)
 
 Supersedes the entry below. Two changes on top of it: a frame needs at least

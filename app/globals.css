@@ -241,3 +241,31 @@
 .keogram-axis small{color:var(--muted,#8fa0ae)}
 .keogram-scatter{display:block;width:100%;max-width:340px;margin:.4rem auto;
   background:#05080b;border:1px solid var(--line,#2a3540);border-radius:3px}
+
+/* Lens drift: predicted against fitted star positions on tonight's best frame. */
+.drift-panel{margin-top:1.1rem;padding-top:.9rem;border-top:1px solid var(--line,#2a3540)}
+.drift-meta{display:flex;flex-wrap:wrap;gap:.2rem 1.1rem;margin:.3rem 0 .6rem;
+  color:var(--muted,#8fa0ae);font-size:.86rem}
+.drift-meta strong{color:inherit}
+.drift-image{display:block;width:100%;max-height:60vh;background:#05080b;
+  border:1px solid var(--line,#2a3540);border-radius:3px}
+/* Purple for where the sky says the star is, amber for where it was found. The
+   join between them is the diagnosis: a uniform shift, a rotation and a scale
+   change look nothing alike drawn this way. */
+.drift-predicted{fill:none;stroke:#b06cf0;stroke-width:2;vector-effect:non-scaling-stroke}
+.drift-fitted{fill:none;stroke:#f0a83c;stroke-width:2;vector-effect:non-scaling-stroke}
+.drift-link{stroke:#8ba2b5;stroke-width:1;opacity:.55;vector-effect:non-scaling-stroke}
+.drift-legend{display:flex;gap:1.2rem;margin:.45rem 0;font-size:.86rem;color:var(--muted,#8fa0ae)}
+.drift-legend i{display:inline-block;width:.7rem;height:.7rem;border-radius:50%;
+  margin-right:.35rem;border:2px solid currentColor}
+.drift-legend .swatch-predicted{color:#b06cf0}
+.drift-legend .swatch-fitted{color:#f0a83c}
+.drift-actions{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;margin:.5rem 0}
+.drift-actions small{color:var(--muted,#8fa0ae)}
+.drift-outcome{color:var(--aqua,#7fd6c2)}
+.drift-note{display:block;color:var(--muted,#8fa0ae)}
+.keogram-windows{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin:.2rem 0 .7rem}
+.keogram-windows button{background:rgba(80,220,160,.14);border:1px solid rgba(80,220,160,.5);
+  color:inherit;border-radius:3px;padding:.15rem .45rem;font:inherit;font-size:.8rem;cursor:pointer}
+.keogram-windows button:hover{background:rgba(80,220,160,.26)}
+.keogram-windows small{color:var(--muted,#8fa0ae)}

@@ -8,6 +8,7 @@ mod extinction;
 mod geometry;
 mod igrf_grid;
 mod keogram;
+mod lensfit;
 mod image_time;
 mod meteor_backfill;
 mod model;
@@ -693,6 +694,331 @@ async fn calibration(
         StatusCode::CREATED,
         Json(json!({"id":id,"state":"calibrated","source_id":source,"star_count":stars,"residual_px":residual_px})),
     ))
+}
+
+#[cfg(test)]
+mod calibration_refit_tests {
+    /// A refit is worthless if nothing can read it back. The archive reads
+    /// calibrations with h5dump and takes the star count from the row count of
+    /// /selected_stars, so those are the two things this checks -- through the
+    /// real readers, not by inspecting what was just written.
+    #[test]
+    fn a_written_calibration_reads_back_through_the_normal_readers() {
+        if std::process::Command::new("python3")
+            .args(["-c", "import h5py, numpy"])
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("skipping: h5py unavailable");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refit.h5");
+        let optpar = [2.0, 0.733181, 0.733112, -1.454884, -1.366835, -170.19926, 0.007369, -0.003686, 0.460838];
+        let rows: Vec<Vec<f64>> = (0..37)
+            .map(|n| {
+                let v = n as f64;
+                vec![v + 1.0, 1.0, 40.0 + v, 10.0 * v, 100.0 + v, 200.0 + v, v / 24.0, v, 3.0,
+                     100.5 + v, 200.5 + v, 0.5, 0.5, 0.707]
+            })
+            .collect();
+        super::write_calibration_hdf5(&path, &optpar, &rows).unwrap();
+
+        let back = super::projection::optical_parameters(&path.to_string_lossy()).unwrap();
+        assert_eq!(back.len(), optpar.len());
+        for (a, b) in back.iter().zip(optpar.iter()) {
+            assert!((a - b).abs() < 1e-12, "parameter changed in the round trip: {a} vs {b}");
+        }
+        let count = super::projection::dataset_rows(&path.to_string_lossy(), "/selected_stars").unwrap();
+        assert_eq!(count, 37, "star count is read from the row count");
+    }
+}
+
+/// The richest frame of the current night, and how well the live lens model
+/// places its stars.
+///
+/// A lens drifts. The star photometry measures, on every frame, the distance
+/// between where the sky says a star should fall and where its centroid was
+/// found, so the archive can notice its own calibrations going stale without
+/// anyone re-observing anything. The frame with the most identified stars is
+/// the one that says the most about it.
+fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
+    -> anyhow::Result<Value>
+{
+    let (longitude, hdf5, calibration_id, star_count, residual): (
+        f64, String, String, Option<i64>, Option<f64>,
+    ) = conn.query_row(
+        "SELECT COALESCE(s.longitude_deg,0),c.hdf5_path,c.id,c.star_count,c.residual_px
+         FROM sources s JOIN calibrations c ON c.id=COALESCE(
+            (SELECT cs.selected_calibration_id FROM camera_settings cs
+              WHERE cs.source_id=s.id
+                AND EXISTS(SELECT 1 FROM calibrations k WHERE k.id=cs.selected_calibration_id AND k.source_id=s.id)),
+            (SELECT k.id FROM calibrations k WHERE k.source_id=s.id
+              ORDER BY k.created_utc DESC LIMIT 1))
+         WHERE s.id=?1",
+        [source_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )?;
+
+    // The observing night the archive is currently in, by local solar time at
+    // this station, so a night is not cut in half at midnight UTC.
+    let night = extinction::night_index(Utc::now().timestamp() as f64, longitude);
+    let boundary = |n: i64| {
+        DateTime::from_timestamp(
+            ((n as f64) * 86400.0 + 43200.0 - longitude / 15.0 * 3600.0) as i64,
+            0,
+        )
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_default()
+    };
+    let (from, to) = (boundary(night), boundary(night + 1));
+
+    // The frame of that night with the most stars actually found.
+    let best: Option<(String, String, i64)> = conn
+        .query_row(
+            "SELECT image_id,observation_utc,count(*) AS found
+             FROM star_photometry
+             WHERE source_id=?1 AND channel='mean' AND centroid_x IS NOT NULL
+               AND observation_utc>=?2 AND observation_utc<?3
+             GROUP BY image_id ORDER BY found DESC, observation_utc DESC LIMIT 1",
+            rusqlite::params![source_id, from, to],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok();
+
+    let Some((image_id, observation_utc, found)) = best else {
+        return Ok(json!({
+            "source_id": source_id, "night": night, "from": from, "to": to,
+            "calibration_id": calibration_id, "calibration_star_count": star_count,
+            "calibration_residual_px": residual,
+            "frame": Value::Null,
+            "note": "no stars measured yet tonight",
+        }));
+    };
+
+    let (width, height): (Option<i64>, Option<i64>) = conn
+        .query_row("SELECT width,height FROM images WHERE id=?1", [&image_id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap_or((None, None));
+
+    let mut q = conn.prepare(
+        "SELECT star_key,vt_mag,azimuth_deg,elevation_deg,predicted_x,predicted_y,
+                centroid_x,centroid_y,centroid_offset_px
+         FROM star_photometry
+         WHERE source_id=?1 AND channel='mean' AND image_id=?2 AND centroid_x IS NOT NULL
+         ORDER BY vt_mag",
+    )?;
+    let stars: Vec<Value> = q
+        .query_map(rusqlite::params![source_id, image_id], |r| {
+            Ok(json!({
+                "star_key": r.get::<_,String>("star_key")?,
+                "vt_mag": r.get::<_,f64>("vt_mag")?,
+                "azimuth_deg": r.get::<_,f64>("azimuth_deg")?,
+                "elevation_deg": r.get::<_,f64>("elevation_deg")?,
+                "predicted_x": r.get::<_,f64>("predicted_x")?,
+                "predicted_y": r.get::<_,f64>("predicted_y")?,
+                "centroid_x": r.get::<_,Option<f64>>("centroid_x")?,
+                "centroid_y": r.get::<_,Option<f64>>("centroid_y")?,
+                "offset_px": r.get::<_,Option<f64>>("centroid_offset_px")?,
+            }))
+        })?
+        .filter_map(Result::ok)
+        .collect();
+
+    let offsets: Vec<f64> = stars.iter().filter_map(|s| s["offset_px"].as_f64()).collect();
+    let rms = if offsets.is_empty() {
+        None
+    } else {
+        Some((offsets.iter().map(|d| d * d).sum::<f64>() / offsets.len() as f64).sqrt())
+    };
+    // A refit is offered only when this frame carries more evidence than the
+    // calibration in force was built from. More stars is the one comparison
+    // that does not depend on trusting either fit.
+    let richer = star_count.is_some_and(|n| found > n);
+    Ok(json!({
+        "source_id": source_id, "night": night, "from": from, "to": to,
+        "calibration_id": calibration_id, "calibration_star_count": star_count,
+        "calibration_residual_px": residual, "hdf5_path": hdf5,
+        "frame": {
+            "image_id": image_id, "observation_utc": observation_utc,
+            "width": width, "height": height, "found": found,
+            "rms_offset_px": rms,
+        },
+        "stars": stars,
+        "refit_available": richer && found as usize >= lensfit::MIN_OBSERVATIONS,
+        "refit_reason": if !richer {
+            format!("this frame has {found} stars, the calibration in force used {}",
+                    star_count.map(|n| n.to_string()).unwrap_or_else(|| "an unrecorded number".into()))
+        } else if (found as usize) < lensfit::MIN_OBSERVATIONS {
+            format!("{found} stars is too few to fit eight parameters")
+        } else {
+            format!("{found} stars against {} in the calibration in force",
+                    star_count.unwrap_or(0))
+        },
+    }))
+}
+
+/// Write a refitted lens model as an AIDA/WISC calibration file.
+///
+/// The archive reads calibrations with `h5dump`, so a refit has to produce a
+/// real HDF5 file rather than a private format, or every later reader would
+/// need a second code path. h5py does the writing; the datasets are the ones
+/// the readers actually look for -- the parameter vector, and the selected
+/// stars whose row count is what the star count is taken from.
+fn write_calibration_hdf5(
+    path: &std::path::Path,
+    optpar: &[f64],
+    rows: &[Vec<f64>],
+) -> anyhow::Result<()> {
+    let payload = json!({"path": path.to_string_lossy(), "optpar": optpar, "stars": rows});
+    let script = r#"
+import json, sys, numpy, h5py
+spec = json.load(sys.stdin)
+optpar = numpy.array(spec["optpar"], dtype="f8")
+stars = numpy.array(spec["stars"], dtype="f8")
+residuals = stars[:, 11:14] if stars.size else numpy.zeros((0, 3))
+with h5py.File(spec["path"], "w") as f:
+    f.create_dataset("wisc_optpar_with_optmod", data=optpar)
+    f.create_dataset("wisc_optpar", data=optpar[1:])
+    f.create_dataset("selected_stars", data=stars)
+    f.create_dataset("residuals_px", data=residuals)
+"#;
+    let mut child = std::process::Command::new("python3")
+        .args(["-c", script])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().ok_or_else(|| anyhow::anyhow!("python stdin"))?;
+        stdin.write_all(serde_json::to_string(&payload)?.as_bytes())?;
+    }
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        anyhow::bail!("writing the calibration failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    Ok(())
+}
+
+/// Refit the lens from tonight's richest frame and keep the result.
+///
+/// The new model is added to the list and deliberately **not** selected.
+/// Which calibration a camera uses stays an administrator's decision: a refit
+/// is evidence to look at, not a change to make on the archive's own authority.
+async fn source_calibration_refit(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    let drift = calibration_drift(&conn, &id).map_err(internal)?;
+    if drift["refit_available"] != json!(true) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "no refit warranted: {}",
+                drift["refit_reason"].as_str().unwrap_or("unknown")
+            ),
+        ));
+    }
+    let hdf5 = drift["hdf5_path"].as_str().unwrap_or_default().to_string();
+    let seed = projection::optical_parameters(&hdf5).map_err(internal)?;
+    let (width, height) = (
+        drift["frame"]["width"].as_f64().unwrap_or(0.0),
+        drift["frame"]["height"].as_f64().unwrap_or(0.0),
+    );
+    if !(width > 0.0 && height > 0.0) {
+        return Err((StatusCode::CONFLICT, "frame has no recorded dimensions".into()));
+    }
+    let empty = Vec::new();
+    let stars = drift["stars"].as_array().unwrap_or(&empty);
+    let observations: Vec<lensfit::Observation> = stars
+        .iter()
+        .filter_map(|v| {
+            Some(lensfit::Observation {
+                azimuth_deg: v["azimuth_deg"].as_f64()?,
+                elevation_deg: v["elevation_deg"].as_f64()?,
+                x: v["centroid_x"].as_f64()?,
+                y: v["centroid_y"].as_f64()?,
+            })
+        })
+        .collect();
+    let before = lensfit::rms(&seed, &observations, width, height);
+    let (fitted, after) = lensfit::fit(&seed, &observations, width, height)
+        .ok_or((StatusCode::CONFLICT, "the fit did not converge".into()))?;
+    // A refit that is not better than what it started from is not worth
+    // keeping; storing it would only clutter the list an operator has to judge.
+    if !(after < before) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("refit did not improve on the calibration in force: {before:.3} -> {after:.3} px"),
+        ));
+    }
+
+    // The selected_stars layout the AIDA files use, so the new file is readable
+    // by the same tools: index, frame, elevation, azimuth, measured x and y,
+    // right ascension and declination, magnitude, predicted x and y, and the
+    // three residuals.
+    let residuals = lensfit::residuals(&fitted, &observations, width, height);
+    let mut rows = Vec::new();
+    for (n, (star, observation)) in stars.iter().zip(observations.iter()).enumerate() {
+        let (dx, dy, dr) = residuals.get(n).copied().unwrap_or((0.0, 0.0, 0.0));
+        let key = star["star_key"].as_str().unwrap_or_default();
+        let (ra, dec) = key
+            .split_once(|c| c == '+' || c == '-')
+            .map(|(a, b)| {
+                let sign = if key.contains('-') { -1.0 } else { 1.0 };
+                (a.parse::<f64>().unwrap_or(0.0), sign * b.parse::<f64>().unwrap_or(0.0))
+            })
+            .unwrap_or((0.0, 0.0));
+        rows.push(vec![
+            (n + 1) as f64, 1.0,
+            observation.elevation_deg, observation.azimuth_deg,
+            observation.x, observation.y,
+            ra, dec,
+            star["vt_mag"].as_f64().unwrap_or(0.0),
+            observation.x + dx, observation.y + dy,
+            dx, dy, dr,
+        ]);
+    }
+
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let dir = s.archive_root.join("calibrations").join(&id);
+    std::fs::create_dir_all(&dir).map_err(internal)?;
+    let path = dir.join(format!("{new_id}.h5"));
+    write_calibration_hdf5(&path, &fitted, &rows).map_err(internal)?;
+    conn.execute(
+        "INSERT INTO calibrations(id,source_id,created_utc,method,hdf5_path,residual_px,submitted_by,star_count)
+         VALUES(?1,?2,?3,'AIDA/WISC refit',?4,?5,'gaia drift check',?6)",
+        rusqlite::params![
+            new_id, id, Utc::now().to_rfc3339(), path.to_string_lossy(),
+            after, observations.len() as i64
+        ],
+    )
+    .map_err(internal)?;
+
+    Ok(Json(json!({
+        "id": new_id,
+        "source_id": id,
+        "selected": false,
+        "note": "added to the list, not made live; selecting it is an administrator's decision",
+        "star_count": observations.len(),
+        "residual_px_before": before,
+        "residual_px_after": after,
+        "optpar": fitted,
+        "frame": drift["frame"],
+        "previous_calibration_id": drift["calibration_id"],
+    })))
+}
+
+async fn source_calibration_drift(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let conn = db::open(&s.db_path).map_err(internal)?;
+    Ok(Json(calibration_drift(&conn, &id).map_err(internal)?))
 }
 
 /// Every calibration held for one camera, newest first, with the star count and
@@ -1835,6 +2161,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/calibrations", post(calibration))
         .route("/api/sources/{id}/stars", get(source_stars))
         .route("/api/sources/{id}/stars/series", get(source_star_series))
+        .route("/api/sources/{id}/calibration/drift", get(source_calibration_drift))
+        .route("/api/sources/{id}/calibration/refit", post(source_calibration_refit))
         .route("/api/sources/{id}/keogram-pairs", get(source_keogram_pairs))
         .route("/api/sources/{id}/keogram", get(source_keogram))
         .route("/api/sources/{id}/stars/frame", get(source_star_frame))

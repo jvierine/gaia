@@ -40,26 +40,52 @@ export type KeogramPair = {
 /// A closed time interval in epoch milliseconds.
 export type Interval = { from: number; to: number };
 
+/// A selected window, carrying the rows it was made from.
+///
+/// The rows travel with the window rather than being looked up later, which is
+/// what lets a selection outlive the keogram it was drawn on: the operator can
+/// pick an hour tonight, move the panel to last Tuesday, pick another, and have
+/// both feed one scatter. `pair` records which camera pair the rows belong to,
+/// because a window means nothing against a different pair.
+export type Window = Interval & { pair: string; rows: KeogramRow[] };
+
 /// Normalised: ordered, and with the ends the right way round.
-function tidy(interval: Interval): Interval {
+function tidy<T extends Interval>(interval: T): T {
   return interval.from <= interval.to
-    ? { from: interval.from, to: interval.to }
-    : { from: interval.to, to: interval.from };
+    ? interval
+    : { ...interval, from: interval.to, to: interval.from };
 }
 
-/// Add an interval, merging anything it touches. The set stays disjoint and in
-/// time order, so the scatter never counts a row twice for overlapping brushes.
-export function addInterval(list: Interval[], next: Interval): Interval[] {
-  const merged = tidy(next);
-  const out: Interval[] = [];
-  let pending = merged;
-  for (const current of [...list].map(tidy).sort((p, q) => p.from - q.from)) {
-    if (current.to < pending.from || current.from > pending.to) {
+/// The rows of `rows` that fall inside the interval.
+export function rowsWithin(rows: KeogramRow[], from: number, to: number): KeogramRow[] {
+  const [low, high] = from <= to ? [from, to] : [to, from];
+  return rows.filter(r => {
+    const at = Date.parse(r.at);
+    return at >= low && at <= high;
+  });
+}
+
+/// Build a window over the loaded keogram, keeping the rows it covers.
+export function makeWindow(pair: string, from: number, to: number, rows: KeogramRow[]): Window {
+  return tidy({ pair, from, to, rows: rowsWithin(rows, from, to) });
+}
+
+/// Add a window, merging any it overlaps from the same pair. The set stays
+/// disjoint and in time order, so no row is counted twice in the scatter.
+export function addWindow(list: Window[], next: Window): Window[] {
+  let pending = tidy(next);
+  const out: Window[] = [];
+  for (const current of [...list].sort((p, q) => p.from - q.from)) {
+    if (current.pair !== pending.pair || current.to < pending.from || current.from > pending.to) {
       out.push(current);
     } else {
+      const seen = new Set(pending.rows.map(r => r.at));
       pending = {
+        pair: pending.pair,
         from: Math.min(pending.from, current.from),
         to: Math.max(pending.to, current.to),
+        rows: [...pending.rows, ...current.rows.filter(r => !seen.has(r.at))]
+          .sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
       };
     }
   }
@@ -67,10 +93,55 @@ export function addInterval(list: Interval[], next: Interval): Interval[] {
   return out.sort((p, q) => p.from - q.from);
 }
 
-/// Drop whichever interval contains this instant. Clicking inside a selection
-/// is how it is taken back, so nothing else needs a modifier key.
-export function removeAt(list: Interval[], at: number): Interval[] {
-  return list.filter(i => !(at >= i.from && at <= i.to));
+/// Drop whichever window contains this instant.
+export function removeWindowAt(list: Window[], at: number): Window[] {
+  return list.filter(w => !(at >= w.from && at <= w.to));
+}
+
+/// Which end of which window is within `tolerance` of this instant, nearest
+/// first. Returned rather than acted on so the caller can show a grab handle
+/// before anything moves.
+export function edgeNear(
+  list: Window[],
+  at: number,
+  tolerance: number,
+): { index: number; edge: 'from' | 'to' } | null {
+  type Hit = { index: number; edge: 'from' | 'to'; distance: number };
+  let best: Hit | null = null;
+  for (let index = 0; index < list.length; index++) {
+    for (const edge of ['from', 'to'] as const) {
+      const distance = Math.abs(list[index][edge] - at);
+      if (distance <= tolerance && (best === null || distance < best.distance)) {
+        best = { index, edge, distance };
+      }
+    }
+  }
+  return best === null ? null : { index: best.index, edge: best.edge };
+}
+
+/// Move one end of one window to a new instant, in either direction.
+///
+/// Dragging an end past the other flips them rather than collapsing the window
+/// to nothing, which is what a hand actually does when it overshoots. `rows`
+/// is the currently loaded keogram: a window can only gain rows that are on
+/// screen, so growing an edge beyond what is loaded moves the boundary and
+/// keeps the rows it already had.
+export function resizeWindow(
+  list: Window[],
+  index: number,
+  edge: 'from' | 'to',
+  at: number,
+  rows: KeogramRow[],
+): Window[] {
+  if (index < 0 || index >= list.length) return list;
+  const target = list[index];
+  const moved = tidy({ ...target, [edge]: at } as Window);
+  const seen = new Set<string>();
+  const kept = [...rowsWithin(rows, moved.from, moved.to), ...rowsWithin(target.rows, moved.from, moved.to)]
+    .filter(r => (seen.has(r.at) ? false : (seen.add(r.at), true)))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const rest = list.filter((_, n) => n !== index);
+  return addWindow(rest, { ...moved, rows: kept });
 }
 
 export function inAny(list: Interval[], at: number): boolean {
@@ -91,25 +162,26 @@ export type ScatterSet = {
 
 const CHANNELS: ScatterSet['channel'][] = ['r', 'g', 'b'];
 
-/// Paired intensities inside the selection, one set per colour channel.
+/// Paired intensities from every selected window, one set per colour channel.
 ///
 /// Only samples both cameras saw contribute. A sample missing from either mesh
 /// is dropped rather than read as zero, which would stack a false cloud of
 /// points on the axes and drag any line fitted through them towards the origin.
-export function scatterPoints(
-  pair: Pick<KeogramPair, 'rows'>,
-  intervals: Interval[],
-): ScatterSet[] {
+export function scatterPoints(windows: { rows: KeogramRow[] }[]): ScatterSet[] {
   const sets: ScatterSet[] = CHANNELS.map(channel => ({ channel, points: [] }));
-  const everything = intervals.length === 0;
-  for (const row of pair.rows) {
-    const at = Date.parse(row.at);
-    if (!everything && !inAny(intervals, at)) continue;
-    const width = Math.min(row.a.length, row.b.length);
-    for (let i = 0; i < width; i++) {
-      const a = row.a[i], b = row.b[i];
-      if (!a || !b) continue;
-      for (let c = 0; c < 3; c++) sets[c].points.push([a[c], b[c]]);
+  const seen = new Set<string>();
+  for (const window of windows) {
+    for (const row of window.rows) {
+      // Overlapping windows are merged, but a row could still arrive twice if
+      // a caller passes the live keogram alongside a stored window.
+      if (seen.has(row.at)) continue;
+      seen.add(row.at);
+      const width = Math.min(row.a.length, row.b.length);
+      for (let i = 0; i < width; i++) {
+        const a = row.a[i], b = row.b[i];
+        if (!a || !b) continue;
+        for (let c = 0; c < 3; c++) sets[c].points.push([a[c], b[c]]);
+      }
     }
   }
   return sets;

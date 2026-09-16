@@ -10,8 +10,8 @@ import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
 // `extent` is imported under another name: the panel already has a local one
 // for the scatter, and a shadowed import would silently call the wrong function.
 import {densityColour,extent as binExtent,histogram1d,histogram2d,tickLabel,ticks} from '../src/histogram';
-import {addInterval,fractionToTime,keogramImage,removeAt,scatterPoints,selectedSeconds,
-        type Interval,type KeogramPair} from '../src/keogram';
+import {addWindow,edgeNear,fractionToTime,keogramImage,makeWindow,removeWindowAt,resizeWindow,
+        scatterPoints,selectedSeconds,type KeogramPair,type Window} from '../src/keogram';
 
 type ViewName = 'globe' | 'cameras' | 'status' | 'calibrate' | 'about';
 type Camera = {id:string;name:string;producer:string;state:string;timestamp_mode:string;latitude_deg:number|null;longitude_deg:number|null;calibrated:boolean;processing?:{state:string;total?:number;done?:number;ready?:number;error?:string|null};enabled:boolean;quality_exponent:number;images_24h:number;message?:string|null};
@@ -218,10 +218,16 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [keogram,setKeogram]=useState<KeogramPair|null>(null);
   const [keoBusy,setKeoBusy]=useState(false);
   const [keoError,setKeoError]=useState('');
-  const [intervals,setIntervals]=useState<Interval[]>([]);
+  // Selected windows carry the rows they were made from, so a selection made
+  // on one night survives the panel moving to another and still feeds the
+  // scatter. They are cleared when the pair changes, since a window means
+  // nothing against a different pair of cameras.
+  const [windows,setWindows]=useState<Window[]>([]);
   // An in-progress brush, in panel fractions, so it can be drawn before it is
   // committed on pointer release.
   const [brush,setBrush]=useState<{from:number;to:number}|null>(null);
+  // An edge being dragged: which window, which end.
+  const [grab,setGrab]=useState<{index:number;edge:'from'|'to'}|null>(null);
   // The histograms are built from the whole archive for one star, not from the
   // window on screen. A star at high latitude barely changes elevation, so its
   // air mass hardly varies night to night and its clear-sky level is far better
@@ -297,14 +303,16 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
       .catch(()=>{});
     return()=>controller.abort();
   },[leftTab,camera.id]);
-  useEffect(()=>{setPartner('');setKeogram(null);setIntervals([])},[camera.id]);
+  useEffect(()=>{setPartner('');setKeogram(null);setWindows([])},[camera.id]);
+  // A window is a statement about one pair; changing the pair retires them all.
+  useEffect(()=>{setWindows(prev=>prev.filter(w=>w.pair===`${camera.id}|${partner}`))},[partner,camera.id]);
   useEffect(()=>{
     if(leftTab!=='keograms'||!partner){setKeogram(null);return}
     const controller=new AbortController();setKeoBusy(true);setKeoError('');
     void fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/keogram?partner=${encodeURIComponent(partner)}&${span}`,{cache:'no-store',signal:controller.signal})
       .then(async r=>{if(!r.ok)throw new Error(await r.text()||'Could not build the keogram pair.');
         return await r.json() as KeogramPair})
-      .then(body=>{if(!controller.signal.aborted){setKeogram(body);setIntervals([])}})
+      .then(body=>{if(!controller.signal.aborted)setKeogram(body)})
       .catch(e=>{if(!controller.signal.aborted){setKeogram(null);setKeoError(String(e.message||e))}})
       .finally(()=>{if(!controller.signal.aborted)setKeoBusy(false)});
     return()=>controller.abort();
@@ -428,36 +436,60 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
     return Math.min(1,Math.max(0,(event.clientX-box.left)/Math.max(1,box.width)));};
   const keogramPanel=()=>{
     const rows=keogram?.rows??[];
-    const scatter=scatterPoints({rows},intervals);
+    const pairKey=`${camera.id}|${partner}`;
+    const scatter=scatterPoints(windows);
     const counted=scatter[0]?.points.length??0;
-    const chosen=intervals.length?selectedSeconds(intervals)/60:0;
-    const band=(i:Interval)=>{
+    const chosen=selectedSeconds(windows)/60;
+    // Instant under the pointer, from its position across the panel.
+    const timeAt=(event:React.PointerEvent<HTMLDivElement>)=>{
+      const box=event.currentTarget.getBoundingClientRect();
+      return fractionToTime(rows,Math.min(1,Math.max(0,(event.clientX-box.left)/Math.max(1,box.width))));};
+    // How close counts as grabbing an end: six pixels of the panel, expressed
+    // in time, so the handle is the same size whatever the window spans.
+    const grabTolerance=()=>{
+      if(rows.length<2)return 0;
+      const span=Date.parse(rows[rows.length-1].at)-Date.parse(rows[0].at);
+      return span*0.008;};
+    const band=(w:{from:number;to:number})=>{
       const first=rows.length?Date.parse(rows[0].at):0;
       const last=rows.length>1?Date.parse(rows[rows.length-1].at):first+1;
       const at=(t:number)=>Math.min(100,Math.max(0,(t-first)/Math.max(1,last-first)*100));
-      return {left:`${at(i.from)}%`,width:`${Math.max(0.4,at(i.to)-at(i.from))}%`};};
+      return {left:`${at(w.from)}%`,width:`${Math.max(0.4,at(w.to)-at(w.from))}%`};};
+    // Windows from other nights are kept but cannot be drawn on this keogram.
+    const onScreen=(w:Window)=>rows.length>1
+      &&w.to>=Date.parse(rows[0].at)&&w.from<=Date.parse(rows[rows.length-1].at);
+    const elsewhere=windows.filter(w=>!onScreen(w));
     const strip=(side:'a'|'b',name:string,coverage:number)=>
       <div className="keogram-strip">
         <div className="star-plot-head"><strong>{name}</strong>
           <small>{(coverage*100).toFixed(0)}% of the cut in view</small></div>
         <div className="keogram-frame"
           onPointerDown={event=>{event.currentTarget.setPointerCapture(event.pointerId);
-            setBrush({from:brushFraction(event),to:brushFraction(event)})}}
-          onPointerMove={event=>{if(brush)setBrush({from:brush.from,to:brushFraction(event)})}}
-          onPointerUp={event=>{
+            const at=timeAt(event);
+            const edge=edgeNear(windows,at,grabTolerance());
+            if(edge)setGrab(edge); else setBrush({from:at,to:at})}}
+          onPointerMove={event=>{
+            const at=timeAt(event);
+            if(grab)setWindows(prev=>resizeWindow(prev,grab.index,grab.edge,at,rows));
+            else if(brush)setBrush({from:brush.from,to:at});
+            else{
+              // Show the grab cursor when an end is within reach.
+              const near=edgeNear(windows,at,grabTolerance());
+              event.currentTarget.style.cursor=near?'ew-resize':'crosshair';}}}
+          onPointerUp={()=>{
+            if(grab){setGrab(null);return}
             if(!brush)return;
-            const from=fractionToTime(rows,Math.min(brush.from,brush.to));
-            const to=fractionToTime(rows,Math.max(brush.from,brush.to));
+            const width=Math.abs(brush.to-brush.from);
             // A click rather than a drag: take back whatever is under it.
-            if(Math.abs(brush.to-brush.from)<0.004)setIntervals(prev=>removeAt(prev,from));
-            else setIntervals(prev=>addInterval(prev,{from,to}));
+            if(width<grabTolerance())setWindows(prev=>removeWindowAt(prev,brush.from));
+            else setWindows(prev=>addWindow(prev,makeWindow(pairKey,brush.from,brush.to,rows)));
             setBrush(null);}}>
           <KeogramCanvas rows={rows} side={side} samples={keogram?.samples??1}
             label={`Keogram for ${name}`}/>
-          {intervals.map((i,n)=><span key={n} className="keogram-band" style={band(i)}/>)}
+          {windows.filter(onScreen).map((w,n)=><span key={n} className="keogram-band" style={band(w)}/>)}
           {brush&&<span className="keogram-band keogram-band-live" style={{
-            left:`${Math.min(brush.from,brush.to)*100}%`,
-            width:`${Math.abs(brush.to-brush.from)*100}%`}}/>}
+            left:`${Math.min(...[brush.from,brush.to].map(t=>Number(band({from:t,to:t}).left.replace('%',''))))}%`,
+            width:`${Math.abs(Number(band({from:brush.to,to:brush.to}).left.replace('%',''))-Number(band({from:brush.from,to:brush.from}).left.replace('%','')))}%`}}/>}
         </div>
       </div>;
     return <>
@@ -480,11 +512,20 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
         {strip('b',keogram.b.name,keogram.b.coverage)}
         <div className="keogram-axis"><small>
           {new Date(keogram.from).toISOString().replace('T',' ').slice(0,16)} UTC</small>
-          <small>drag to select a window, click inside one to drop it</small>
+          <small>drag to select, drag an end to move it, click inside one to drop it</small>
           <small>{new Date(keogram.to).toISOString().replace('T',' ').slice(0,16)} UTC</small></div>
+        {windows.length>0&&<div className="keogram-windows">
+          <span className="eyebrow">WINDOWS</span>
+          {windows.map((w,n)=><button key={n} type="button" onClick={()=>setWindows(prev=>prev.filter((_,i)=>i!==n))}
+            title="Remove this window">
+            {new Date(w.from).toISOString().replace('T',' ').slice(5,16)}
+            {'\u2013'}{new Date(w.to).toISOString().slice(11,16)}
+            {' \u00b7 '}{w.rows.length} frames {'\u00d7'}</button>)}
+          {elsewhere.length>0&&<small>{elsewhere.length} from other nights, still contributing</small>}
+        </div>}
         <div className="star-plot"><div className="star-plot-head">
           <strong>{keogram.a.name} against {keogram.b.name}</strong>
-          <small>{counted} sample pairs{intervals.length?` from ${chosen.toFixed(0)} min selected`:' (whole window)'}</small></div>
+          <small>{counted} sample pairs{windows.length?` from ${chosen.toFixed(0)} min in ${windows.length} window${windows.length>1?'s':''}`:' \u00b7 select a window to fill this'}</small></div>
           <KeogramScatter sets={scatter} size={320}/>
           <div className="star-legend">
             <span><i style={{background:'rgb(255,90,80)'}}/>red</span>
@@ -493,8 +534,9 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
             <small>Horizontal: {keogram.a.name}. Vertical: {keogram.b.name}. The faint
               diagonal is equal response. A straight line through a channel is the
               pair\u2019s gain ratio; its slope is what the equalization solve wants,
-              and it can only be read from a window with real structure in it.
-              Intensities come from {keogram.pixel_source}.</small>
+              and it can only be read from windows with real structure in them.
+              Windows keep the frames they were made from, so several nights can be
+              selected and fitted together. Intensities come from {keogram.pixel_source}.</small>
           </div>
         </div>
       </>}
@@ -751,6 +793,91 @@ clear-sky flux ${r.clear_flux==null?'n/a':r.clear_flux.toPrecision(4)}`}</title>
 const stamp=(value:string|null)=>value?new Date(value).toISOString().replace('T',' ').slice(0,16)+' UTC':null;
 
 /// Compare the calibrations held for one camera and choose which one maps it.
+type DriftStar={star_key:string;vt_mag:number;azimuth_deg:number;elevation_deg:number;
+  predicted_x:number;predicted_y:number;centroid_x:number|null;centroid_y:number|null;offset_px:number|null};
+type Drift={night:number;calibration_id:string|null;calibration_star_count:number|null;
+  calibration_residual_px:number|null;
+  frame:{image_id:string;observation_utc:string;width:number|null;height:number|null;found:number;
+    rms_offset_px:number|null}|null;
+  stars?:DriftStar[];refit_available?:boolean;refit_reason?:string;note?:string};
+
+/// Where the sky says the stars are against where they were found.
+///
+/// A lens drifts, and the symptom is a standing offset between the two. Drawing
+/// them on the frame itself is the only presentation that shows *which* way it
+/// drifted -- a uniform shift, a rotation and a change of scale look nothing
+/// alike, and a single RMS number hides all three.
+function CalibrationDrift({camera}:{camera:Camera}){
+  const [drift,setDrift]=useState<Drift|null>(null);
+  const [busy,setBusy]=useState(true),[refitting,setRefitting]=useState(false);
+  const [error,setError]=useState(''),[outcome,setOutcome]=useState('');
+  const load=async()=>{
+    setBusy(true);
+    try{
+      const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/drift`,{cache:'no-store'});
+      if(!r.ok)throw new Error(await r.text()||'Could not check for lens drift.');
+      setDrift(await r.json() as Drift);setError('');
+    }catch(e){setError(String((e as Error).message||e))}finally{setBusy(false)}
+  };
+  useEffect(()=>{void load()},[camera.id]);
+  const refit=async()=>{
+    setRefitting(true);setOutcome('');
+    try{
+      const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/refit`,{method:'POST'});
+      const body=await r.json().catch(()=>null) as {residual_px_before?:number;residual_px_after?:number;star_count?:number}|null;
+      if(!r.ok)throw new Error((body as unknown as {error?:string})?.error||await r.text()||'The refit was refused.');
+      setOutcome(`Added a new calibration from ${body?.star_count} stars: `
+        +`${body?.residual_px_before?.toFixed(3)} px \u2192 ${body?.residual_px_after?.toFixed(3)} px RMS. `
+        +`It is not live \u2014 select it above when you want it used.`);
+    }catch(e){setError(String((e as Error).message||e))}finally{setRefitting(false)}
+  };
+  const frame=drift?.frame;
+  const stars=drift?.stars??[];
+  const w=frame?.width??0,h=frame?.height??0;
+  return <div className="drift-panel">
+    <span className="eyebrow">LENS DRIFT, TONIGHT&rsquo;S BEST FRAME</span>
+    {busy?<p role="status">Looking for tonight&rsquo;s richest frame&hellip;</p>
+      :error?<p role="alert">{error}</p>
+      :!frame?<div className="history-empty">{drift?.note||'No stars measured tonight yet.'}</div>
+      :<>
+      <div className="drift-meta">
+        <span><strong>{frame.found}</strong> stars found</span>
+        <span>calibration in force used <strong>{drift?.calibration_star_count??'an unrecorded number of'}</strong></span>
+        <span>offset <strong>{frame.rms_offset_px==null?'\u2014':`${frame.rms_offset_px.toFixed(2)} px`}</strong> RMS</span>
+        <time>{frame.observation_utc.replace('T',' ').slice(0,19)} UTC</time>
+      </div>
+      {w>0&&h>0&&<svg className="drift-image" viewBox={`0 0 ${w} ${h}`} role="img"
+        aria-label="Predicted and fitted star positions on tonight's richest frame">
+        <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
+          x={0} y={0} width={w} height={h} preserveAspectRatio="none"/>
+        {/* Purple where the ephemeris and lens model say the star is; amber
+            where the Gaussian actually fitted. A line joins the pair, because
+            the direction of the offset is the whole diagnosis. */}
+        {stars.map(st=>st.centroid_x==null||st.centroid_y==null?null:
+          <line key={`l${st.star_key}`} x1={st.predicted_x} y1={st.predicted_y}
+            x2={st.centroid_x} y2={st.centroid_y} className="drift-link"/>)}
+        {stars.map(st=><circle key={`p${st.star_key}`} cx={st.predicted_x} cy={st.predicted_y}
+          r={Math.max(3,w/420)} className="drift-predicted"/>)}
+        {stars.map(st=>st.centroid_x==null||st.centroid_y==null?null:
+          <circle key={`f${st.star_key}`} cx={st.centroid_x} cy={st.centroid_y}
+            r={Math.max(3,w/420)} className="drift-fitted"/>)}
+      </svg>}
+      <div className="drift-legend">
+        <span><i className="swatch-predicted"/>projected from the star ephemeris</span>
+        <span><i className="swatch-fitted"/>fitted Gaussian centroid</span>
+      </div>
+      <div className="drift-actions">
+        <button type="button" disabled={!drift?.refit_available||refitting} onClick={()=>void refit()}>
+          {refitting?'Fitting\u2026':'Refit lens parameters (AIDA/WISC)'}</button>
+        <small>{drift?.refit_reason}</small>
+      </div>
+      {outcome&&<p className="drift-outcome" role="status">{outcome}</p>}
+      <small className="drift-note">A refit is added to the list above and left unselected.
+        Which calibration a camera uses stays an administrator&rsquo;s decision.</small>
+    </>}
+  </div>;
+}
+
 function CalibrationPicker({camera,onClose}:{camera:Camera;onClose:()=>void}){
   const [rows,setRows]=useState<Calibration[]>([]),[selected,setSelected]=useState<string|null>(null);
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -794,6 +921,7 @@ function CalibrationPicker({camera,onClose}:{camera:Camera;onClose:()=>void}){
       </div>
       <p className="calibration-note">{selected===null?'Automatic selection is active.':'A fixed calibration is active; its validity interval is ignored.'} Switching rebuilds this camera&rsquo;s projection mesh on the next publish.</p>
     </>}
+    <CalibrationDrift camera={camera}/>
   </div></div>;
 }
 

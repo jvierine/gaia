@@ -566,6 +566,40 @@ camera region when scrubbing history. Tests cover inverse shell projection.
 
 Station overlays retain source IDs in both admin and public views; M toggles exactly the named overlay camera. Timeline range focus no longer swallows M after scrubbing history (text fields still suppress shortcuts). Marker picking precedes image picking so a station dot always names that station.
 
+## Pending install: the cloud weight in the composite (2026-09-16)
+
+A weight from the star fading now multiplies both composites -- the server-side
+atlas in `publish.rs` and the browser layers via a small per-frame greyscale
+field published beside each texture (`cloud_url` in the manifest) and sampled
+in the fragment shader.
+
+**PRELIMINARY.** Saturated stars are excluded, because bright aurora over a
+clear sky and moonlit thin cloud clip a star's peak identically and mean
+opposite things. That biases towards clear. `GAIA_CLOUD_WEIGHT=0` in the
+service environment turns it off without a rebuild -- use that if the mosaic
+looks wrong rather than rolling back.
+
+Watch for two things after install. The publisher now does one extra grouped
+query per camera and one small PNG per frame, so a first full publish is a
+little slower; and layers whose frame had no usable stars carry no `cloud_url`
+and must composite exactly as before, which is the case to check first.
+
+Both halves together -- the shader reads a field the old publisher never wrote,
+and the old shader ignores one the new publisher does. As bgu001, from the
+repository root:
+
+    tar xzf /mnt/data/juha/gaia/staging/web-dist-a455d39.tar.gz
+    chmod 664 web-dist/index.html web-dist/assets/*
+
+then the binary:
+
+    sudo install -o j -g j -m 755 /mnt/data/juha/gaia/staging/gaia-server-a455d39 /mnt/data/juha/gaia-build/release/gaia-server.new
+    sudo mv /mnt/data/juha/gaia-build/release/gaia-server.new /mnt/data/juha/gaia-build/release/gaia-server
+    sudo kill -9 $(pgrep -u j -f '/mnt/data/juha/gaia-build/release/gaia-server')
+
+Back out with `gaia-server-2625ee0` and `web-dist-2625ee0.tar.gz`. No schema
+change.
+
 ## Pending install: paired keograms (2026-09-15)
 
 Two new endpoints and a new sub-tab. `/api/sources/{id}/keogram-pairs` lists

@@ -1001,15 +1001,24 @@ That keeps the first version legible and leaves the depth, with its refusals and
 its gates, for when this one has been looked at.
 
 \paragraph{The field.} Each usable star owns the region of the image closer to
-it than to any other. Within a cell the star's own fading is trusted fully at
-the star and less further out, following a Hann window that reaches zero at the
-cell boundary; at the boundary the value is the blend of the two cells meeting
-there. That blend is spread over \SI{10}{px} with the same smooth step
+it than to any other, and carries its own fading flat across that cell. Across a
+boundary the two cells are blended over \SI{10}{px} with the same smooth step
 $f_s$ used everywhere else in the weight chain, and only where the cell is
 larger than that band --- inside \SI{10}{px} of its own star a cell keeps its
 own value, since a transition wider than the cell would erase the measurement
-it exists to carry. The result is continuous, equals a star's own fading at that
-star, and equals the mean of two neighbours on the boundary between them.
+it exists to carry. The result is continuous, equals a star's own fading over
+almost all of its cell, and equals the mean of two neighbours on the boundary
+between them.
+
+A Hann taper across each cell, from full trust at the star to none at its
+boundary, is implemented and \emph{off}. The question it answers is real --- a
+star two hundred pixels away is weaker evidence than one overhead --- but it has
+not been looked at on real frames and it interacts with the boundary blend in a
+way nobody has examined. Leaving it off makes the field say exactly what was
+measured, and confines the smoothing to where it was asked for.
+\texttt{GAIA\_CLOUD\_HANN=1} restores it without a rebuild, and both manifests
+publish which of the two built the mosaic, so a picture always says what it was
+made with.
 
 \paragraph{Three stars, at least.} The first live publish showed why a floor on
 the number of stars is not a detail: ten fields in sixteen were a single value

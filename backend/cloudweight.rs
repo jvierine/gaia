@@ -27,6 +27,7 @@
 //! star, and equals the mean of two neighbours on the boundary between them.
 
 use crate::geometry::smooth_step;
+use std::sync::LazyLock;
 
 /// Why the numbers this module produces should not yet be trusted as physics.
 ///
@@ -53,6 +54,42 @@ conditions before trusting the values.";
 
 /// Width of the transition across a Voronoi boundary, in image pixels.
 pub const BLEND_PX: f64 = 10.0;
+
+/// Whether each star's value is Hann-tapered across its own cell.
+///
+/// **Off.** The field is then flat within a cell at that star's own fading,
+/// with the smooth transition across the cell boundaries retained. Turning the
+/// taper off makes the field say exactly what was measured -- this star, this
+/// fading, over the region it speaks for -- and leaves the only smoothing where
+/// it was asked for, at the boundaries.
+///
+/// The taper is kept rather than deleted because the question it answers is
+/// real: a star two hundred pixels away is weaker evidence than one overhead,
+/// and the taper is one way to say so. It has simply not been looked at on real
+/// frames yet, and it interacts with the boundary blend in a way nobody has
+/// examined. `GAIA_CLOUD_HANN=1` puts it back without a rebuild, and both
+/// manifests record which was used, so a published mosaic always says which
+/// field it was made with.
+pub static HANN_RESPONSE: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("GAIA_CLOUD_HANN").as_deref() == Ok("1"));
+
+/// How the field is built, for the manifests to publish alongside the mosaic.
+pub fn description() -> String {
+    let response = if *HANN_RESPONSE {
+        "each star's value Hann-tapered from full at the star to none at its cell boundary"
+    } else {
+        "each star's value flat across its own cell (Hann response disabled)"
+    };
+    format!(
+        "PRELIMINARY. Per pixel, from how far this frame's unsaturated stars have faded \
+against their own best flux over the whole archive, and only where at least {MIN_STARS} \
+such stars were measured. Each star owns its Voronoi cell, with {response}; across a \
+boundary the two cells are blended over {BLEND_PX:.0} image pixels with the same smooth \
+step used elsewhere in the weight chain, applied only where the cell is larger than that \
+band. Floored at {FLOOR}; multiplies the weight and never the pixel value, so it enters \
+the same denominator."
+    )
+}
 
 /// A weight is never taken all the way to zero. With a single contributing
 /// camera the per-pixel normalization divides the weight out again, so a floor
@@ -129,6 +166,12 @@ pub fn weight_at(stars: &[StarFading], x: f64, y: f64) -> f64 {
     } else {
         f_a
     };
+    // Without the Hann response the cell is flat at its own star's fading, and
+    // `edge` already carries the boundary transition: at d >= BLEND_PX the
+    // smooth step is 1 and the expression above reduces to f_a exactly.
+    if !*HANN_RESPONSE {
+        return edge.clamp(FLOOR, 1.0);
+    }
     // Hann response within the cell: the star's own value at the star, falling
     // to zero influence at the boundary, where `edge` takes over. `reach` is
     // the distance from the star to the boundary through this point.
@@ -397,6 +440,32 @@ mod tests {
         for x in [0.0, 100.0, 250.0, 400.0, 900.0] {
             assert!(weight_at(&stars, x, 100.0) >= FLOOR, "zero weight at {x}");
         }
+    }
+
+    #[test]
+    fn with_the_taper_off_a_cell_is_flat_until_its_boundary() {
+        // Two stars 1000 px apart, boundary at 600. Everything further than
+        // BLEND_PX inside a cell reads that cell's own star, unchanged.
+        assert!(!*HANN_RESPONSE, "the taper is expected off by default");
+        let stars = [star(100.0, 100.0, 0.9), star(1100.0, 100.0, 0.2)];
+        for x in [120.0, 300.0, 500.0, 585.0] {
+            let w = weight_at(&stars, x, 100.0);
+            assert!((w - 0.9).abs() < 1e-9, "not flat at x={x}: {w}");
+        }
+        // The transition is confined to the band, and centred on the boundary.
+        assert!((weight_at(&stars, 600.0, 100.0) - 0.55).abs() < 1e-6);
+        for x in [615.0, 800.0, 1080.0] {
+            let w = weight_at(&stars, x, 100.0);
+            assert!((w - 0.2).abs() < 1e-9, "not flat at x={x}: {w}");
+        }
+    }
+
+    #[test]
+    fn the_published_description_says_which_field_was_built() {
+        let text = description();
+        assert!(text.contains("Hann response disabled"), "{text}");
+        assert!(text.contains("PRELIMINARY"));
+        assert!(text.contains("10 image pixels"));
     }
 
     #[test]

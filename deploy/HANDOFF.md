@@ -589,14 +589,17 @@ same image the frame browser already serves, but it is not a thumbnail.
 
 Both halves. As bgu001, from the repository root:
 
-    tar xzf /mnt/data/juha/gaia/staging/web-dist-.tar.gz
+    tar xzf /mnt/data/juha/gaia/staging/web-dist-a25b5bf.tar.gz
     chmod 664 web-dist/index.html web-dist/assets/*
 
 then the binary:
 
-    sudo install -o j -g j -m 755 /mnt/data/juha/gaia/staging/gaia-server- /mnt/data/juha/gaia-build/release/gaia-server.new
+    sudo install -o j -g j -m 755 /mnt/data/juha/gaia/staging/gaia-server-a25b5bf /mnt/data/juha/gaia-build/release/gaia-server.new
     sudo mv /mnt/data/juha/gaia-build/release/gaia-server.new /mnt/data/juha/gaia-build/release/gaia-server
     sudo kill -9 $(pgrep -u j -f '/mnt/data/juha/gaia-build/release/gaia-server')
+
+sha256: binary `64e424ee6f534d11857393efa84f5060dee2a667cea4647a9bea1870bfc48ac1`,
+bundle `c9531949cd31ba278bf80c7b175f2dc286d4e6ec30a83f9346d43847e4203985`.
 
 Back out with `gaia-server-807546a` and `web-dist-a455d39.tar.gz`. No schema
 change. Let any publish in flight finish first.

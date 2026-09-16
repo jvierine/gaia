@@ -65,6 +65,55 @@ impl Rules {
         Ok(r)
     }
 }
+/// The cloud weight field for one frame, written as a small greyscale PNG in
+/// the camera's own texture coordinates so the browser can sample it beside the
+/// colour. One file per frame, unlike the mesh, because the sky changes and the
+/// calibration does not.
+///
+/// Returns None when the frame has no usable stars: there is then no
+/// measurement, and the layer must composite exactly as it did before rather
+/// than be dimmed on no evidence. PRELIMINARY -- see cloudweight::PRELIMINARY.
+fn cloud_layer(
+    s: &AppState,
+    source: &str,
+    observation_utc: &str,
+    size: [f64; 2],
+    best: &std::collections::HashMap<String, f64>,
+    assets: &Path,
+) -> Result<Option<String>> {
+    let conn = db::open(&s.db_path)?;
+    let stars = crate::cloudweight::stars_for_frame(
+        &conn,
+        source,
+        observation_utc,
+        crate::cloudweight::CHANNEL,
+        best,
+    )?;
+    if stars.is_empty() {
+        return Ok(None);
+    }
+    let n = crate::cloudweight::GRID;
+    let field = crate::cloudweight::grid(&stars, size[0], size[1], n, n);
+    let key = format!(
+        "{:x}",
+        Sha256::digest(format!("cloud-v1:{source}:{observation_utc}:{n}:{}", stars.len()))
+    );
+    let name = format!("cloud-{key}.png");
+    let dest = assets.join(&name);
+    if !dest.exists() {
+        let mut image = image::GrayImage::new(n as u32, n as u32);
+        for (index, value) in field.iter().enumerate() {
+            let level = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+            image.put_pixel((index % n) as u32, (index / n) as u32, image::Luma([level]));
+        }
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageLuma8(image)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)?;
+        atomic(&dest, &bytes)?;
+    }
+    Ok(Some(name))
+}
+
 fn weighted_mesh(
     s: &AppState,
     source: &str,
@@ -250,9 +299,23 @@ pub fn run(s: &AppState) -> Result<()> {
             if let Some(start)=day_start {let selected:BTreeSet<String>=(0..120).filter_map(|i|{let slot=start+i*720;times.iter().find(|t|chrono::DateTime::parse_from_rfc3339(t).ok().is_some_and(|t|{let t=t.timestamp();t<=slot&&slot-t<=600})).cloned()}).collect();times.retain(|t|selected.contains(t));}
             let total=times.len();let mut done=0;let mut last_error=None;
             if report_progress {crate::processing::write(s,&id,"processing",total,0,0,None,&progress_start)?;}
+            // PRELIMINARY (cloudweight::PRELIMINARY). GAIA_CLOUD_WEIGHT=0 stops
+            // publishing the field, and a layer without one composites unchanged.
+            let cloud_wanted = std::env::var("GAIA_CLOUD_WEIGHT").as_deref() != Ok("0");
+            let cloud_best = if cloud_wanted {
+                crate::cloudweight::best_flux(&conn, &id, crate::cloudweight::CHANNEL).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+            let image_size: [f64; 2] = conn.query_row(
+                "SELECT width,height FROM images WHERE source_id=?1 AND width IS NOT NULL AND height IS NOT NULL ORDER BY observation_utc DESC LIMIT 1",
+                [&id], |r| Ok([r.get::<_,i64>(0)? as f64, r.get::<_,i64>(1)? as f64])).unwrap_or([256.,256.]);
             for time in times{let at=chrono::DateTime::parse_from_rfc3339(&time)?.with_timezone(&Utc);match projection::assets(s,&id,Some(at)){Ok(a)=>{
                 let (mesh,count)=weighted_mesh(s,&id,&a,lat,lon,camera["altitude_m"].as_f64().unwrap_or(0.),&assets,&rules)?;let texture=a["texture_url"].as_str().unwrap().rsplit('/').next().unwrap();copy(&s.archive_root.join("projection-cache").join(texture),&assets.join(texture))?;
-                images.push(json!({"source_id":id,"at":a["observation_utc"],"geometry_url":format!("/gaia/{audience}/assets/{mesh}"),"texture_url":format!("/gaia/{audience}/assets/{texture}"),"vertex_count":count,"calibration_id":a["calibration_id"]}));
+                let cloud = if cloud_wanted {
+                    cloud_layer(s,&id,a["observation_utc"].as_str().unwrap_or_default(),image_size,&cloud_best,&assets).unwrap_or(None)
+                } else { None };
+                images.push(json!({"source_id":id,"at":a["observation_utc"],"geometry_url":format!("/gaia/{audience}/assets/{mesh}"),"texture_url":format!("/gaia/{audience}/assets/{texture}"),"cloud_url":cloud.map(|c|format!("/gaia/{audience}/assets/{c}")),"vertex_count":count,"calibration_id":a["calibration_id"]}));
             },Err(e)=>{last_error=Some(e.to_string());tracing::debug!(%id,%time,%e,"No calibrated projection");}}
                 done+=1;if report_progress {crate::processing::write(s,&id,"processing",total,done,images.len(),last_error.as_deref(),&progress_start)?;}
             }
@@ -329,7 +392,7 @@ pub fn run(s: &AppState) -> Result<()> {
         &assets.join(&igrf),
     )
     .or_else(|_| atomic(&assets.join(&igrf), &s.igrf))?;
-    let manifest = json!({"composition":"browser-layers-v1","date":day.map(|d|d.to_string()),"generated_utc":Utc::now().to_rfc3339(),"audience":if anonymous{"anonymous-no-starvisor"}else{"full"},"cameras":cameras,"images":images,"lens_models":lenses,"igrf_url":format!("/gaia/{audience}/assets/{igrf}"),"stitching":{"location":"browser WebGL","model":"IGRF-14 magnetic-axis Laplacian blend","rules":rules,"weight":"exp(-abs(theta_B)/S) * zenith_taper * mask_edge_fade * solar_taper * 2^quality_exponent","normalization":"sum(weight * RGB) / sum(weight); omit nonpositive weights","solar_time":"selected composition epoch, not camera acquisition epoch","altitude_km":100,"maximum_camera_texture_dimension":256,"geometry_stride_bytes":24}});
+    let manifest = json!({"composition":"browser-layers-v1","date":day.map(|d|d.to_string()),"generated_utc":Utc::now().to_rfc3339(),"audience":if anonymous{"anonymous-no-starvisor"}else{"full"},"cameras":cameras,"images":images,"lens_models":lenses,"igrf_url":format!("/gaia/{audience}/assets/{igrf}"),"stitching":{"location":"browser WebGL","model":"IGRF-14 magnetic-axis Laplacian blend","rules":rules,"weight":"exp(-abs(theta_B)/S) * zenith_taper * mask_edge_fade * solar_taper * 2^quality_exponent * cloud_weight","cloud_weight":"PRELIMINARY. Per-frame greyscale field in the camera's texture coordinates at cloud_url, sampled per pixel and multiplying the weight; absent where the frame had no usable stars, and then the layer composites unchanged. Built from how far each unsaturated star has faded against its own best flux over the archive: Voronoi cells, Hann-tapered within a cell, blended over 10 image pixels at the boundaries of cells large enough to hold that band, floored at 0.02","cloud_weight_caveat":"Saturated stars are excluded and cannot yet be told apart as aurora over clear sky or moonlit thin cloud; both clip the peak identically. Biases towards clear","normalization":"sum(weight * RGB) / sum(weight); omit nonpositive weights","solar_time":"selected composition epoch, not camera acquisition epoch","altitude_km":100,"maximum_camera_texture_dimension":256,"geometry_stride_bytes":24}});
     atomic(&root.join(filename), &serde_json::to_vec(&manifest)?)?;
     if report_progress {for camera in manifest["cameras"].as_array().unwrap() {let id=camera["source_id"].as_str().unwrap();let p=crate::processing::read(s,id,None);if p["state"]=="publishing" {crate::processing::write(s,id,"ready",p["total"].as_u64().unwrap_or(0) as usize,p["done"].as_u64().unwrap_or(0) as usize,p["ready"].as_u64().unwrap_or(0) as usize,p["error"].as_str(),&progress_start)?;}}}
     tracing::info!(

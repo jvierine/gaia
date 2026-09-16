@@ -276,6 +276,42 @@ void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(reso
 precision highp float;varying vec2 texCoord;varying vec3 color;varying float visible;uniform sampler2D frame;uniform bool textured;uniform bool applyMute;uniform sampler2D sourceMap;uniform sampler2D cameraVisibility;void main(){if(visible<0.)discard;if(textured){if(applyMute){vec3 code=floor(texture2D(sourceMap,texCoord).rgb*255.+.5);float id=dot(code,vec3(65536.,256.,1.));if(id>0.&&id<65536.&&texture2D(cameraVisibility,vec2(mod(id,256.)+.5,floor(id/256.)+.5)/256.).r<.5)discard;}gl_FragColor=texture2D(frame,texCoord);return;}gl_FragColor=vec4(color,1.);}`);
   type Geometry={buffer:WebGLBuffer;count:number};
   const geometryCache=new Map<string,Geometry>(),textureCache=new Map<string,WebGLTexture>();
+  // Cloud weight fields, cached by URL like the textures. They are tiny (a few
+  // dozen pixels square) and shared by every viewer of the same frame.
+  const cloudCache=new Map<string,WebGLTexture>(),cloudPending=new Map<string,Promise<WebGLTexture|undefined>>();
+  const loadCloud=(url:string):Promise<WebGLTexture|undefined>=>{
+    const held=cloudCache.get(url);
+    if(held&&gl.isTexture(held))return Promise.resolve(held);
+    let pending=cloudPending.get(url);
+    if(!pending){
+      pending=(async()=>{
+        try{
+          const response=await fetch(url,{signal:abort.signal});
+          if(!response.ok)return undefined;
+          const blob=await response.blob();
+          const im=new Image();
+          const object=URL.createObjectURL(blob);
+          try{
+            await new Promise<void>((resolve,reject)=>{im.onload=()=>resolve();im.onerror=()=>reject(new Error('Cloud field decode failed'));im.src=object});
+            const texture=gl.createTexture()!;
+            gl.bindTexture(gl.TEXTURE_2D,texture);
+            // LINEAR: the field is a smooth function sampled coarsely, so
+            // interpolating between cells is closer to the truth than a step.
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);
+            cloudCache.set(url,texture);
+            return texture;
+          }finally{URL.revokeObjectURL(object)}
+        }catch{return undefined}
+        finally{cloudPending.delete(url)}
+      })();
+      cloudPending.set(url,pending);
+    }
+    return pending;
+  };
   const textureSizes=new Map<WebGLTexture,[number,number]>();
   // Temporal filtering is display-only. Keep the original frames and projected
   // geometry unchanged; blend camera textures at the display refresh rate.
@@ -293,7 +329,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   let playbackClockValue:number|null=null;
   const playbackClock=()=>playbackClockValue;
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
-  let frames:{geometry:Geometry;texture:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number}[]=[];
+  let frames:{geometry:Geometry;texture:WebGLTexture;cloud?:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number}[]=[];
   const layers:{buffer:WebGLBuffer;count:number}[]=[];
   const addLayer=(values:number[]|Float32Array)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6})};
   // Expand each station into a small globe-surface disc. WebGL point sprites have
@@ -318,7 +354,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const cameraOrders=new Map<string,number>();
     const cameraOrder=(id:string)=>{if(!cameraOrders.has(id))cameraOrders.set(id,cameraOrders.size);return cameraOrders.get(id)!};
     type Asset={geometry_url:string;texture_url:string;vertex_count:number;weight_scale?:number};
-    type Catalogue=Asset&{width:number;height:number;images:{source_id?:string;at:string;width:number;height:number;texture_url:string;source_map_url?:string;geometry_url?:string;vertex_count?:number;weight_scale?:number}[]};
+    type Catalogue=Asset&{width:number;height:number;images:{source_id?:string;at:string;width:number;height:number;texture_url:string;source_map_url?:string;geometry_url?:string;cloud_url?:string;vertex_count?:number;weight_scale?:number}[]};
     const catalogues=new Map<string,{expires:number;value:Promise<Catalogue|null>}>();
     const catalogue=(id:string)=>{
       let c=catalogues.get(id);if(!c||c.expires<Date.now()){
@@ -400,7 +436,11 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           if(frame.source_map_url)await loadAttribution(frame.source_map_url);
           const camera=snapshot?.cameras?.find((c:PublicCamera)=>c.source_id===s.id);
           const weightScale=browserLayers&&camera&&snapshot?.stitching?.rules?cameraWeightScale(camera,epoch,snapshot.stitching.rules):asset.weight_scale;
-          if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,order:s.order,sourceMapUrl:frame.source_map_url,at:(frame as any).observation_at||frame.at,sourceId:s.id,weightScale});
+          // The cloud weight field, when this frame has one. It is small and
+          // cached like the geometry, and its absence is meaningful: a frame
+          // with no usable stars measured no cloud and must composite as before.
+          const cloud=frame.cloud_url?await loadCloud(frame.cloud_url):undefined;
+          if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,cloud,order:s.order,sourceMapUrl:frame.source_map_url,at:(frame as any).observation_at||frame.at,sourceId:s.id,weightScale});
         }catch(e){if(!request.signal.aborted){state.failed++;console.error(`Projection ${s.name}`,e)}}
         finally{state.done++;if(!request.signal.aborted)emitProgress(progressMinute)}
       }}));

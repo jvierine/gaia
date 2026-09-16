@@ -1,5 +1,5 @@
 //! Offline public atlas publisher. No public database or projection API required.
-use crate::{AppState, db, geometry, projection};
+use crate::{AppState, cloudweight, db, geometry, projection};
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use serde_json::json;
@@ -102,6 +102,14 @@ fn legacy_atlas(s: &AppState) -> Result<()> {
     let mut mask_outlines: BTreeMap<String, ([f64; 4], Vec<Vec<[f64; 2]>>, [f64; 2])> =
         BTreeMap::new();
     let mut quality_weights: BTreeMap<String, f64> = BTreeMap::new();
+    // Original image dimensions per camera: the star positions the cloud field
+    // is built from are in those pixels, not in the 256px thumbnail.
+    let mut image_size: BTreeMap<String, [f64; 2]> = BTreeMap::new();
+    // PRELIMINARY (cloudweight::PRELIMINARY). On by default because the effect
+    // is the point of having measured it; GAIA_CLOUD_WEIGHT=0 turns it off
+    // without a rebuild, which is what a provisional factor needs.
+    let cloud_weighting = std::env::var("GAIA_CLOUD_WEIGHT").as_deref() != Ok("0");
+    let mut cloud_best: BTreeMap<String, std::collections::HashMap<String, f64>> = BTreeMap::new();
     for (id, _, _, _) in &cameras {
         let (crop_json, mask_json, mask_enabled, quality_exponent): (
             Option<String>,
@@ -126,6 +134,13 @@ fn legacy_atlas(s: &AppState) -> Result<()> {
                 |r| Ok((r.get::<_, i64>(0)? as f64, r.get::<_, i64>(1)? as f64)),
             )
             .unwrap_or((256.0, 256.0));
+        image_size.insert(id.clone(), [raw_w, raw_h]);
+        if cloud_weighting {
+            cloud_best.insert(
+                id.clone(),
+                cloudweight::best_flux(&conn, id, cloudweight::CHANNEL).unwrap_or_default(),
+            );
+        }
         let crop = crop_json
             .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
             .and_then(|v| {
@@ -281,6 +296,9 @@ fn legacy_atlas(s: &AppState) -> Result<()> {
             handles.push(scope.spawn(|| -> Result<Vec<serde_json::Value>> {
                 let igrf = ferromagnetic::igrf::IGRF::default();
                 let mut magnetic_weight_cache: BTreeMap<String, Vec<f32>> = BTreeMap::new();
+                // Each worker reads its own connection: rusqlite handles are
+                // not shared between threads, and this one is read-only.
+                let cloud_conn = if cloud_weighting { db::open(&s.db_path).ok() } else { None };
                 let mut frames = Vec::new();
                 loop {
                     let index = next_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -356,6 +374,33 @@ fn legacy_atlas(s: &AppState) -> Result<()> {
                     sun_light_deg,
                     sun_floor,
                 ) as f32;
+                // Cloud weight from how far this frame's stars have faded.
+                // Unlike the two factors above this one varies across the
+                // image, so it is a grid sampled at each pixel's own texture
+                // coordinate rather than one number for the frame.
+                // PRELIMINARY: see cloudweight::PRELIMINARY.
+                let cloud = match (&cloud_conn, cloud_best.get(*id), image_size.get(*id)) {
+                    (Some(c), Some(best), Some(size)) => {
+                        let stars = cloudweight::stars_for_frame(
+                            c,
+                            id,
+                            a["observation_utc"].as_str().unwrap_or_default(),
+                            cloudweight::CHANNEL,
+                            best,
+                        )
+                        .unwrap_or_default();
+                        (!stars.is_empty()).then(|| {
+                            cloudweight::grid(
+                                &stars,
+                                size[0],
+                                size[1],
+                                cloudweight::GRID,
+                                cloudweight::GRID,
+                            )
+                        })
+                    }
+                    _ => None,
+                };
                 if !magnetic_weight_cache.contains_key(geometry_name) {
                     let weight_key = format!(
                         "{:x}",
@@ -484,11 +529,26 @@ fn legacy_atlas(s: &AppState) -> Result<()> {
                             let v = |axis: usize| {
                                 (0..3).map(|k| q[k] * t[k * 5 + axis] as f64).sum::<f64>()
                             };
+                            // The cloud factor multiplies the weight, not the
+                            // pixel value, and so enters the denominator with
+                            // it: accum[idx][3] below sums exactly the weights
+                            // that were applied to the colours.
+                            let cloud_weight = match &cloud {
+                                Some(g) => cloudweight::sample(
+                                    g,
+                                    cloudweight::GRID,
+                                    cloudweight::GRID,
+                                    v(3),
+                                    v(4),
+                                ),
+                                None => 1.0,
+                            };
                             let weight = (0..3)
                                 .map(|k| q[k] as f32 * magnetic_weights[triangle_index * 3 + k])
                                 .sum::<f32>()
                                 * sun_weight
-                                * quality_weight;
+                                * quality_weight
+                                * cloud_weight;
                             if weight <= 0. {
                                 continue;
                             }
@@ -572,7 +632,7 @@ fn legacy_atlas(s: &AppState) -> Result<()> {
     let mut lens_models = publish_lens_models(&conn, &assets, &if anonymous {restricted.clone()} else {Default::default()})?;
     if anonymous { public_cameras.retain(|c|!restricted.contains(c["source_id"].as_str().unwrap_or(""))); lens_models.retain(|c|!restricted.contains(c["source_id"].as_str().unwrap_or(""))); }
     let lens_model_documentation = json!({"format":"AIDA/WISC HDF5","recommended_dataset":"/wisc_optpar_with_optmod","dimension_attributes":["image_width","image_height"],"pixel_coordinates":"zero-based raw image pixel centers","azimuth":"degrees clockwise from geographic north","elevation":"degrees above horizon","validity_interval":"valid_from_utc inclusive, valid_to_utc exclusive; null is open","python_mapper":"https://github.com/jvierine/widefield-star-calibrator/blob/main/wisc_lens.py"});
-    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d) * solar_taper(sun_elevation) * quality_weight","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"solar_taper":"F + (1-F) * (1 - psi(u)/(psi(u)+psi(1-u))) with u=(elevation-D)/(L-D); whole-image weight from the solar elevation at the camera station","solar_taper_dark_deg":sun_dark_deg,"solar_taper_light_deg":sun_light_deg,"solar_taper_floor":sun_floor,"quality_weight":"per-camera operator setting, a power of two from 1 to 1/256, multiplying the weight and not the pixel value","zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
+    let stitching = json!({"model":"IGRF-14 magnetic-axis Laplacian blend","field_evaluation_altitude_km":100.0,"theta_definition":"atan2(|u cross B|, u dot B), folded to min(theta, pi-theta)","weight":"exp(-abs(theta_B)/S) * zenith_taper(z_a) * mask_edge_fade(d) * solar_taper(sun_elevation) * quality_weight * cloud_weight","zenith_taper":"1 - psi(u)/(psi(u)+psi(1-u)) with u=(z_a-Z0)/Zw and psi(x)=exp(-1/abs(x)) for x>0 else 0","zenith_taper_start_deg":taper_start_deg,"zenith_taper_width_deg":taper_width_deg,"mask_edge_fade":"smooth_step(d/F) floored at 1e-6, d the working-grid pixel distance to the crop or obstruction outline; per-pixel normalization confines it to overlaps","mask_edge_fade_px":mask_fade_px,"solar_taper":"F + (1-F) * (1 - psi(u)/(psi(u)+psi(1-u))) with u=(elevation-D)/(L-D); whole-image weight from the solar elevation at the camera station","solar_taper_dark_deg":sun_dark_deg,"solar_taper_light_deg":sun_light_deg,"solar_taper_floor":sun_floor,"quality_weight":"per-camera operator setting, a power of two from 1 to 1/256, multiplying the weight and not the pixel value","cloud_weight":"PRELIMINARY. Per pixel, from how far this frame's unsaturated stars have faded against their own best flux over the whole archive. Each star owns its Voronoi cell; within a cell its value is Hann-tapered from full trust at the star to none at the boundary, where the two cells are blended over 10 image pixels with the same smooth step used elsewhere, applied only where the cell is larger than that band. Floored at 0.02 so a wholly clouded lone view is dimmed rather than removed; multiplies the weight, not the pixel value, so it enters the same denominator","cloud_weight_caveat":"Saturated stars are excluded and cannot yet be separated into aurora over clear sky and moonlit thin cloud, which clip a star's peak identically and mean opposite things. Biases towards clear. Responses under both conditions have to be collected before this can be settled","zenith_angle_definition":"angle at the camera between its local vertical and the line of sight to the shell point","falloff_angle_deg":falloff_deg,"normalization":"per output pixel, divide every contributing weight by their sum","source_map":"dominant magnetic weight"});
     let mut manifest = json!({"generated_utc":Utc::now().to_rfc3339(),"width":W,"height":H,"geometry_url":"/gaia/public/assets/shell-v1.bin","vertex_count":mesh.len()/20,"images":frames,"credits":credits,"cameras":public_cameras,"lens_models":lens_models,"lens_model_documentation":lens_model_documentation,"stitching":stitching,"igrf_url":format!("/gaia/public/assets/igrf-{}.bin",s.igrf_year)});
     let name=if full_archive { "archive-manifest.json" } else { "manifest.json" };
     if anonymous {

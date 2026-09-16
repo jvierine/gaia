@@ -1,5 +1,6 @@
 mod archive;
 mod calibration_image;
+mod cloudweight;
 mod crawler;
 mod db;
 mod equalize;

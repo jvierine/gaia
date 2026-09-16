@@ -989,16 +989,77 @@ about which camera won a pixel. Keeping those two in step is the whole reason
 \texttt{composition-rules.ts} was split out as a shared module, and the cloud
 term should follow that pattern rather than work around it.
 
+\section{A first cloud weight in the composite, and why it is provisional}
+\label{sec:cloudweight}
+
+A weight built from the star fading now multiplies both composites. It is the
+first thing in this memo that changes a picture rather than a table, and it is
+deliberately the simplest quantity that could: not the stored optical depth of
+Sec.~\ref{sec:depth}, but the fading factor the frame view already draws ---
+each star's present flux against the best that camera has ever recorded for it.
+That keeps the first version legible and leaves the depth, with its refusals and
+its gates, for when this one has been looked at.
+
+\paragraph{The field.} Each usable star owns the region of the image closer to
+it than to any other. Within a cell the star's own fading is trusted fully at
+the star and less further out, following a Hann window that reaches zero at the
+cell boundary; at the boundary the value is the blend of the two cells meeting
+there. That blend is spread over \SI{10}{px} with the same smooth step
+$f_s$ used everywhere else in the weight chain, and only where the cell is
+larger than that band --- inside \SI{10}{px} of its own star a cell keeps its
+own value, since a transition wider than the cell would erase the measurement
+it exists to carry. The result is continuous, equals a star's own fading at that
+star, and equals the mean of two neighbours on the boundary between them.
+
+Two consequences are worth stating because they are choices, not accidents. The
+weight is floored at \num{0.02} rather than reaching zero: with a single
+contributing camera the per-pixel normalization divides the weight out again, so
+a floor confines the effect to overlaps, which is the only place a preference
+between cameras means anything. And a frame with no usable stars gets no field
+at all rather than a field of zeros --- it composites exactly as it did before,
+because absence of measurement is not measurement of cloud.
+
+\paragraph{The denominator.} The factor multiplies the weight and never the
+pixel value, so it enters the normalizing sum with everything else. Server-side
+the same variable multiplies the colour and accumulates in the fourth channel;
+in the browser the fragment shader forms the product once and uses it for both
+the colour sum and the weight sum. There is no path by which the two can
+disagree.
+
+\paragraph{Why it is preliminary.} A star disappears from the photometry for
+two reasons that are identical in the data and opposite in meaning:
+
+\begin{itemize}
+  \item bright aurora lifts the background until the star's peak is clipped ---
+    and the sky above is \emph{clear};
+  \item thin cloud lit by the Moon lifts the background until the star's peak is
+    clipped --- and the sky above is \emph{not}.
+\end{itemize}
+
+Both give a similar peak intensity and a similar background. No rule written
+today separates them, so saturated fits are excluded from the field rather than
+counted either way. That is conservative in one direction only: it biases the
+archive towards believing the sky is clear, which is exactly the bias a cloud
+weight exists to remove. Before this can be settled the archive has to collect
+measured responses under both conditions --- aurora over a clear sky, and
+moonlit thin cloud --- and they have to be compared. Until then the weight is
+useful for seeing the effect and wrong to quote. It is published with that
+caveat attached in both manifests, and \texttt{GAIA\_CLOUD\_WEIGHT=0} turns it
+off without a rebuild.
+
 \section{What remains to be built}
 \label{sec:remains}
 
 \begin{enumerate}
-  \item \textbf{Spend the optical depth.} It is stored
-    (Sec.~\ref{sec:depth}) and, since this revision, readable
-    (Sec.~\ref{sec:audit}); nothing yet acts on it. Two things should:
-    \texttt{cloud\_weight} in the composite, and a cell value in the cloud map.
-    This is now the only thing standing between the archive and a cloud-aware
-    mosaic, and it is the next piece of work.
+  \item \textbf{Spend the optical depth.} A cloud weight now reaches both
+    composites (Sec.~\ref{sec:cloudweight}), but from the fading factor rather
+    than from the stored depth: the depth carries the clear-sky reference and
+    the air-mass correction the fading does not, and it refuses to exist where
+    the night could not be fitted. Moving the field onto it is the next step,
+    and the two can be compared directly since they are the same shape.
+  \item \textbf{Separate aurora from moonlit thin cloud}, which is what blocks
+    saturated stars from contributing at all (Sec.~\ref{sec:cloudweight}).
+    This wants collected responses under both conditions before any rule.
   \item \textbf{Apply the weight.} \texttt{cloud\_weight} exists and is tested:
     $w=\text{floor}+(1-\text{floor})e^{-\tau}$, strictly positive so a single
     contributing camera normalises back to full strength and no hole is punched.

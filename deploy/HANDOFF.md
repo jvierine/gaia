@@ -1,5 +1,36 @@
 # GAIA handoff for j and bgu001
 
+## For j: two ownership settings on web-dist (2026-09-16)
+
+Neither is urgent and nothing is broken -- the directory ACL grants j `rwx`,
+so serving and future installs work as they are. Both are here because they
+will otherwise have to be redone by hand after every frontend install.
+
+**1. `web-dist/assets` lost its setgid bit.** It is `drwxr-xr-x+` and was
+`drwxrwsr-x+`. Without it, files created there no longer inherit the
+`gaia-dev` group, which is exactly the inheritance that would stop this
+recurring:
+
+    sudo chmod g+ws /mnt/data/juha/gaia/code/web-dist/assets
+
+**2. `bgu001` is not in `gaia-dev`** (its groups are `bgu001 sudo lxd`), so it
+cannot `chgrp` what it extracts and Björn has had to fix the group by hand
+after an install:
+
+    sudo usermod -aG gaia-dev bgu001    # takes effect on a fresh login
+
+Worth knowing even with both applied: `tar` sets modes from the archive and so
+defeats setgid on extraction anyway. Either extract with
+`tar --no-same-permissions`, or follow an install with
+
+    chmod 664 web-dist/index.html web-dist/assets/*
+    chgrp gaia-dev web-dist/index.html web-dist/assets/*
+
+One straggler, if the directory is ever made uniform:
+`web-dist/assets/index-BYJbR12g.js` is still `0644`. It is the superseded
+bundle from `fb60ef1`, no longer referenced by `index.html`, and harmless.
+
+
 ## Camera registry loading (2026-09-13)
 
 Removed the misleading two-camera fallback rows. Cameras tab now has an indeterminate progress bar throughout the real registry request (server returns one JSON array, no measurable percentage), explicit empty/error states, 45-second timeout and Retry. No swallowed registry errors or fake camera count; thumbnails remain lazy-loaded separately.

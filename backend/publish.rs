@@ -389,7 +389,7 @@ fn legacy_atlas(s: &AppState) -> Result<()> {
                             best,
                         )
                         .unwrap_or_default();
-                        (!stars.is_empty()).then(|| {
+                        cloudweight::enough(&stars).then(|| {
                             cloudweight::grid(
                                 &stars,
                                 size[0],

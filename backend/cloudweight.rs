@@ -137,6 +137,18 @@ pub fn weight_at(stars: &[StarFading], x: f64, y: f64) -> f64 {
     (shape * f_a + (1.0 - shape) * edge).clamp(FLOOR, 1.0)
 }
 
+/// Fewest usable stars a frame must have before its field is published at all.
+///
+/// A single star scales an entire hemispheric image by one measurement, which
+/// live turned out to be the common case rather than the rare one: on the first
+/// publish, ten of sixteen fields were one value everywhere and six of those
+/// dimmed the whole camera, one to seven percent. That is the module's own
+/// principle violated -- one star is very nearly absence of measurement, and
+/// absence must not become measurement of cloud. Three matches the floor the
+/// clear-sky fit uses for the same reason, and below it the Voronoi has no
+/// spatial information to carry anyway.
+pub const MIN_STARS: usize = 3;
+
 /// The channel the cloud estimate is read from. Cloud extinction is close to
 /// achromatic, so the mean carries the signal with the least noise; the three
 /// colour channels are kept in the archive for the checks that need them.
@@ -254,6 +266,12 @@ pub fn grid(
     out
 }
 
+/// Whether a frame's stars are enough to say anything about its sky. Below this
+/// no field is published and the layer composites exactly as it did before.
+pub fn enough(stars: &[StarFading]) -> bool {
+    stars.len() >= MIN_STARS
+}
+
 /// Bilinear read of a grid at normalised image coordinates, the convention the
 /// meshes carry: u across, v down, both in [0,1].
 pub fn sample(grid: &[f32], columns: usize, rows: usize, u: f64, v: f64) -> f32 {
@@ -277,6 +295,20 @@ mod tests {
 
     fn star(x: f64, y: f64, fading: f64) -> StarFading {
         StarFading { x, y, fading }
+    }
+
+    #[test]
+    fn too_few_stars_is_not_a_measurement_of_cloud() {
+        // One star scaling a whole all-sky image by its own fading is what the
+        // first live publish actually did, to the tune of ten frames in sixteen.
+        assert!(!enough(&[]));
+        assert!(!enough(&[star(100.0, 100.0, 0.07)]));
+        assert!(!enough(&[star(100.0, 100.0, 0.5), star(300.0, 100.0, 0.5)]));
+        assert!(enough(&[
+            star(100.0, 100.0, 0.5),
+            star(300.0, 100.0, 0.5),
+            star(200.0, 300.0, 0.5)
+        ]));
     }
 
     #[test]

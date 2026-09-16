@@ -1011,7 +1011,16 @@ own value, since a transition wider than the cell would erase the measurement
 it exists to carry. The result is continuous, equals a star's own fading at that
 star, and equals the mean of two neighbours on the boundary between them.
 
-Two consequences are worth stating because they are choices, not accidents. The
+\paragraph{Three stars, at least.} The first live publish showed why a floor on
+the number of stars is not a detail: ten fields in sixteen were a single value
+across the whole image, and six of those dimmed an entire all-sky camera on one
+star's fading, one of them to seven percent. A lone star is very nearly absence
+of measurement, and the field carries no spatial information at all below three
+points. Frames with fewer now publish no field, and their layers composite
+exactly as they did before --- the same floor, and for the same reason, as the
+clear-sky fit uses.
+
+Two further consequences are worth stating because they are choices, not accidents. The
 weight is floored at \num{0.02} rather than reaching zero: with a single
 contributing camera the per-pixel normalization divides the weight out again, so
 a floor confines the effect to overlaps, which is the only place a preference

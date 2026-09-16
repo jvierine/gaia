@@ -89,7 +89,7 @@ fn cloud_layer(
         crate::cloudweight::CHANNEL,
         best,
     )?;
-    if stars.is_empty() {
+    if !crate::cloudweight::enough(&stars) {
         return Ok(None);
     }
     let n = crate::cloudweight::GRID;

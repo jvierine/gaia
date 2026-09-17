@@ -19,6 +19,7 @@ mod processing;
 mod publish;
 mod publish_layers;
 mod quality;
+mod starpair;
 mod starpass;
 mod starphot;
 use axum::{
@@ -1796,6 +1797,81 @@ struct KeogramQuery {
     half_width_km: Option<f64>,
 }
 
+#[derive(Deserialize)]
+struct StarSensitivityQuery {
+    partner: String,
+    channel: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    hours: Option<f64>,
+    /// Include the individual pairs, not just the summary. Off by default,
+    /// because a long window pairs tens of thousands of measurements.
+    detail: Option<bool>,
+}
+
+/// Relative sensitivity of two cameras from stars they both measured.
+///
+/// The star's own brightness cancels in the ratio, so this needs no catalogue
+/// magnitude and no photometric zero point -- only that both cameras saw the
+/// same star at the same moment through clear sky. See `starpair`.
+async fn source_star_sensitivity(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<StarSensitivityQuery>,
+) -> ApiResult<Json<Value>> {
+    let channel = query.channel.unwrap_or_else(|| "mean".into());
+    if !starphot::CHANNELS.contains(&channel.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
+    }
+    let (from, to) = star_window(&query.from, &query.to, query.hours);
+    let detail = query.detail.unwrap_or(false);
+    let built = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        let conn = db::open(&s.db_path)?;
+        let a = keogram::station(&conn, &id)?;
+        let b = keogram::station(&conn, &query.partner)?;
+        let pairs = starpair::pairs(
+            &conn, &a.id, &b.id, a.longitude_deg, b.longitude_deg, &channel, &from, &to,
+        )?;
+        let estimate = starpair::estimate(&pairs);
+        let stars: std::collections::BTreeSet<&str> =
+            pairs.iter().map(|p| p.star_key.as_str()).collect();
+        Ok(json!({
+            "a": {"id": a.id, "name": a.name},
+            "b": {"id": b.id, "name": b.name},
+            "channel": channel, "from": from, "to": to,
+            "separation_km": keogram::separation_km(&a, &b),
+            "pairs": pairs.len(),
+            "stars": stars.len(),
+            "estimate": estimate.as_ref().map(|e| e.to_json()),
+            "gates": {
+                "max_skew_seconds": starpair::MAX_SKEW_SECONDS,
+                "min_flux_snr": starpair::MIN_FLUX_SNR,
+                "min_elevation_deg": starpair::MIN_ELEVATION_DEG,
+                "clear_frame_fading": starpair::CLEAR_FRAME_FADING,
+                "min_pairs": starpair::MIN_PAIRS,
+            },
+            "method": "ln(F_A/F_B) = ln(G_A/G_B) - beta (k_A X_A - k_B X_B) - (tau_A - tau_B); \
+the star's own flux cancels, so no catalogue magnitude or photometric zero point is used",
+            "caveat": "Gain only: a point source says nothing about the background, which the \
+paired keograms measure. Thin cloud over one station and not the other biases the ratio, so \
+frames are gated on the rest of their stars and the estimator is a median.",
+            "samples": if detail {
+                json!(pairs.iter().map(|p| json!({
+                    "star_key": p.star_key, "at": p.at,
+                    "flux_a": p.flux_a, "flux_b": p.flux_b,
+                    "elevation_a": p.elevation_a, "elevation_b": p.elevation_b,
+                    "airmass_a": p.airmass_a, "airmass_b": p.airmass_b,
+                    "ln_ratio": p.ln_ratio, "corrected_ln_ratio": p.corrected,
+                })).collect::<Vec<_>>())
+            } else { Value::Null },
+        }))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(built))
+}
+
 /// Which cameras this one can be compared against.
 async fn source_keogram_pairs(
     Path(id): Path<String>,
@@ -2189,6 +2265,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/calibration/refit", post(source_calibration_refit))
         .route("/api/sources/{id}/keogram-pairs", get(source_keogram_pairs))
         .route("/api/sources/{id}/keogram", get(source_keogram))
+        .route("/api/sources/{id}/star-sensitivity", get(source_star_sensitivity))
         .route("/api/sources/{id}/stars/frame", get(source_star_frame))
         .route("/api/sources/{id}/stars/nights", get(source_star_nights))
         .route("/api/extinction", get(extinction_state))

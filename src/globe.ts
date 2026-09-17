@@ -1,3 +1,4 @@
+import {meshSampleMask,normalizationGain,readNormalizationPreference} from './image-normalization';
 import starvisorCredits from './starvisor-credits.json';
 const stationCredits=new Map(starvisorCredits.map(c=>[c.source_id,c.credit]));
 function cameraCredit(id:string,producer:string){return stationCredits.get(id)||`Operator: ${producer}`;}
@@ -121,6 +122,10 @@ export function startGaiaGlobe(canvas: HTMLCanvasElement,getEpochMillis:()=>numb
   type PublicCamera={source_id:string;name:string;producer:string;institution:string;website_url:string;latitude_deg:number|null;longitude_deg:number|null;map_index:number|null;projection?:any;calibrated?:boolean;quality_exponent?:number};
   let browserLayers=false,layerManifest:any=null,manifestRefresh:Promise<any>|null=null,manifestFetched=0;
   const compositor=cameraCompositor(gl);
+  const normalizeView=(enabled:boolean)=>{compositor.setNormalize(enabled);canvas.dataset.normalization=String(enabled)};
+  normalizeView(readNormalizationPreference());
+  const normalizeEvent=(event:Event)=>normalizeView(!!(event as CustomEvent).detail);
+  canvas.addEventListener('gaia-normalize',normalizeEvent);
   const compressedGeometry=new Map<string,string>();
   const published=()=>{if(!manifestRefresh||Date.now()-manifestFetched>30000){manifestFetched=Date.now();manifestRefresh=fetch(manifestUrl,{cache:'no-store',signal:abort.signal}).then(async r=>{if(!r.ok)throw Error('Camera layers unavailable');layerManifest=await r.json();browserLayers=layerManifest.composition==='browser-layers-v1';for(const c of layerManifest.overview?.cameras||[]){const p=c.projection;if(p)for(const f of p.images||[])if(f.geometry_gzip_url)compressedGeometry.set(f.geometry_url||p.geometry_url,f.geometry_gzip_url)}return layerManifest}).catch(e=>{manifestRefresh=null;throw e})}return manifestRefresh};
   let cameraSites:{source_id?:string;label:string;url?:string;world:number[];lat:number;lon:number;weight:number}[]=[],publicCameras=new Map<number,PublicCamera>();
@@ -274,7 +279,7 @@ mat3 rotY(float a){float c=cos(a),s=sin(a);return mat3(c,0.,-s,0.,1.,0.,s,0.,c);
 mat3 rotX(float a){float c=cos(a),s=sin(a);return mat3(1.,0.,0.,0.,c,s,0.,-s,c);}
 void main(){vec3 p=rotX(-rotation.y)*rotY(-rotation.x)*world;float side=min(resolution.x,resolution.y);gl_Position=vec4(p.xy*zoom*side/resolution,0.,1.);visible=p.z;color=rgb;texCoord=uv;}`,`
 precision highp float;varying vec2 texCoord;varying vec3 color;varying float visible;uniform sampler2D frame;uniform bool textured;uniform bool applyMute;uniform sampler2D sourceMap;uniform sampler2D cameraVisibility;void main(){if(visible<0.)discard;if(textured){if(applyMute){vec3 code=floor(texture2D(sourceMap,texCoord).rgb*255.+.5);float id=dot(code,vec3(65536.,256.,1.));if(id>0.&&id<65536.&&texture2D(cameraVisibility,vec2(mod(id,256.)+.5,floor(id/256.)+.5)/256.).r<.5)discard;}gl_FragColor=texture2D(frame,texCoord);return;}gl_FragColor=vec4(color,1.);}`);
-  type Geometry={buffer:WebGLBuffer;count:number};
+  type Geometry={buffer:WebGLBuffer;count:number;sampleMask?:Uint8Array};
   const geometryCache=new Map<string,Geometry>(),textureCache=new Map<string,WebGLTexture>();
   // Cloud weight fields, cached by URL like the textures. They are tiny (a few
   // dozen pixels square) and shared by every viewer of the same frame.
@@ -312,6 +317,10 @@ precision highp float;varying vec2 texCoord;varying vec3 color;varying float vis
     }
     return pending;
   };
+  const textureGains=new WeakMap<WebGLTexture,number>();
+  const exposureCanvas=document.createElement('canvas');exposureCanvas.width=32;exposureCanvas.height=32;
+  const exposureContext=exposureCanvas.getContext('2d',{willReadFrequently:true})!;
+  const measureExposure=(image:CanvasImageSource,geometry:Geometry)=>{exposureContext.clearRect(0,0,32,32);exposureContext.drawImage(image,0,0,32,32);return normalizationGain(exposureContext.getImageData(0,0,32,32).data,geometry.sampleMask)};
   const textureSizes=new Map<WebGLTexture,[number,number]>();
   // Temporal filtering is display-only. Keep the original frames and projected
   // geometry unchanged; blend camera textures at the display refresh rate.
@@ -329,7 +338,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   let playbackClockValue:number|null=null;
   const playbackClock=()=>playbackClockValue;
   const clearSmooth=()=>{for(const s of smoothStates.values())for(const t of s.textures)gl.deleteTexture(t);smoothStates.clear()};
-  let frames:{geometry:Geometry;texture:WebGLTexture;cloud?:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number}[]=[];
+  let frames:{geometry:Geometry;texture:WebGLTexture;cloud?:WebGLTexture;order:number;sourceMapUrl?:string;at:string;sourceId?:string;weightScale?:number;brightnessGain?:number}[]=[];
   const layers:{buffer:WebGLBuffer;count:number}[]=[];
   const addLayer=(values:number[]|Float32Array)=>{const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(values),gl.STATIC_DRAW);layers.push({buffer:b,count:values.length/6})};
   // Expand each station into a small globe-surface disc. WebGL point sprites have
@@ -344,6 +353,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
   const reportBuffer=(detail:{active:boolean;done:number;total:number;failed:number;message?:string;unit?:string})=>canvas.dispatchEvent(new CustomEvent('gaia-buffer-progress',{detail}));
   reportBuffer({active:true,done:0,total:0,failed:0,message:'Loading camera catalogue…'});
   const abort=new AbortController();let frameAbort=new AbortController(),frameTimer=0;
+  abort.signal.addEventListener('abort',()=>canvas.removeEventListener('gaia-normalize',normalizeEvent),{once:true});
   abort.signal.addEventListener('abort',()=>observationStatus.remove(),{once:true});
   void (publicOnly?published().then(async manifest=>{const cameras=manifest.cameras||[];publicCameras=new Map(cameras.filter(c=>c.map_index!=null).map(c=>[c.map_index!,c]));cameraSites=cameras.filter(c=>c.latitude_deg!==null&&c.longitude_deg!==null).map(c=>{const lat=c.latitude_deg!*Math.PI/180,lon=c.longitude_deg!*Math.PI/180;return{source_id:c.source_id,label:`Camera: ${c.name}\n${cameraCredit(c.source_id,c.producer)}\n${locationLabel(c)}\nClick for originating provider`,url:c.website_url,world:[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)],lat:c.latitude_deg!,lon:c.longitude_deg!,weight:c.quality_exponent??0}});const sites:number[]=[];for(const camera of cameras){if(camera.latitude_deg===null||camera.longitude_deg===null)continue;addStationDisc(sites,camera.latitude_deg*Math.PI/180,camera.longitude_deg*Math.PI/180,[.56,.76,.69]);}addLayer(sites);return browserLayers?cameras.map((c:PublicCamera)=>({id:c.source_id,name:c.name,producer:c.producer,calibrated:!!c.projection,enabled:true,latitude_deg:null,longitude_deg:null})):[{id:'composite',name:'Composite',producer:'See credits',calibrated:true,enabled:true,latitude_deg:null,longitude_deg:null}]}):fetch('/gaia/api/sources',{cache:'no-store',signal:abort.signal}).then(r=>r.json())).then(async (sources:{id:string;name:string;producer:string;calibrated:boolean;enabled:boolean;latitude_deg:number|null;longitude_deg:number|null;quality_exponent?:number}[])=>{
     const focus=sources.find(s=>s.enabled&&s.calibrated&&s.latitude_deg!==null&&s.longitude_deg!==null);if(focus){yaw=focus.longitude_deg!*Math.PI/180;pitch=-focus.latitude_deg!*Math.PI/180;}
@@ -408,14 +418,14 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           ]);
           if(request.signal.aborted||abort.signal.aborted)return;
           geometry=geometryCache.get(asset.geometry_url)||geometry;
-          if(!geometry&&bytes){const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);geometry={buffer:b,count:bytes.byteLength/(browserLayers?24:20)};geometryCache.set(asset.geometry_url,geometry)}
+          if(!geometry&&bytes){const b=gl.createBuffer()!;gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);geometry={buffer:b,count:bytes.byteLength/(browserLayers?24:20),sampleMask:meshSampleMask(new Float32Array(bytes),browserLayers?6:5)};geometryCache.set(asset.geometry_url,geometry)}
           if(!texture&&rect){
             let decoded=sheetImages.get(asset.texture_url);
             if(!decoded){decoded=fetch(asset.texture_url,{signal:request.signal}).then(async r=>{if(!r.ok)throw Error('Overview sheet unavailable');const url=URL.createObjectURL(await r.blob()),im=new Image();try{await new Promise<void>((resolve,reject)=>{im.onload=()=>resolve();im.onerror=()=>reject(Error('Overview decode failed'));im.src=url});return im}finally{URL.revokeObjectURL(url)}});sheetImages.set(asset.texture_url,decoded);decoded.catch(()=>sheetImages.delete(asset.texture_url))}
             const im=await decoded;if(request.signal.aborted)return;
             texture=textureCache.get(textureKey);
             if(!texture){const tile=document.createElement('canvas');tile.width=64;tile.height=64;tile.getContext('2d')!.drawImage(im,rect[0],rect[1],rect[2],rect[3],0,0,64,64);
-              texture=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,tile);textureCache.set(textureKey,texture);textureSizes.set(texture,[64,64]);}
+              texture=gl.createTexture()!;gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,tile);textureCache.set(textureKey,texture);textureSizes.set(texture,[64,64]);if(geometry)textureGains.set(texture,measureExposure(tile,geometry));}
           }
           if(!texture&&blob){
             const url=URL.createObjectURL(blob),im=new Image();
@@ -429,7 +439,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
               const scale=Math.min(1,limit/Math.max(im.naturalWidth,im.naturalHeight));
               let upload:HTMLImageElement|HTMLCanvasElement=im;
               if(scale<1){const reduced=document.createElement('canvas');reduced.width=Math.max(1,Math.round(im.naturalWidth*scale));reduced.height=Math.max(1,Math.round(im.naturalHeight*scale));reduced.getContext('2d')!.drawImage(im,0,0,reduced.width,reduced.height);upload=reduced;}
-              gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,upload);textureCache.set(asset.texture_url,texture);textureSizes.set(texture,[upload.width,upload.height]);}
+              gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,upload);textureCache.set(asset.texture_url,texture);textureSizes.set(texture,[upload.width,upload.height]);if(geometry)textureGains.set(texture,measureExposure(upload,geometry));}
             }finally{URL.revokeObjectURL(url)}
           }
           // Never display an image with the preceding frame's camera map.
@@ -440,7 +450,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
           // cached like the geometry, and its absence is meaningful: a frame
           // with no usable stars measured no cloud and must composite as before.
           const cloud=frame.cloud_url?await loadCloud(frame.cloud_url):undefined;
-          if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,cloud,order:s.order,sourceMapUrl:frame.source_map_url,at:(frame as any).observation_at||frame.at,sourceId:s.id,weightScale});
+          if(geometry&&texture&&gl.isBuffer(geometry.buffer)&&gl.isTexture(texture))nextFrames.push({geometry,texture,cloud,order:s.order,sourceMapUrl:frame.source_map_url,at:(frame as any).observation_at||frame.at,sourceId:s.id,weightScale,brightnessGain:textureGains.get(texture)??1});
         }catch(e){if(!request.signal.aborted){state.failed++;console.error(`Projection ${s.name}`,e)}}
         finally{state.done++;if(!request.signal.aborted)emitProgress(progressMinute)}
       }}));
@@ -582,7 +592,7 @@ void main(){vec2 uv=gl_FragCoord.xy/size;gl_FragColor=mix(texture2D(previous,uv)
     const worldAttr=gl.getAttribLocation(imageProgram,'world'),rgbAttr=gl.getAttribLocation(imageProgram,'rgb'),uvAttr=gl.getAttribLocation(imageProgram,'uv');
     gl.uniform1i(gl.getUniformLocation(imageProgram,'textured'),1);gl.uniform1i(gl.getUniformLocation(imageProgram,'frame'),0);gl.activeTexture(gl.TEXTURE0);
     gl.disableVertexAttribArray(rgbAttr);gl.enableVertexAttribArray(worldAttr);gl.enableVertexAttribArray(uvAttr);
-    if(browserLayers){canvas.dataset.composition=compositor.draw(w,h,yaw,pitch,zoom,frames,displayTextures,mutedSources,soloSources);canvas.dataset.cameraLayers=String(frames.length);canvas.dataset.muteApplied=String(mutedSources.size>0);resetAttributes();gl.useProgram(imageProgram);gl.activeTexture(gl.TEXTURE0);gl.enableVertexAttribArray(worldAttr);}
+    if(browserLayers){canvas.dataset.composition=compositor.draw(w,h,yaw,pitch,zoom,frames,displayTextures,mutedSources,soloSources);canvas.dataset.cameraLayers=String(frames.length);canvas.dataset.brightnessGains=JSON.stringify(frames.map(f=>({source:f.sourceId,gain:f.brightnessGain??1}))); canvas.dataset.muteApplied=String(mutedSources.size>0);resetAttributes();gl.useProgram(imageProgram);gl.activeTexture(gl.TEXTURE0);gl.enableVertexAttribArray(worldAttr);}
     if(publicOnly&&!browserLayers){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);}
     /* Chosen cameras go last. Blending is off in this pass, so the last write wins
      and their image sits on top of the others rather than averaged into them. */

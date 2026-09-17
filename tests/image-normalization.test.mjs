@@ -1,0 +1,11 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import ts from 'typescript';import {readFileSync} from 'node:fs';
+const code=ts.transpileModule(readFileSync(new URL('../src/image-normalization.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2020}}).outputText;
+const {normalizationGain,meshSampleMask,readNormalizationPreference}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
+const pixels=(r,g=r,b=r)=>Uint8ClampedArray.from(Array.from({length:1024},()=>[r,g,b,255]).flat());
+test('dim frames brighten and gain is bounded',()=>{assert.equal(normalizationGain(pixels(18)),10);assert.equal(normalizationGain(pixels(2)),16);assert.equal(normalizationGain(pixels(220)),1)});
+test('black frames and unavailable local storage remain unchanged',()=>{assert.equal(normalizationGain(pixels(0)),1);assert.equal(readNormalizationPreference(),false)});
+test('isolated bright stars do not determine exposure',()=>{const p=pixels(18);p.set([255,255,255,255],0);assert.equal(normalizationGain(p),10)});
+test('masked bright obstruction is ignored',()=>{const p=pixels(250),m=new Uint8Array(1024);for(let i=0;i<256;i++){p.set([18,12,6,255],i*4);m[i]=1}assert.equal(normalizationGain(p,m),10);assert.equal(normalizationGain(p),1)});
+test('one gain preserves RGB ratios and source pixels',()=>{const p=pixels(18,12,6),before=p.slice();const gain=normalizationGain(p);assert.deepEqual(p,before);assert.equal(18*gain/(12*gain),1.5)});
+test('mesh samples exclude nonpositive-weight geometry',()=>{const m=meshSampleMask(new Float32Array([0,0,0,.25,.5,1,0,0,0,.75,.5,0]));assert.equal(m[16*32+8],1);assert.equal(m[16*32+24],0)});
+test('small cached-input histogram benchmark',()=>{const p=pixels(18),t=performance.now();for(let i=0;i<10000;i++)normalizationGain(p);console.log('normalization: 10000 x 32px samples ms',Math.round(performance.now()-t))});

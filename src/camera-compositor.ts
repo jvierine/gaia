@@ -48,7 +48,7 @@ else{float old=decode(texture2D(previousWeight,screen).rgb),total=old+wc;if(mode
     draw(outputW:number,outputH:number,yaw:number,pitch:number,zoom:number,frames:CameraLayer[],textures:Map<string,WebGLTexture>,muted:Set<string>,overlay?:Set<string>|null){
       const [w,h]=rasterSize(outputW,outputH);
       audit('before');allocate(w,h);audit('allocation');gl.viewport(0,0,w,h);gl.disable(gl.BLEND);gl.disable(gl.DEPTH_TEST);gl.clearColor(0,0,0,0);
-      const key=[w,h,yaw,pitch,zoom,...frames.filter(f=>!muted.has(f.sourceId||'')).map(f=>`${id(f.geometry.buffer)}:${id(textures.get(f.sourceId??String(f.order))||f.texture)}:${f.weightScale}`)].join(',');
+      const key=[w,h,yaw,pitch,zoom,...frames.filter(f=>!muted.has(f.sourceId||'')).map(f=>`${id(f.geometry.buffer)}:${id(textures.get(f.sourceId??String(f.order))||f.texture)}:${f.weightScale}:${f.cloud?id(f.cloud):0}`)].join(',');
       if(key!==lastKey){
         if(floating){
           // Common per-pixel scaling cancels in normalization and prevents tiny

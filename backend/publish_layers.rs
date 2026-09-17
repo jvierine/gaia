@@ -6,6 +6,17 @@ use chrono::{TimeZone, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, path::Path};
+fn playback_samples(times: &[String], day_start: Option<i64>, end: i64) -> Vec<String> {
+    let epochs: Vec<_> = times.iter().filter_map(|t| chrono::DateTime::parse_from_rfc3339(t).ok().map(|e|(t,e.timestamp()))).collect();
+    let first = day_start.unwrap_or(end/720*720-119*720);
+    let selected: BTreeSet<_> = (0..120).filter_map(|i| {
+        let slot=first+i*720;
+        epochs.iter().find(|(_,t)|*t<=slot&&slot-*t<=600).map(|(s,_)|s.as_str())
+    }).collect();
+    epochs.into_iter().filter(|(s,t)| selected.contains(s.as_str()) || (day_start.is_none()&&*t>=end-1200))
+        .map(|(s,_)|s.clone()).collect()
+}
+
 fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension(format!("{}.pending", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, bytes)?;
@@ -93,14 +104,14 @@ fn cloud_layer(
         return Ok(None);
     }
     let n = crate::cloudweight::GRID;
-    let field = crate::cloudweight::grid(&stars, size[0], size[1], n, n);
     let key = format!(
         "{:x}",
-        Sha256::digest(format!("cloud-v1:{source}:{observation_utc}:{n}:{}", stars.len()))
+        Sha256::digest(serde_json::to_vec(&json!(["cloud-v2",source,observation_utc,n,size,crate::cloudweight::description(),stars.iter().map(|v|[v.x,v.y,v.fading]).collect::<Vec<_>>()]))?)
     );
     let name = format!("cloud-{key}.png");
     let dest = assets.join(&name);
     if !dest.exists() {
+        let field = crate::cloudweight::grid(&stars, size[0], size[1], n, n);
         let mut image = image::GrayImage::new(n as u32, n as u32);
         for (index, value) in field.iter().enumerate() {
             let level = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -276,7 +287,13 @@ pub fn run(s: &AppState) -> Result<()> {
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(86400)
         .clamp(60, 86400);
-    let start = day_start.unwrap_or_else(||if full { 0 } else { end - lookback });
+    // Catch up after slow/failed publication instead of leaving permanent holes
+    // between the previous successful snapshot and the newest 20 minutes.
+    let previous_epoch = previous["generated_utc"].as_str()
+        .and_then(|t|chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|t.timestamp());
+    let start = day_start.unwrap_or_else(||if full { 0 } else {
+        (end-lookback).min(previous_epoch.unwrap_or(end-86400)-600).max(end-86400)
+    });
     let report_progress = !anonymous && !full && day.is_none();
     let progress_start = Utc::now().to_rfc3339();
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -296,7 +313,12 @@ pub fn run(s: &AppState) -> Result<()> {
             let (Some(lat),Some(lon),Some(true))=(camera["latitude_deg"].as_f64(),camera["longitude_deg"].as_f64(),camera["calibrated"].as_bool())else{out.push(camera);continue};
             let mut query=conn.prepare("SELECT MAX(observation_utc) FROM images WHERE source_id=?1 AND CAST(strftime('%s',observation_utc) AS INTEGER)>=?2 AND CAST(strftime('%s',observation_utc) AS INTEGER)<=?3 GROUP BY CAST(strftime('%s',observation_utc) AS INTEGER)/60 ORDER BY MAX(observation_utc) DESC")?;
             let mut times=query.query_map(rusqlite::params![id,start-600,end],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;let mut images=vec![];
-            if let Some(start)=day_start {let selected:BTreeSet<String>=(0..120).filter_map(|i|{let slot=start+i*720;times.iter().find(|t|chrono::DateTime::parse_from_rfc3339(t).ok().is_some_and(|t|{let t=t.timestamp();t<=slot&&slot-t<=600})).cloned()}).collect();times.retain(|t|selected.contains(t));}
+            // Only prepare historical frames that the 120-sample player uses.
+            // Retain minute resolution for the newest 20 minutes. Original
+            // images and camera-history browsing are never downsampled here.
+            if !full {
+                times = playback_samples(&times, day_start, end);
+            }
             let total=times.len();let mut done=0;let mut last_error=None;
             if report_progress {crate::processing::write(s,&id,"processing",total,0,0,None,&progress_start)?;}
             // PRELIMINARY (cloudweight::PRELIMINARY). GAIA_CLOUD_WEIGHT=0 stops
@@ -406,6 +428,16 @@ pub fn run(s: &AppState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rolling_samples_cover_day_and_keep_recent_minutes() {
+        let end=172800;
+        let times:Vec<String>=(0..1440).map(|i|Utc.timestamp_opt(end-i*60,0).unwrap().to_rfc3339()).collect();
+        let selected=playback_samples(&times,None,end);
+        assert!(selected.len()<150);
+        for i in 0..120 {assert!(selected.contains(&Utc.timestamp_opt(end-i*720,0).unwrap().to_rfc3339()));}
+        for i in 0..21 {assert!(selected.contains(&Utc.timestamp_opt(end-i*60,0).unwrap().to_rfc3339()));}
+        assert!(playback_samples(&[],None,end).is_empty());
+    }
     #[test]
     fn browser_solar_reference() {
         let mut cases = vec![];

@@ -243,7 +243,7 @@ pub fn stars_for_frame(
         "SELECT star_key,
                 COALESCE(centroid_x,predicted_x),COALESCE(centroid_y,predicted_y),
                 flux
-         FROM star_photometry
+         FROM star_photometry INDEXED BY star_photometry_frame
          WHERE source_id=?1 AND channel=?2 AND observation_utc=?3
            AND flux IS NOT NULL AND flux>0
            AND amplitude IS NOT NULL AND background IS NOT NULL

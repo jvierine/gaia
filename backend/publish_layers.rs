@@ -324,7 +324,10 @@ pub fn run(s: &AppState) -> Result<()> {
             // PRELIMINARY (cloudweight::PRELIMINARY). GAIA_CLOUD_WEIGHT=0 stops
             // publishing the field, and a layer without one composites unchanged.
             let cloud_wanted = std::env::var("GAIA_CLOUD_WEIGHT").as_deref() != Ok("0");
-            let cloud_best = if cloud_wanted {
+            // Live publication only consumes completed cloud products. Explicit
+            // offline preparation may compute them; it is never a prerequisite.
+            let prepare_cloud = cloud_wanted && std::env::var("GAIA_PREPARE_CLOUD_WEIGHT").as_deref()==Ok("1");
+            let cloud_best = if prepare_cloud {
                 crate::cloudweight::best_flux(&conn, &id, crate::cloudweight::CHANNEL).unwrap_or_default()
             } else {
                 Default::default()
@@ -334,8 +337,16 @@ pub fn run(s: &AppState) -> Result<()> {
                 [&id], |r| Ok([r.get::<_,i64>(0)? as f64, r.get::<_,i64>(1)? as f64])).unwrap_or([256.,256.]);
             for time in times{let at=chrono::DateTime::parse_from_rfc3339(&time)?.with_timezone(&Utc);match projection::assets(s,&id,Some(at)){Ok(a)=>{
                 let (mesh,count)=weighted_mesh(s,&id,&a,lat,lon,camera["altitude_m"].as_f64().unwrap_or(0.),&assets,&rules)?;let texture=a["texture_url"].as_str().unwrap().rsplit('/').next().unwrap();copy(&s.archive_root.join("projection-cache").join(texture),&assets.join(texture))?;
-                let cloud = if cloud_wanted {
+                let cloud = if prepare_cloud {
                     cloud_layer(s,&id,a["observation_utc"].as_str().unwrap_or_default(),image_size,&cloud_best,&assets).unwrap_or(None)
+                } else if cloud_wanted {
+                    // Exact station, observation and calibration match only.
+                    // No photometry queries or cloud computation on this path.
+                    previous["cameras"].as_array().and_then(|cs|cs.iter().find(|c|c["source_id"]==id))
+                        .and_then(|c|c["projection"]["images"].as_array())
+                        .and_then(|fs|fs.iter().find(|f|f["at"]==a["observation_utc"]&&f["calibration_id"]==a["calibration_id"]))
+                        .and_then(|f|f["cloud_url"].as_str()).and_then(|u|u.rsplit('/').next())
+                        .filter(|name|assets.join(name).is_file()).map(str::to_owned)
                 } else { None };
                 images.push(json!({"source_id":id,"at":a["observation_utc"],"geometry_url":format!("/gaia/{audience}/assets/{mesh}"),"texture_url":format!("/gaia/{audience}/assets/{texture}"),"cloud_url":cloud.map(|c|format!("/gaia/{audience}/assets/{c}")),"vertex_count":count,"calibration_id":a["calibration_id"]}));
             },Err(e)=>{last_error=Some(e.to_string());tracing::debug!(%id,%time,%e,"No calibrated projection");}}

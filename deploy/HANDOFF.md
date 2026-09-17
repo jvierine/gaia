@@ -1049,3 +1049,14 @@ fading is measured against — is far better determined over months than hours.
 The window still governs the time series, the frame view and the night picker.
 
 Until this is installed the histogram tab has nothing to draw.
+
+## 2026-09-17 playback/publication recovery
+Observed full-day publication repeatedly exceeding its 3600-second timeout, leaving hourly holes despite available raw images. Rolling preparation now selects the same 120 historical epochs used by overview, retaining minute-resolution newest 20 minutes; raw acquisition/history unchanged. Incremental runs catch up from the preceding verified publication instead of only newest 20 minutes. Cloud grids are generated only on cache miss and their key includes actual fading samples, image dimensions and model settings. Shared browser compositor invalidates when cloud texture changes. Preserve 16-worker cap and all existing weights/access rules.
+
+## Mandatory image-processing performance gate
+
+- Do not implement or enable a new image-processing stage in the production pipeline before profiling its computational cost with a bounded prototype on representative production data. Do not assume that caching, parallelism, or a fast single-frame demonstration makes the full workload affordable.
+- Processing must be WAY faster than real time: use at least 10x real-time throughput (processing elapsed time <= 10% of the observation interval represented), across the full active camera fleet, as the minimum acceptance target. More headroom is preferred. Live updates must also finish within the publication cadence; a fast 24-hour benchmark does not excuse delayed live frames.
+- Profile cold-cache and warm-cache runs, the newest-frame incremental workload, a full 24-hour/calibration rebuild, and overlapping acquisition/publication under realistic server load. Measure wall time, CPU time, peak memory, database/I/O cost, camera/frame counts, concurrency and cache hit rate. Respect the existing aggregate 16-worker limit.
+- Before integrating/deploying, record reproducible benchmark commands, input coverage, measured results and remaining headroom in deploy/HANDOFF.md (the shared agents.md). If the gate fails, optimize or redesign first; do not deploy it enabled and hope it catches up.
+- New analysis must never starve acquisition, block timely live publication, repeatedly restart an unfinished backfill, or create playback gaps. Expensive optional work needs bounded queues, resumable progress and a safe fallback. Preserve scientific weighting, timestamps and camera identity while optimizing.

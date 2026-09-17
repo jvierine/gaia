@@ -59,3 +59,11 @@
 - Do not add AI assistants, models, bots, or their vendors as Git authors, committers, or co-authors. This includes Claude, Anthropic, Codex, OpenAI, and similar tools. Do not add AI `Co-Authored-By` trailers or generated-by signatures to commit messages.
 - Preserve the actual human author and any genuine human co-authors. Use the contributing human’s configured Git identity; never impersonate another collaborator.
 - Inspect the final commit message before pushing, including trailers inserted automatically by tools. Disable automatic AI attribution in your tool settings. These rules apply to every GAIA branch and release commit.
+
+## Mandatory image-processing performance gate
+
+- Do not implement or enable a new image-processing stage in the production pipeline before profiling its computational cost with a bounded prototype on representative production data. Do not assume that caching, parallelism, or a fast single-frame demonstration makes the full workload affordable.
+- Processing must be WAY faster than real time: use at least 10x real-time throughput (processing elapsed time <= 10% of the observation interval represented), across the full active camera fleet, as the minimum acceptance target. More headroom is preferred. Live updates must also finish within the publication cadence; a fast 24-hour benchmark does not excuse delayed live frames.
+- Profile cold-cache and warm-cache runs, the newest-frame incremental workload, a full 24-hour/calibration rebuild, and overlapping acquisition/publication under realistic server load. Measure wall time, CPU time, peak memory, database/I/O cost, camera/frame counts, concurrency and cache hit rate. Respect the existing aggregate 16-worker limit.
+- Before integrating/deploying, record reproducible benchmark commands, input coverage, measured results and remaining headroom in deploy/HANDOFF.md (the shared agents.md). If the gate fails, optimize or redesign first; do not deploy it enabled and hope it catches up.
+- New analysis must never starve acquisition, block timely live publication, repeatedly restart an unfinished backfill, or create playback gaps. Expensive optional work needs bounded queues, resumable progress and a safe fallback. Preserve scientific weighting, timestamps and camera identity while optimizing.

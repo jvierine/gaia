@@ -809,8 +809,13 @@ type Drift={night:number;current_night?:boolean;calibration_id:string|null;calib
 /// them on the frame itself is the only presentation that shows *which* way it
 /// drifted -- a uniform shift, a rotation and a change of scale look nothing
 /// alike, and a single RMS number hides all three.
-function CalibrationDrift({camera}:{camera:Camera}){
+function CalibrationDrift({camera,calibrations,selected,onRefit}:
+  {camera:Camera;calibrations:Calibration[];selected:string|null;onRefit:()=>void}){
   const [drift,setDrift]=useState<Drift|null>(null);
+  // Which calibration the panel is judging. Its own choice, so a model can be
+  // compared without switching the live one -- switching is a write, and
+  // looking should not be.
+  const [judging,setJudging]=useState<string|null>(null);
   const [busy,setBusy]=useState(true),[refitting,setRefitting]=useState(false);
   const [error,setError]=useState(''),[outcome,setOutcome]=useState('');
   // Magnification of the frame, about a centre in image pixels. A drift of a
@@ -832,20 +837,28 @@ function CalibrationDrift({camera}:{camera:Camera}){
   const load=async()=>{
     setBusy(true);
     try{
-      const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/drift`,{cache:'no-store'});
+      const which=judging?`?calibration_id=${encodeURIComponent(judging)}`:'';
+      const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/drift${which}`,{cache:'no-store'});
       if(!r.ok)throw new Error(await r.text()||'Could not check for lens drift.');
       setDrift(await r.json() as Drift);setError('');
     }catch(e){setError(String((e as Error).message||e))}finally{setBusy(false)}
   };
-  useEffect(()=>{void load()},[camera.id]);
+  useEffect(()=>{void load()},[camera.id,judging]);
+  // Following the live selection means the scatter reacts when a different
+  // calibration is made current, which is what it failed to do before.
+  useEffect(()=>{setJudging(selected)},[selected,camera.id]);
   const refit=async()=>{
     setRefitting(true);setOutcome('');
     try{
       const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/refit`,{method:'POST'});
-      const body=await r.json().catch(()=>null) as {residual_px_before?:number;residual_px_after?:number;
-        star_count?:number;stars?:DriftStar[]}|null;
+      const body=await r.json().catch(()=>null) as {id?:string;residual_px_before?:number;
+        residual_px_after?:number;star_count?:number;stars?:DriftStar[]}|null;
       if(!r.ok)throw new Error((body as unknown as {error?:string})?.error||await r.text()||'The refit was refused.');
       if(body?.stars?.length)setRefitted({stars:body.stars,rms:body.residual_px_after??0});
+      // The new model belongs in the list straight away, and becomes the one
+      // the panel is judging, so its residuals can be compared with the old.
+      onRefit();
+      if(body?.id)setJudging(body.id);
       setOutcome(`Added a new calibration from ${body?.star_count} stars: `
         +`${body?.residual_px_before?.toFixed(3)} px \u2192 ${body?.residual_px_after?.toFixed(3)} px RMS. `
         +`It is not live \u2014 select it above when you want it used.`);
@@ -856,6 +869,18 @@ function CalibrationDrift({camera}:{camera:Camera}){
   const w=frame?.width??0,h=frame?.height??0;
   return <div className="drift-panel">
     <span className="eyebrow">LENS DRIFT, RICHEST FRAME OF THE LAST NIGHT OBSERVED</span>
+    {calibrations.length>0&&<div className="drift-pick">
+      <span className="eyebrow">JUDGING</span>
+      <select value={judging??''} onChange={event=>{setRefitted(null);
+        setJudging(event.target.value||null)}} aria-label="Calibration to judge">
+        <option value="">whichever is in force</option>
+        {calibrations.map(c=><option key={c.id} value={c.id}>
+          {stamp(c.created_utc)} {'\u00b7 '}{c.star_count==null?'star count unrecorded':`${c.star_count} stars`}
+          {c.residual_px==null?'':` \u00b7 ${c.residual_px.toFixed(2)} px`}
+        </option>)}
+      </select>
+      <small>Looking is free; switching which one is live is done in the list above.</small>
+    </div>}
     {busy?<p role="status">Looking for the richest frame of the last night observed&hellip;</p>
       :error?<p role="alert">{error}</p>
       :!frame?<div className="history-empty">{drift?.note||'No stars have been measured for this camera.'}</div>
@@ -1082,7 +1107,8 @@ function CalibrationPicker({camera,onClose}:{camera:Camera;onClose:()=>void}){
       </div>
       <p className="calibration-note">{selected===null?'Automatic selection is active.':'A fixed calibration is active; its validity interval is ignored.'} Switching rebuilds this camera&rsquo;s projection mesh on the next publish.</p>
     </>}
-    <CalibrationDrift camera={camera}/>
+    <CalibrationDrift camera={camera} calibrations={rows} selected={selected}
+      onRefit={()=>{void refresh()}}/>
   </div></div>;
 }
 

@@ -745,10 +745,12 @@ mod calibration_refit_tests {
 /// found, so the archive can notice its own calibrations going stale without
 /// anyone re-observing anything. The frame with the most identified stars is
 /// the one that says the most about it.
-fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
-    -> anyhow::Result<Value>
-{
-    let (longitude, hdf5, calibration_id, star_count, residual): (
+fn calibration_drift(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+    judge: Option<&str>,
+) -> anyhow::Result<Value> {
+    let (longitude, mut hdf5, mut calibration_id, mut star_count, mut residual): (
         f64, String, String, Option<i64>, Option<f64>,
     ) = conn.query_row(
         "SELECT COALESCE(s.longitude_deg,0),c.hdf5_path,c.id,c.star_count,c.residual_px
@@ -762,6 +764,20 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
         [source_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
+    // A calibration named explicitly is the one to judge. Without this the
+    // panel can only ever show the residuals of whichever model happened to be
+    // in force, and choosing a different one changes nothing on screen.
+    if let Some(wanted) = judge {
+        if let Ok(row) = conn.query_row(
+            "SELECT hdf5_path,id,star_count,residual_px FROM calibrations
+             WHERE id=?1 AND source_id=?2",
+            rusqlite::params![wanted, source_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?, r.get::<_, Option<f64>>(3)?)),
+        ) {
+            (hdf5, calibration_id, star_count, residual) = row;
+        }
+    }
 
     // The most recent night that actually has stars, by local solar time at
     // this station so a night is not cut in half at midnight UTC.
@@ -835,18 +851,38 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
          WHERE source_id=?1 AND channel='mean' AND image_id=?2 AND centroid_x IS NOT NULL
          ORDER BY vt_mag",
     )?;
+    // The stored prediction was made with whatever calibration was in force
+    // when the frame was measured, so it cannot answer "how would *this* model
+    // place these stars". Re-project each star through the calibration being
+    // judged; fall back to the stored value only if the model cannot be read.
+    let optpar = projection::optical_parameters(&hdf5).ok();
+    let (fw, fh) = (width.unwrap_or(0) as f64, height.unwrap_or(0) as f64);
     let stars: Vec<Value> = q
         .query_map(rusqlite::params![source_id, image_id], |r| {
+            let azimuth: f64 = r.get("azimuth_deg")?;
+            let elevation: f64 = r.get("elevation_deg")?;
+            let stored = (r.get::<_, f64>("predicted_x")?, r.get::<_, f64>("predicted_y")?);
+            let (px, py) = match optpar.as_ref().filter(|_| fw > 0.0 && fh > 0.0) {
+                Some(p) => starphot::az_el_to_pixel(azimuth, elevation, p, fw, fh)
+                    .unwrap_or(stored),
+                None => stored,
+            };
+            let centroid_x: Option<f64> = r.get("centroid_x")?;
+            let centroid_y: Option<f64> = r.get("centroid_y")?;
+            let offset = match (centroid_x, centroid_y) {
+                (Some(x), Some(y)) => Some(((x - px).powi(2) + (y - py).powi(2)).sqrt()),
+                _ => None,
+            };
             Ok(json!({
                 "star_key": r.get::<_,String>("star_key")?,
                 "vt_mag": r.get::<_,f64>("vt_mag")?,
-                "azimuth_deg": r.get::<_,f64>("azimuth_deg")?,
-                "elevation_deg": r.get::<_,f64>("elevation_deg")?,
-                "predicted_x": r.get::<_,f64>("predicted_x")?,
-                "predicted_y": r.get::<_,f64>("predicted_y")?,
-                "centroid_x": r.get::<_,Option<f64>>("centroid_x")?,
-                "centroid_y": r.get::<_,Option<f64>>("centroid_y")?,
-                "offset_px": r.get::<_,Option<f64>>("centroid_offset_px")?,
+                "azimuth_deg": azimuth,
+                "elevation_deg": elevation,
+                "predicted_x": px,
+                "predicted_y": py,
+                "centroid_x": centroid_x,
+                "centroid_y": centroid_y,
+                "offset_px": offset,
             }))
         })?
         .filter_map(Result::ok)
@@ -873,10 +909,16 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
     } else {
         Some((offsets.iter().map(|d| d * d).sum::<f64>() / offsets.len() as f64).sqrt())
     };
-    // A refit is offered only when this frame carries more evidence than the
-    // calibration in force was built from. More stars is the one comparison
-    // that does not depend on trusting either fit.
-    let richer = star_count.is_some_and(|n| found > n);
+    // A refit wants more evidence than the calibration was built from, which is
+    // the one comparison that does not depend on trusting either fit. But many
+    // calibrations record no star count at all -- every UCalgary model does --
+    // and refusing those was refusing the cameras most in need of checking.
+    // Unknown is not worse than known-larger: it is simply unknown, and the
+    // reason says which case applies.
+    let richer = match star_count {
+        Some(n) => found > n,
+        None => true,
+    };
     Ok(json!({
         "source_id": source_id, "night": night, "from": from, "to": to,
         "current_night": current,
@@ -890,14 +932,20 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
         },
         "stars": stars,
         "refit_available": richer && found as usize >= lensfit::MIN_OBSERVATIONS,
+        "judging_calibration_id": calibration_id,
         "refit_reason": if !richer {
             format!("this frame has {found} stars, the calibration in force used {}",
                     star_count.map(|n| n.to_string()).unwrap_or_else(|| "an unrecorded number".into()))
         } else if (found as usize) < lensfit::MIN_OBSERVATIONS {
             format!("{found} stars is too few to fit eight parameters")
         } else {
-            format!("{found} stars against {} in the calibration in force",
-                    star_count.unwrap_or(0))
+            match star_count {
+                Some(n) => format!("{found} stars against {n} in the calibration in force"),
+                None => format!(
+                    "{found} stars; the calibration in force records no star count, so there is \
+nothing to compare against and the refit is offered on the frame's own strength"
+                ),
+            }
         },
     }))
 }
@@ -955,7 +1003,7 @@ async fn source_calibration_refit(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Value>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
-    let drift = calibration_drift(&conn, &id).map_err(internal)?;
+    let drift = calibration_drift(&conn, &id, None).map_err(internal)?;
     if drift["refit_available"] != json!(true) {
         return Err((
             StatusCode::CONFLICT,
@@ -1080,12 +1128,22 @@ async fn source_calibration_refit(
     })))
 }
 
+#[derive(Deserialize)]
+struct DriftQuery {
+    /// Judge this calibration instead of the one in force, so an operator can
+    /// compare models without switching the live one.
+    calibration_id: Option<String>,
+}
+
 async fn source_calibration_drift(
     Path(id): Path<String>,
     State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<DriftQuery>,
 ) -> ApiResult<Json<Value>> {
     let conn = db::open(&s.db_path).map_err(internal)?;
-    Ok(Json(calibration_drift(&conn, &id).map_err(internal)?))
+    Ok(Json(
+        calibration_drift(&conn, &id, query.calibration_id.as_deref()).map_err(internal)?,
+    ))
 }
 
 /// Every calibration held for one camera, newest first, with the star count and

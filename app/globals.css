@@ -309,3 +309,7 @@
   font:inherit;font-size:.78rem;cursor:pointer}
 .drift-levels button:disabled{opacity:.45;cursor:default}
 .drift-levels button:not(:disabled):hover{border-color:var(--aqua,#7fd6c2)}
+.drift-pick{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.3rem 0 .5rem}
+.drift-pick select{background:var(--panel,#10161d);color:inherit;border:1px solid var(--line,#2a3540);
+  border-radius:4px;padding:.2rem .35rem;font:inherit;max-width:26rem}
+.drift-pick small{color:var(--muted,#8fa0ae)}

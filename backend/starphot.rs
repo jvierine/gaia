@@ -720,9 +720,10 @@ pub fn record_frame(
             ra_hours_j2000,dec_deg_j2000,vt_mag,azimuth_deg,elevation_deg,
             predicted_x,predicted_y,centroid_x,centroid_y,centroid_offset_px,
             background,amplitude,sigma_major,sigma_minor,angle_deg,flux,rms_residual,
-            residual_std,amplitude_snr,flux_snr,background_dx,background_dy,background_dxy)
+            residual_std,amplitude_snr,flux_snr,background_dx,background_dy,background_dxy,
+            peak_counts,peak_background,peak_raw)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
-                ?23,?24,?25,?26,?27,?28)
+                ?23,?24,?25,?26,?27,?28,?29,?30,?31)
          ON CONFLICT(source_id,image_id,star_key,channel) DO UPDATE SET
             observation_utc=excluded.observation_utc,azimuth_deg=excluded.azimuth_deg,
             elevation_deg=excluded.elevation_deg,predicted_x=excluded.predicted_x,
@@ -733,7 +734,9 @@ pub fn record_frame(
             angle_deg=excluded.angle_deg,flux=excluded.flux,rms_residual=excluded.rms_residual,
             residual_std=excluded.residual_std,amplitude_snr=excluded.amplitude_snr,
             flux_snr=excluded.flux_snr,background_dx=excluded.background_dx,
-            background_dy=excluded.background_dy,background_dxy=excluded.background_dxy",
+            background_dy=excluded.background_dy,background_dxy=excluded.background_dxy,
+            peak_counts=excluded.peak_counts,peak_background=excluded.peak_background,
+            peak_raw=excluded.peak_raw",
     )?;
     let mut written = 0;
     for m in measurements {
@@ -767,6 +770,9 @@ pub fn record_frame(
             fit.map(|f| f.background_dx),
             fit.map(|f| f.background_dy),
             fit.map(|f| f.background_dxy),
+            m.peak.map(|p| p.counts),
+            m.peak.map(|p| p.background),
+            m.peak.map(|p| p.raw),
         ])?;
         written += 1;
     }
@@ -1009,6 +1015,69 @@ pub struct StarMeasurement {
     /// The fit, present only when it converged within the acceptance radius.
     pub fit: Option<GaussianFit>,
     pub centroid_offset_px: Option<f64>,
+    /// Brightest pixel in the search patch above a robust local background,
+    /// measured directly and **independently of the Gaussian fit**, so it
+    /// survives where the fit does not.
+    pub peak: Option<PeakAboveBackground>,
+}
+
+/// A star's peak measured without fitting anything.
+///
+/// The Gaussian fit gives both a total intensity and a peak height, but they
+/// come from the same fit: where it fails, neither exists, and in this archive
+/// that is every failure -- not one measurement in five hundred has a peak
+/// without a flux. A response surface built only on fitted quantities therefore
+/// inherits every one of the fit's refusals.
+///
+/// This is the cheap independent alternative: the brightest pixel in the search
+/// patch, over the median of the patch border as a local sky. It is a worse
+/// statistic than the integrated flux -- it uses one pixel, so it is noisier
+/// and it depends on how the star falls between pixel centres -- but it exists
+/// whenever the star is there at all, and comparing a surface built from it
+/// against one built from the flux is a check that neither could give alone.
+#[derive(Debug, Clone, Copy)]
+pub struct PeakAboveBackground {
+    /// Brightest pixel minus the local sky, in counts.
+    pub counts: f64,
+    /// The local sky itself, needed to judge saturation the same way the fit
+    /// does: a peak sitting on a full detector is not a measurement.
+    pub background: f64,
+    /// The brightest pixel before the background was taken off, which is what
+    /// the saturation test has to look at.
+    pub raw: f64,
+}
+
+/// Brightest pixel in a patch above the median of its border.
+///
+/// The border rather than the whole patch, because the star is in the middle:
+/// including it in the background estimate would bias the sky up and the peak
+/// down, and for a bright star by a great deal.
+pub fn peak_above_background(patch: &[f64], width: usize, height: usize)
+    -> Option<PeakAboveBackground>
+{
+    if width < 3 || height < 3 || patch.len() < width * height {
+        return None;
+    }
+    let mut border: Vec<f64> = Vec::with_capacity(2 * (width + height));
+    for column in 0..width {
+        border.push(patch[column]);
+        border.push(patch[(height - 1) * width + column]);
+    }
+    for row in 1..height - 1 {
+        border.push(patch[row * width]);
+        border.push(patch[row * width + width - 1]);
+    }
+    border.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let background = border[border.len() / 2];
+    let raw = patch
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !raw.is_finite() {
+        return None;
+    }
+    Some(PeakAboveBackground { counts: raw - background, background, raw })
 }
 
 /// The colour channels measured per star, plus the panchromatic mean. Fitting
@@ -1070,6 +1139,8 @@ pub fn measure_frame(
                     patch.push(channel_value(&image.get_pixel(x, y).0, index));
                 }
             }
+            // Measured before anything is fitted, so it is there either way.
+            let peak = peak_above_background(&patch, side, side);
             let fit = fit_gaussian(&patch, side, side);
             // Patch coordinates back to image coordinates before comparing.
             let (fit, offset) = match fit {
@@ -1098,6 +1169,7 @@ pub fn measure_frame(
                 predicted_y: py,
                 fit,
                 centroid_offset_px: offset,
+                peak,
             });
         }
     }
@@ -1680,12 +1752,14 @@ mod tests {
             predicted_y: 1381.0,
             fit: Some(fit),
             centroid_offset_px: Some(0.35),
+            peak: None,
         };
         let missing = StarMeasurement {
             star_key: star_key(18.6156, 38.7837),
             channel: "g",
             fit: None,
             centroid_offset_px: Some(9.4),
+            peak: None,
             ..found.clone()
         };
         let written =
@@ -1919,5 +1993,78 @@ mod tests {
         assert!(cloud_weight(50.0, floor) > 0.0);
         assert!((cloud_weight(50.0, floor) - floor).abs() < 1e-9);
         assert!((cloud_weight(1.0, floor) - (floor + (1.0 - floor) / std::f64::consts::E)).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod peak_tests {
+    use super::*;
+
+    fn patch_with(width: usize, height: usize, sky: f64, star: Option<(usize, usize, f64)>)
+        -> Vec<f64>
+    {
+        let mut p = vec![sky; width * height];
+        if let Some((x, y, amplitude)) = star {
+            for (dx, dy, weight) in [
+                (0i64, 0i64, 1.0), (1, 0, 0.5), (-1, 0, 0.5), (0, 1, 0.5), (0, -1, 0.5),
+            ] {
+                let (cx, cy) = (x as i64 + dx, y as i64 + dy);
+                if cx >= 0 && cy >= 0 && (cx as usize) < width && (cy as usize) < height {
+                    p[cy as usize * width + cx as usize] = sky + amplitude * weight;
+                }
+            }
+        }
+        p
+    }
+
+    #[test]
+    fn the_peak_is_measured_above_the_border_not_the_whole_patch() {
+        // A bright star in the middle must not raise its own background. Using
+        // the whole patch as sky would, and for a bright star by a great deal.
+        let patch = patch_with(15, 15, 40.0, Some((7, 7, 120.0)));
+        let peak = peak_above_background(&patch, 15, 15).unwrap();
+        assert!((peak.background - 40.0).abs() < 1e-9, "sky {}", peak.background);
+        assert!((peak.counts - 120.0).abs() < 1e-9, "peak {}", peak.counts);
+        assert!((peak.raw - 160.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_gradient_across_the_patch_is_taken_from_the_middle_of_the_border() {
+        let (w, h) = (15, 15);
+        let mut patch = vec![0.0; w * h];
+        for row in 0..h {
+            for column in 0..w {
+                patch[row * w + column] = 30.0 + column as f64;
+            }
+        }
+        patch[7 * w + 7] += 200.0;
+        let peak = peak_above_background(&patch, w, h).unwrap();
+        // The border median of a left-right ramp is its middle value.
+        assert!((peak.background - 37.0).abs() < 1.5, "sky {}", peak.background);
+        assert!(peak.counts > 190.0 && peak.counts < 205.0, "peak {}", peak.counts);
+    }
+
+    #[test]
+    fn it_survives_where_the_gaussian_fit_does_not() {
+        // The whole reason for this measurement. A patch the fit refuses still
+        // yields a peak, which is what keeps a response surface from inheriting
+        // every one of the fit's refusals.
+        let flat = vec![25.0; 15 * 15];
+        assert!(fit_gaussian(&flat, 15, 15).is_none_or(|f| f.flux < 1.0));
+        let peak = peak_above_background(&flat, 15, 15).unwrap();
+        assert!((peak.counts - 0.0).abs() < 1e-9, "flat patch peaks at {}", peak.counts);
+        // And a patch too small to fit at all.
+        assert!(fit_gaussian(&[1.0, 2.0], 2, 1).is_none());
+        assert!(peak_above_background(&[1.0, 2.0], 2, 1).is_none());
+    }
+
+    #[test]
+    fn a_saturated_peak_is_visible_as_such() {
+        // peak_raw is what the saturation test has to look at: the counts above
+        // background can look modest while the detector is full.
+        let patch = patch_with(15, 15, 240.0, Some((7, 7, 15.0)));
+        let peak = peak_above_background(&patch, 15, 15).unwrap();
+        assert!(peak.raw >= SATURATION_LEVEL, "raw {}", peak.raw);
+        assert!(peak.counts < 20.0, "counts {} look harmless on their own", peak.counts);
     }
 }

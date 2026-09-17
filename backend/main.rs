@@ -19,6 +19,7 @@ mod processing;
 mod publish;
 mod publish_layers;
 mod quality;
+mod response;
 mod starpair;
 mod starpass;
 mod starphot;
@@ -1885,6 +1886,111 @@ frames are gated on the rest of their stars and the estimator is a median.",
     Ok(Json(built))
 }
 
+#[derive(Deserialize)]
+struct ResponseSurfaceQuery {
+    channel: Option<String>,
+    /// "flux", "amplitude" or "peak". Comma-separated for several at once, so
+    /// the operator can see whether they agree.
+    measure: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    hours: Option<f64>,
+    clear_threshold: Option<f64>,
+    /// Compare against this camera's surfaces as well.
+    partner: Option<String>,
+}
+
+/// The assimilated clear-sky stellar response of one camera.
+///
+/// Built from every clear, unsaturated measurement rather than from moments
+/// when two cameras happened to look at once. Expect it to be thin for a long
+/// while: at these latitudes darkness, moon and cloud multiply, so the coverage
+/// figures matter as much as the values.
+async fn source_response_surface(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ResponseSurfaceQuery>,
+) -> ApiResult<Json<Value>> {
+    let channel = query.channel.unwrap_or_else(|| "mean".into());
+    if !starphot::CHANNELS.contains(&channel.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, "unknown channel".into()));
+    }
+    let names = query.measure.unwrap_or_else(|| "flux,peak".into());
+    let measures: Vec<response::Measure> = names
+        .split(',')
+        .filter_map(|n| response::Measure::parse(n.trim()))
+        .collect();
+    if measures.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "measure must be flux, amplitude or peak".into()));
+    }
+    let (from, to) = star_window(&query.from, &query.to, query.hours);
+    let clear = query.clear_threshold.unwrap_or(0.70).clamp(0.0, 1.0);
+    let built = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        let conn = db::open(&s.db_path)?;
+        let here = keogram::station(&conn, &id)?;
+        let partner = query
+            .partner
+            .as_deref()
+            .map(|p| keogram::station(&conn, p))
+            .transpose()?;
+        let mut surfaces = serde_json::Map::new();
+        for measure in &measures {
+            let samples = response::gather(
+                &conn, &here.id, &channel, *measure, &from, &to,
+                here.longitude_deg, clear,
+            )?;
+            let mine = response::solve(&samples);
+            let mut entry = json!({
+                "gathered_samples": samples.len(),
+                "surface": mine.as_ref().map(|v| v.to_json()),
+            });
+            if let (Some(mine), Some(other)) = (mine.as_ref(), partner.as_ref()) {
+                let theirs = response::gather(
+                    &conn, &other.id, &channel, *measure, &from, &to,
+                    other.longitude_deg, clear,
+                )?;
+                let theirs = response::solve(&theirs);
+                if let Some(theirs) = theirs.as_ref() {
+                    entry["partner_surface"] = theirs.to_json();
+                    if let Some((centre, scatter, shared)) = response::ratio(mine, theirs) {
+                        entry["shape_difference"] = json!({
+                            "shared_cells": shared,
+                            "median_ln_difference": centre,
+                            "scatter": scatter,
+                            "note": "difference in shape only: each surface is pinned to its own \
+median, so a constant sensitivity ratio cancels here and has to come from a shared reference",
+                        });
+                    }
+                }
+            }
+            surfaces.insert(measure.name().to_string(), entry);
+        }
+        Ok(json!({
+            "source_id": here.id, "source_name": here.name,
+            "partner_id": partner.as_ref().map(|p| p.id.clone()),
+            "channel": channel, "from": from, "to": to,
+            "clear_threshold": clear,
+            "azimuth_bins": response::AZIMUTH_BINS,
+            "elevation_bins": response::ELEVATION_BINS,
+            "minimum": {
+                "elevation_deg": response::MIN_ELEVATION_DEG,
+                "bin_samples": response::MIN_BIN_SAMPLES,
+                "bin_nights": response::MIN_BIN_NIGHTS,
+                "star_samples": response::MIN_STAR_SAMPLES,
+            },
+            "measures": surfaces,
+            "note": "Clear-sky stellar response by azimuth and elevation, each star's own level \
+profiled out. Accumulates over many nights: at these latitudes darkness, moon and cloud \
+multiply, so expect at least one new-moon period and more likely several before the coverage \
+is worth trusting.",
+        }))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(built))
+}
+
 /// Which cameras this one can be compared against.
 async fn source_keogram_pairs(
     Path(id): Path<String>,
@@ -2279,6 +2385,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/keogram-pairs", get(source_keogram_pairs))
         .route("/api/sources/{id}/keogram", get(source_keogram))
         .route("/api/sources/{id}/star-sensitivity", get(source_star_sensitivity))
+        .route("/api/sources/{id}/response-surface", get(source_response_surface))
         .route("/api/sources/{id}/stars/frame", get(source_star_frame))
         .route("/api/sources/{id}/stars/nights", get(source_star_nights))
         .route("/api/extinction", get(extinction_state))

@@ -28,6 +28,11 @@ pub fn open(path: &Path) -> Result<Connection> {
         "background_dx",
         "background_dy",
         "background_dxy",
+        // Measured independently of the Gaussian fit, so a response surface
+        // built on the peak is not limited to the frames the fit accepted.
+        "peak_counts",
+        "peak_background",
+        "peak_raw",
     ] {
         add_column(&conn, "star_photometry", column, "REAL")?;
     }

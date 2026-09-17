@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS star_photometry(
   -- could not be fitted, the star was not detected, it was too close to the
   -- noise, or its peak was clipped by a background the aurora had lifted.
   optical_depth REAL,
+  -- Peak above a robust local sky, measured without fitting anything, so it
+  -- survives where the Gaussian fit does not. `peak_raw` is the brightest pixel
+  -- before the sky was taken off, which is what the saturation test needs.
+  peak_counts REAL, peak_background REAL, peak_raw REAL,
   PRIMARY KEY(source_id,image_id,star_key,channel)
 );
 CREATE INDEX IF NOT EXISTS star_photometry_series

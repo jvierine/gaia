@@ -1029,7 +1029,7 @@ function CalibrationDrift({camera}:{camera:Camera}){
       </div>
       <div className="drift-actions">
         <button type="button" disabled={!drift?.refit_available||refitting} onClick={()=>void refit()}>
-          {refitting?'Fitting\u2026':'Refit lens parameters (AIDA/WISC)'}</button>
+          {refitting?'Fitting\u2026':'Refit lens parameters (WISC/AIDA)'}</button>
         <small>{drift?.refit_reason}</small>
       </div>
       {outcome&&<p className="drift-outcome" role="status">{outcome}</p>}

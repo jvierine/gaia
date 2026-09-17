@@ -288,6 +288,8 @@ pub fn photometer_frame(
     stars: &[Star],
     settings: &Settings,
 ) -> Result<usize> {
+    // No expensive star fitting in daylight, even if configured permissively.
+    if geometry::solar_elevation_deg(frame.latitude_deg,frame.longitude_deg,frame.unix_seconds)>0.0 {return Ok(0)}
     // Full resolution, never a thumbnail: a star is one or two pixels across.
     let image = image::open(&frame.archive_path)
         .with_context(|| format!("cannot decode {}", frame.archive_path))?
@@ -306,13 +308,16 @@ pub fn photometer_frame(
     if measurements.is_empty() {
         return Ok(0);
     }
-    starphot::record_frame(
-        conn,
-        &frame.source_id,
-        &frame.image_id,
-        &frame.observation_utc,
-        &measurements,
-    )
+    let count=starphot::record_frame(conn,&frame.source_id,&frame.image_id,&frame.observation_utc,&measurements)?;
+    // This is the bounded background analysis worker, never the publisher.
+    // Publish its ready cloud product atomically; failure leaves fallback intact.
+    if let Some(root)=std::env::var_os("GAIA_ARCHIVE_ROOT") {
+        let calibration:rusqlite::Result<String>=conn.query_row("SELECT id FROM calibrations WHERE source_id=?1 AND hdf5_path=?2 ORDER BY created_utc DESC LIMIT 1",rusqlite::params![frame.source_id,frame.calibration_path],|r|r.get(0));
+        if let Ok(calibration)=calibration {
+            if let Err(error)=crate::cloudweight::prepare_ready_field(conn,Path::new(&root),&frame.source_id,&frame.observation_utc,&calibration,[image.width() as f64,image.height() as f64]) {tracing::warn!(%error,"cloud preparation failed; keep fallback");}
+        }
+    }
+    Ok(count)
 }
 
 /// Records where the Sun and Moon were for this frame. Cheap, no image is read,
@@ -623,7 +628,7 @@ pub fn run_cycle(
         match record_sky_for(conn, &frame) {
             Ok(sun) => {
                 report.sky_rows += 1;
-                if sun <= settings.sun_below_deg {
+                if sun <= settings.sun_below_deg.min(0.0) {
                     dark.entry(frame.source_id.clone()).or_default().push(frame);
                 } else {
                     report.skipped_daylight += 1;
@@ -767,6 +772,12 @@ pub fn catalog_present(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn daylight_never_decodes_or_fits_an_image() {
+        let conn=test_db();let frame=Frame{image_id:"daylight".into(),source_id:"cam".into(),archive_path:"/does-not-exist".into(),observation_utc:"2026-06-21T12:00:00Z".into(),unix_seconds:unix_seconds("2026-06-21T12:00:00Z").unwrap(),latitude_deg:69.35,longitude_deg:20.36,calibration_path:"unused".into()};
+        let mut settings=Settings::default();settings.sun_below_deg=90.;
+        assert_eq!(photometer_frame(&conn,&frame,&[],&[],&settings).unwrap(),0);
+    }
     #[test]
     fn cadence_thinning_keeps_one_frame_per_window() {
         // Frames every two minutes, newest first, with a ten minute cadence.

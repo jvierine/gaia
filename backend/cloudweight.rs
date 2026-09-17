@@ -332,10 +332,68 @@ pub fn sample(grid: &[f32], columns: usize, rows: usize, u: f64, v: f64) -> f32 
     (top * (1.0 - ty) + bottom * ty) as f32
 }
 
+// Completed cloud fields are handed off through immutable PNGs and an atomic
+// per-camera/time/calibration descriptor. Publication never queries photometry.
+fn ready_key(source: &str, time: &str, calibration: &str) -> String {
+    use sha2::{Digest,Sha256};
+    format!("{:x}",Sha256::digest(serde_json::to_vec(&(source,time,calibration)).unwrap()))
+}
+pub fn ready_field(root: &std::path::Path, source: &str, time: &str, calibration: &str) -> Option<std::path::PathBuf> {
+    let dir=root.join("cloud-ready");
+    let v:serde_json::Value=serde_json::from_slice(&std::fs::read(dir.join(format!("{}.json",ready_key(source,time,calibration)))).ok()?).ok()?;
+    if v["source"]!=source || v["time"]!=time || v["calibration"]!=calibration {return None}
+    let name=v["texture"].as_str()?;
+    if !name.starts_with("cloud-ready-") || !name.ends_with(".png") || !name.bytes().all(|b|b.is_ascii_alphanumeric()||b"-_.".contains(&b)){return None}
+    let path=dir.join(name);path.is_file().then_some(path)
+}
+pub fn prepare_ready_field(conn:&rusqlite::Connection,root:&std::path::Path,source:&str,time:&str,calibration:&str,size:[f64;2])->anyhow::Result<bool>{
+    use sha2::{Digest,Sha256};
+    let best=best_flux(conn,source,CHANNEL)?;
+    let stars=stars_for_frame(conn,source,time,CHANNEL,&best)?;
+    if !enough(&stars){return Ok(false)}
+    let samples:Vec<_>=stars.iter().map(|s|[s.x,s.y,s.fading]).collect();
+    let hash=format!("{:x}",Sha256::digest(serde_json::to_vec(&(source,time,calibration,size,GRID,description(),samples))?));
+    let dir=root.join("cloud-ready");std::fs::create_dir_all(&dir)?;
+    let name=format!("cloud-ready-{hash}.png");let path=dir.join(&name);
+    if !path.exists(){
+        let values=grid(&stars,size[0],size[1],GRID,GRID);
+        let image=image::GrayImage::from_raw(GRID as u32,GRID as u32,values.iter().map(|v|(v.clamp(0.,1.)*255.).round() as u8).collect()).unwrap();
+        let tmp=dir.join(format!("{}.pending",uuid::Uuid::new_v4()));
+        image.save_with_format(&tmp,image::ImageFormat::Png)?;std::fs::rename(tmp,&path)?;
+    }
+    let descriptor=serde_json::json!({"source":source,"time":time,"calibration":calibration,"texture":name});
+    let tmp=dir.join(format!("{}.pending",uuid::Uuid::new_v4()));std::fs::write(&tmp,serde_json::to_vec(&descriptor)?)?;
+    std::fs::rename(tmp,dir.join(format!("{}.json",ready_key(source,time,calibration))))?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn ready_field_is_exact_and_missing_is_fallback(){
+        let dir=tempfile::tempdir().unwrap();
+        assert!(ready_field(dir.path(),"a","time","cal").is_none());
+        assert_ne!(ready_key("a","time","cal"),ready_key("b","time","cal"));
+        assert_ne!(ready_key("a","time","cal"),ready_key("a","time2","cal"));
+        assert_ne!(ready_key("a","time","cal"),ready_key("a","time","cal2"));
+        let cache=dir.path().join("cloud-ready");std::fs::create_dir(&cache).unwrap();
+        std::fs::write(cache.join("cloud-ready-test.png"),b"test").unwrap();
+        std::fs::write(cache.join(format!("{}.json",ready_key("a","time","cal"))),serde_json::to_vec(&serde_json::json!({"source":"a","time":"time","calibration":"cal","texture":"cloud-ready-test.png"})).unwrap()).unwrap();
+        assert!(ready_field(dir.path(),"a","time","cal").is_some());
+        assert!(ready_field(dir.path(),"b","time","cal").is_none());
+        assert!(ready_field(dir.path(),"a","time","cal2").is_none());
+    }
+    #[test]
+    #[ignore = "read-only production benchmark; writes only to a temporary directory"]
+    fn benchmark_ready_field(){
+        let db=std::env::var("GAIA_PROFILE_DB").unwrap();
+        let conn=rusqlite::Connection::open_with_flags(db,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let (source,time):(String,String)=conn.query_row("SELECT source_id,observation_utc FROM star_photometry WHERE channel='mean' AND flux>0 AND background+amplitude<250 AND amplitude_snr>=5 AND flux_snr>=5 GROUP BY source_id,observation_utc HAVING count(*)>=20 ORDER BY observation_utc DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        let dir=tempfile::tempdir().unwrap();
+        for run in ["cold","warm"] {let start=std::time::Instant::now();let ready=prepare_ready_field(&conn,dir.path(),&source,&time,"benchmark",[1920.,1080.]).unwrap();assert!(ready,"benchmark must exercise grid generation");println!("cloud-ready {run}: source={source} elapsed_ms={} ready={ready}",start.elapsed().as_millis());}
+    }
     fn star(x: f64, y: f64, fading: f64) -> StarFading {
         StarFading { x, y, fading }
     }

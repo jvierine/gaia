@@ -1,0 +1,5 @@
+[Unit]
+Description=Shared 16-core GAIA compute allocation
+[Slice]
+CPUAccounting=true
+CPUQuota=1600%

@@ -1114,6 +1114,38 @@ pub fn measure_frame(
     max_offset_px: f64,
     min_elevation_deg: f64,
 ) -> Vec<StarMeasurement> {
+    let workers=std::env::var("GAIA_PREPROCESS_WORKERS").ok().and_then(|v|v.parse::<usize>().ok()).unwrap_or(16).clamp(1,16);
+    measure_frame_parallel(image,optpar,lat_deg,lon_deg,unix_seconds,stars,patch_half,max_offset_px,min_elevation_deg,workers)
+}
+fn measure_frame_parallel(
+    image: &image::RgbImage,
+    optpar: &[f64],
+    lat_deg: f64,
+    lon_deg: f64,
+    unix_seconds: f64,
+    stars: &[Star],
+    patch_half: usize,
+    max_offset_px: f64,
+    min_elevation_deg: f64,
+    workers: usize,
+) -> Vec<StarMeasurement> {
+    if workers<=1 || stars.len()<32 {return measure_frame_serial(image,optpar,lat_deg,lon_deg,unix_seconds,stars,patch_half,max_offset_px,min_elevation_deg)}
+    std::thread::scope(|scope| {
+        let handles:Vec<_>=stars.chunks(stars.len().div_ceil(workers)).map(|part|scope.spawn(move||measure_frame_serial(image,optpar,lat_deg,lon_deg,unix_seconds,part,patch_half,max_offset_px,min_elevation_deg))).collect();
+        handles.into_iter().flat_map(|h|h.join().expect("star fitting worker panicked")).collect()
+    })
+}
+fn measure_frame_serial(
+    image: &image::RgbImage,
+    optpar: &[f64],
+    lat_deg: f64,
+    lon_deg: f64,
+    unix_seconds: f64,
+    stars: &[Star],
+    patch_half: usize,
+    max_offset_px: f64,
+    min_elevation_deg: f64,
+) -> Vec<StarMeasurement> {
     let (width, height) = (image.width() as f64, image.height() as f64);
     let mut out = Vec::new();
     let side = patch_half * 2 + 1;
@@ -1179,6 +1211,21 @@ pub fn measure_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "read-only production parallel fitting benchmark"]
+    fn benchmark_parallel_frame(){
+        let conn=rusqlite::Connection::open_with_flags(std::env::var("GAIA_PROFILE_DB").unwrap(),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let source="starvisor-ryazan";
+        let time:String=conn.query_row("SELECT observation_utc FROM star_photometry WHERE source_id=?1 AND channel='mean' AND flux_snr>=5 ORDER BY observation_utc DESC LIMIT 1",[source],|r|r.get(0)).unwrap();
+        let (path,lat,lon):(String,f64,f64)=conn.query_row("SELECT i.archive_path,s.latitude_deg,s.longitude_deg FROM images i JOIN sources s ON s.id=i.source_id WHERE i.source_id=?1 AND i.observation_utc=?2 LIMIT 1",rusqlite::params![source,time],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        let cal:String=conn.query_row("SELECT hdf5_path FROM calibrations WHERE source_id=?1 ORDER BY created_utc DESC LIMIT 1",[source],|r|r.get(0)).unwrap();
+        let opt=crate::projection::optical_parameters(&cal).unwrap();
+        let stars=load_catalog(std::path::Path::new("/home/j/src/widefield-star-calibrator/data/tycho2_mag8.bin.gz"),4.0).unwrap();
+        let image=image::open(path).unwrap().to_rgb8();let epoch=chrono::DateTime::parse_from_rfc3339(&time).unwrap().timestamp() as f64;
+        let mut reference=String::new();
+        for workers in [1,16] {let now=std::time::Instant::now();let rows=measure_frame_parallel(&image,&opt,lat,lon,epoch,&stars,9,3.,10.,workers);let elapsed=now.elapsed();assert!(!rows.is_empty());println!("parallel-star-fit workers={workers} stars={} measurements={} elapsed_ms={}",stars.len(),rows.len(),elapsed.as_millis());let actual=format!("{rows:?}");if workers==1 {reference=actual}else{assert_eq!(reference,actual,"parallel measurements must match serial exactly")}}
+    }
 
     /// The Kiruna all-sky calibration actually in the archive: optmod 2, 2832 px.
     const KIRUNA: [f64; 9] = [

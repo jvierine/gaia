@@ -339,6 +339,9 @@ pub fn run(s: &AppState) -> Result<()> {
                 let (mesh,count)=weighted_mesh(s,&id,&a,lat,lon,camera["altitude_m"].as_f64().unwrap_or(0.),&assets,&rules)?;let texture=a["texture_url"].as_str().unwrap().rsplit('/').next().unwrap();copy(&s.archive_root.join("projection-cache").join(texture),&assets.join(texture))?;
                 let cloud = if prepare_cloud {
                     cloud_layer(s,&id,a["observation_utc"].as_str().unwrap_or_default(),image_size,&cloud_best,&assets).unwrap_or(None)
+                } else if cloud_wanted && crate::cloudweight::ready_field(&s.archive_root,&id,a["observation_utc"].as_str().unwrap_or_default(),a["calibration_id"].as_str().unwrap_or_default()).is_some() {
+                    let ready=crate::cloudweight::ready_field(&s.archive_root,&id,a["observation_utc"].as_str().unwrap_or_default(),a["calibration_id"].as_str().unwrap_or_default()).unwrap();
+                    let name=ready.file_name().unwrap().to_string_lossy().into_owned();copy(&ready,&assets.join(&name))?;Some(name)
                 } else if cloud_wanted {
                     // Exact station, observation and calibration match only.
                     // No photometry queries or cloud computation on this path.

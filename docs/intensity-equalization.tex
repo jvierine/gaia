@@ -20,7 +20,7 @@
 \title{\bfseries Cross-camera intensity equalization in GAIA\\[2mm]
 \large Interface design, pair selection, and estimation of camera sensitivity and background}
 \author{Memo --- GAIA Data Center}
-\date{10 September 2026}
+\date{17 September 2026 \\ \small(second revision; first issued 10 September 2026)}
 
 \begin{document}
 \maketitle
@@ -37,6 +37,14 @@ measurement model, argues for the equidistant great-circle cut as the comparison
 locus, reviews estimators for relative sensitivity \emph{and} background,
 explains how to select usable camera pairs, shows that both unknowns reduce to
 the same graph-Laplacian solve, and gives a staged plan for the interface.
+
+This revision adds a second, slower and more reliable route to the sensitivity
+half of the problem, and argues that it should be the primary one: an
+\emph{assimilated} clear-sky stellar response per camera, accumulated over
+elevation and azimuth across many nights, with intercalibration taken as the
+ratio of two such surfaces rather than from simultaneous pairs. The change is
+forced by the climate the network actually sits in
+(Sec.~\ref{sec:assimilated}).
 \end{abstract}
 
 \section{The measurement model}
@@ -556,6 +564,79 @@ Three points of implementation discipline:
     whose photometry has been adjusted must say so.
 \end{itemize}
 
+\section{An assimilated clear-sky stellar response, and why it has to be slow}
+\label{sec:assimilated}
+
+The estimators above, and the star-pair sensitivity measurement built beside
+them, both wait for two cameras to observe the same thing at the same moment.
+That is the wrong thing to wait for in this network, and the archive has now
+said so with numbers.
+
+\paragraph{Simultaneity is scarce.} Of \num{532} camera-nights the clear-sky
+extinction fit has attempted, \num{469} were refused: fewer than one night in
+eight yields a coefficient the estimator will stand behind. Star pairs are worse
+still, because they need two cameras to be measured at the same instant, and the
+photometry pass thins each camera's frames to its own cadence. On a
+well-observed night at Skibotn, with two \emph{co-located} cameras both
+measured, the median gap between one camera's measurement and the nearest from
+the other was \SI{240}{\second}: at a \SI{30}{\second} tolerance one instant
+in thirty-two paired. Waiting for coincidence throws away almost everything the
+archive has.
+
+\paragraph{The alternative: assimilate, then divide.} For each camera,
+accumulate the measured stellar flux, corrected to the top of the atmosphere by
+that night's own extinction coefficient and admitted only under clear sky, as a
+function of \emph{elevation and azimuth}. Over many nights this builds a
+response surface: what this camera reports for a star of given intrinsic
+brightness, in each direction it looks. Intercalibration is then the ratio of
+two such surfaces over the directions both cameras cover --- no coincidence
+required, since every clear measurement either camera ever made contributes.
+
+Three things recommend it beyond the sample size. It separates the instrument
+from the weather, because only clear samples enter and each is corrected for
+its own air mass. It measures the response \emph{across the field} rather than
+as one number, which is what vignetting and a dirty or iced dome actually do to
+a lens. And it degrades gracefully: a direction with few samples is visibly
+uncertain rather than silently wrong.
+
+\paragraph{The cost is time, and the reason is geography.} This is where the
+plan has to be honest. Large parts of the northern auroral oval are not in the
+Atacama desert. They are maritime, subarctic and cloudy --- Tromsø, Skibotn,
+Kiruna, Sodankylä and their neighbours sit under weather that comes off the
+North Atlantic, and a photometric night there is an event rather than a
+condition. The refusal rate above is not a defect of the estimator; it is the
+climate, measured.
+
+Three filters multiply, and all three are severe:
+
+\begin{itemize}
+  \item \textbf{Darkness.} There is no astronomical night at these latitudes
+    for a large part of the year. The usable season runs from roughly late
+    August to mid-April, and the nights are shortest at its ends.
+  \item \textbf{Moon.} Moonlight lifts the background until faint stars are
+    unmeasurable and bright ones clip, and the archive cannot yet separate a
+    star lost to moonlit thin cloud from one lost to aurora over a clear sky.
+    Usable stretches therefore cluster in the dark fortnight around new moon.
+  \item \textbf{Cloud.} What remains is then cut again by the weather, and it
+    is cut hardest at exactly the coastal sites with the best instruments.
+\end{itemize}
+
+One new-moon period at one station might yield a handful of usable nights, and
+at a bad site none at all. A response surface in elevation and azimuth needs
+those samples spread over directions, not merely counted, so the requirement is
+not a fixed number of measurements but coverage of the sky each camera sees.
+\textbf{Expect to collate over at least one new-moon period, and more likely
+several, before any intensity-correction factor deserves to be called robust.}
+Planning for a season rather than a week is not pessimism; it is the only
+schedule the sky allows.
+
+That has a design consequence worth stating plainly: the accumulation must be
+incremental and restartable, and it must report its own coverage. A surface
+built from three nights and one built from thirty must be distinguishable at a
+glance, and the composite must be able to decline to use the former. A
+correction factor quoted without its coverage is the same error as an optical
+depth quoted without saying which stars were saturated.
+
 \section{Staged plan}
 
 The geometry and sampling layer is already implemented and tested
@@ -604,6 +685,15 @@ separated ones are trusted.}
     brush on the keogram, scatter plot with fit and residuals, reported standard
     errors. \emph{Check:} a co-located pair of identical instruments must return
     $\hat\alpha\approx1$, $\hat\beta\approx0$.
+  \item[\textbf{Stage 3b.}] The assimilated clear-sky stellar response
+    (Sec.~\ref{sec:assimilated}), accumulated per camera over elevation and
+    azimuth and running continuously from here on, since it is the stage whose
+    cost is measured in months rather than in work. Sensitivity ratios are taken
+    between surfaces, not between simultaneous pairs. UI: coverage per camera,
+    by direction and by night count, so a thin surface is visibly thin.
+    \emph{Check:} two co-located instruments should agree to a constant across
+    the whole overlapping field, and the residual against that constant is the
+    honest error bar on every other pair.
   \item[\textbf{Stage 4.}] Network solve per group with explicit gauge, plus
     per-cycle closure residuals. UI: a review table of $(\gain,\off)$ per camera
     per channel, isolated cameras clearly marked as not equalizable.

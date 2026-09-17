@@ -811,6 +811,13 @@ function CalibrationDrift({camera}:{camera:Camera}){
   const [drift,setDrift]=useState<Drift|null>(null);
   const [busy,setBusy]=useState(true),[refitting,setRefitting]=useState(false);
   const [error,setError]=useState(''),[outcome,setOutcome]=useState('');
+  // Magnification of the frame, about a centre in image pixels. A drift of a
+  // pixel or two is invisible at whole-frame scale, which is the scale at
+  // which it matters.
+  const [zoom,setZoom]=useState(1);
+  const [centre,setCentre]=useState<[number,number]|null>(null);
+  const pan=useRef<{x:number;y:number;cx:number;cy:number}|null>(null);
+  useEffect(()=>{setZoom(1);setCentre(null)},[camera.id]);
   const load=async()=>{
     setBusy(true);
     try{
@@ -846,22 +853,96 @@ function CalibrationDrift({camera}:{camera:Camera}){
         <span>offset <strong>{frame.rms_offset_px==null?'\u2014':`${frame.rms_offset_px.toFixed(2)} px`}</strong> RMS</span>
         <time>{frame.observation_utc.replace('T',' ').slice(0,19)} UTC{drift?.current_night?' \u00b7 tonight':' \u00b7 last night observed'}</time>
       </div>
-      {w>0&&h>0&&<svg className="drift-image" viewBox={`0 0 ${w} ${h}`} role="img"
-        aria-label="Predicted and fitted star positions on the richest frame of the last night observed">
-        <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
-          x={0} y={0} width={w} height={h} preserveAspectRatio="none"/>
-        {/* Purple where the ephemeris and lens model say the star is; amber
-            where the Gaussian actually fitted. A line joins the pair, because
-            the direction of the offset is the whole diagnosis. */}
-        {stars.map(st=>st.centroid_x==null||st.centroid_y==null?null:
-          <line key={`l${st.star_key}`} x1={st.predicted_x} y1={st.predicted_y}
-            x2={st.centroid_x} y2={st.centroid_y} className="drift-link"/>)}
-        {stars.map(st=><circle key={`p${st.star_key}`} cx={st.predicted_x} cy={st.predicted_y}
-          r={Math.max(3,w/420)} className="drift-predicted"/>)}
-        {stars.map(st=>st.centroid_x==null||st.centroid_y==null?null:
-          <circle key={`f${st.star_key}`} cx={st.centroid_x} cy={st.centroid_y}
-            r={Math.max(3,w/420)} className="drift-fitted"/>)}
-      </svg>}
+      {w>0&&h>0&&(()=>{
+        const spanX=w/zoom,spanY=h/zoom;
+        const [cx,cy]=centre??[w/2,h/2];
+        const vbox=[Math.min(w-spanX/2,Math.max(spanX/2,cx))-spanX/2,
+                    Math.min(h-spanY/2,Math.max(spanY/2,cy))-spanY/2,spanX,spanY];
+        // Marker sizes follow the view, not the image, so a ring stays a ring
+        // at every magnification instead of swelling into a disc.
+        const ring=Math.max(2,spanX/110),dot=Math.max(1,spanX/300);
+        const residual=(st:DriftStar)=>st.centroid_x==null||st.centroid_y==null?null
+          :[st.centroid_x-st.predicted_x,st.centroid_y-st.predicted_y] as [number,number];
+        const pairs=stars.map(residual).filter((v):v is [number,number]=>v!=null);
+        // One span for both residual axes, so a systematic shift in x cannot be
+        // mistaken for one in y by a difference of scale.
+        const reach=Math.max(0.5,...pairs.flatMap(([dx,dy])=>[Math.abs(dx),Math.abs(dy)]));
+        const R=120,pad=18,S=R+pad;
+        const rms=pairs.length
+          ?Math.sqrt(pairs.reduce((t,[dx,dy])=>t+dx*dx+dy*dy,0)/pairs.length):0;
+        const mean:[number,number]=pairs.length
+          ?[pairs.reduce((t,p)=>t+p[0],0)/pairs.length,pairs.reduce((t,p)=>t+p[1],0)/pairs.length]
+          :[0,0];
+        return <div className="drift-views">
+          <div className="drift-frame">
+            <div className="drift-zoom">
+              <button type="button" aria-label="Zoom in" onClick={()=>setZoom(z=>Math.min(24,z*1.6))}>+</button>
+              <button type="button" aria-label="Zoom out" onClick={()=>setZoom(z=>Math.max(1,z/1.6))}>&minus;</button>
+              <button type="button" aria-label="Fit the whole frame" onClick={()=>{setZoom(1);setCentre(null)}}>Fit</button>
+              <small>{zoom<1.05?'whole frame':`${zoom.toFixed(1)}\u00d7`}</small>
+            </div>
+            <svg className="drift-image" viewBox={vbox.join(' ')} role="img"
+              aria-label="Projected and fitted star positions on the richest frame of the last night observed"
+              onWheel={event=>{event.preventDefault();
+                const box=event.currentTarget.getBoundingClientRect();
+                const at:[number,number]=[vbox[0]+(event.clientX-box.left)/box.width*vbox[2],
+                                          vbox[1]+(event.clientY-box.top)/box.height*vbox[3]];
+                setZoom(z=>{const next=Math.min(24,Math.max(1,z*(event.deltaY<0?1.25:0.8)));
+                  if(next>1.001)setCentre(at); else setCentre(null);
+                  return next})}}
+              onPointerDown={event=>{if(zoom<=1.001)return;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                pan.current={x:event.clientX,y:event.clientY,cx:vbox[0]+vbox[2]/2,cy:vbox[1]+vbox[3]/2}}}
+              onPointerMove={event=>{const p=pan.current;if(!p)return;
+                const box=event.currentTarget.getBoundingClientRect();
+                setCentre([p.cx-(event.clientX-p.x)/box.width*vbox[2],
+                           p.cy-(event.clientY-p.y)/box.height*vbox[3]])}}
+              onPointerUp={()=>{pan.current=null}}>
+              <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
+                x={0} y={0} width={w} height={h} preserveAspectRatio="none"/>
+              {/* An open purple ring for where the sky says the star is, with the
+                  amber centroid as a filled dot inside it. Concentric rather than
+                  side by side, so both are legible at once and the offset reads as
+                  the dot sitting off-centre in its own ring. */}
+              {stars.map(st=>st.centroid_x==null||st.centroid_y==null?null:
+                <line key={`l${st.star_key}`} x1={st.predicted_x} y1={st.predicted_y}
+                  x2={st.centroid_x} y2={st.centroid_y} className="drift-link"/>)}
+              {stars.map(st=><circle key={`p${st.star_key}`} cx={st.predicted_x} cy={st.predicted_y}
+                r={ring} className="drift-predicted"/>)}
+              {stars.map(st=>st.centroid_x==null||st.centroid_y==null?null:
+                <circle key={`f${st.star_key}`} cx={st.centroid_x} cy={st.centroid_y}
+                  r={dot} className="drift-fitted"/>)}
+            </svg>
+          </div>
+          <div className="drift-residuals">
+            <div className="star-plot-head"><strong>Residuals</strong>
+              <small>{pairs.length} stars &middot; &plusmn;{reach.toFixed(1)} px</small></div>
+            {/* Fitted minus projected, in image pixels. The shape is the
+                diagnosis: a cloud centred on the origin is noise, a cloud
+                displaced from it is a pointing offset, and a cloud stretched
+                or swirled is a scale or rotation error. */}
+            <svg className="drift-scatter" viewBox={`${-S} ${-S} ${2*S} ${2*S}`} role="img"
+              aria-label="Scatter of fitted minus projected star positions">
+              <circle cx={0} cy={0} r={R} className="drift-axis-ring"/>
+              <circle cx={0} cy={0} r={R/2} className="drift-axis-ring"/>
+              <line x1={-R} y1={0} x2={R} y2={0} className="drift-axis"/>
+              <line x1={0} y1={-R} x2={0} y2={R} className="drift-axis"/>
+              {rms>0&&<circle cx={0} cy={0} r={rms/reach*R} className="drift-rms"/>}
+              {pairs.map(([dx,dy],n)=><circle key={n} cx={dx/reach*R} cy={dy/reach*R}
+                r={2.4} className="drift-fitted"/>)}
+              {pairs.length>0&&<circle cx={mean[0]/reach*R} cy={mean[1]/reach*R} r={5}
+                className="drift-mean"/>}
+              <text x={R} y={-6} className="drift-tick" textAnchor="end">+{reach.toFixed(1)} px</text>
+              <text x={4} y={-R+2} className="drift-tick">&minus;y</text>
+            </svg>
+            <div className="drift-residual-key">
+              <span>RMS <strong>{rms.toFixed(2)} px</strong></span>
+              <span>mean <strong>{mean[0].toFixed(2)}, {mean[1].toFixed(2)}</strong></span>
+            </div>
+            <small>Dashed ring is the RMS; the larger open dot is the mean offset.
+              A cloud sitting off the origin is a pointing error rather than noise.</small>
+          </div>
+        </div>;})()}
       <div className="drift-legend">
         <span><i className="swatch-predicted"/>projected from the star ephemeris</span>
         <span><i className="swatch-fitted"/>fitted Gaussian centroid</span>

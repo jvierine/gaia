@@ -247,13 +247,32 @@
 .drift-meta{display:flex;flex-wrap:wrap;gap:.2rem 1.1rem;margin:.3rem 0 .6rem;
   color:var(--muted,#8fa0ae);font-size:.86rem}
 .drift-meta strong{color:inherit}
+/* Frame and residuals side by side; they stack when there is no room. */
+.drift-views{display:flex;gap:.8rem;align-items:flex-start;flex-wrap:wrap}
+.drift-frame{flex:1 1 22rem;min-width:18rem;position:relative}
+.drift-residuals{flex:0 0 17rem;min-width:15rem}
+.drift-zoom{display:flex;align-items:center;gap:.3rem;margin-bottom:.3rem}
+.drift-zoom button{background:var(--panel,#10161d);color:inherit;border:1px solid var(--line,#2a3540);
+  border-radius:3px;min-width:1.8rem;padding:.1rem .4rem;font:inherit;cursor:pointer}
+.drift-zoom button:hover{border-color:var(--aqua,#7fd6c2)}
+.drift-zoom small{color:var(--muted,#8fa0ae);margin-left:.2rem}
 .drift-image{display:block;width:100%;max-height:60vh;background:#05080b;
+  border:1px solid var(--line,#2a3540);border-radius:3px;touch-action:none;cursor:grab}
+/* An open purple ring for where the sky says the star is, with the amber
+   centroid as a filled dot inside it. Concentric rather than side by side, so
+   both are legible at once and the offset reads as the dot sitting off-centre
+   in its own ring. */
+.drift-predicted{fill:none;stroke:#b06cf0;stroke-width:1.6;vector-effect:non-scaling-stroke}
+.drift-fitted{fill:#f0a83c;stroke:none}
+.drift-scatter{display:block;width:100%;background:#05080b;
   border:1px solid var(--line,#2a3540);border-radius:3px}
-/* Purple for where the sky says the star is, amber for where it was found. The
-   join between them is the diagnosis: a uniform shift, a rotation and a scale
-   change look nothing alike drawn this way. */
-.drift-predicted{fill:none;stroke:#b06cf0;stroke-width:2;vector-effect:non-scaling-stroke}
-.drift-fitted{fill:none;stroke:#f0a83c;stroke-width:2;vector-effect:non-scaling-stroke}
+.drift-axis{stroke:#5d7183;stroke-width:1;vector-effect:non-scaling-stroke}
+.drift-axis-ring{fill:none;stroke:#2a3540;stroke-width:1;vector-effect:non-scaling-stroke}
+.drift-rms{fill:none;stroke:#b06cf0;stroke-width:1.4;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
+.drift-mean{fill:none;stroke:#f0a83c;stroke-width:2;vector-effect:non-scaling-stroke}
+.drift-tick{fill:#8fa0ae;font-size:9px}
+.drift-residual-key{display:flex;gap:1rem;margin:.35rem 0 .2rem;font-size:.86rem;
+  color:var(--muted,#8fa0ae)}
 .drift-link{stroke:#8ba2b5;stroke-width:1;opacity:.55;vector-effect:non-scaling-stroke}
 .drift-legend{display:flex;gap:1.2rem;margin:.45rem 0;font-size:.86rem;color:var(--muted,#8fa0ae)}
 .drift-legend i{display:inline-block;width:.7rem;height:.7rem;border-radius:50%;

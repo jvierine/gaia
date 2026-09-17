@@ -852,6 +852,21 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
         .filter_map(Result::ok)
         .collect();
 
+    // The frame's own sky and brightest star, so the panel can offer a stretch
+    // that actually shows the stars rather than a guessed one.
+    let (sky, brightest): (Option<f64>, Option<f64>) = conn
+        .query_row(
+            "SELECT median_background, peak FROM (
+               SELECT AVG(background) AS median_background,
+                      MAX(COALESCE(peak_raw, background + amplitude)) AS peak
+               FROM star_photometry
+               WHERE source_id=?1 AND channel='mean' AND image_id=?2
+                 AND background IS NOT NULL)",
+            rusqlite::params![source_id, image_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((None, None));
+
     let offsets: Vec<f64> = stars.iter().filter_map(|s| s["offset_px"].as_f64()).collect();
     let rms = if offsets.is_empty() {
         None
@@ -871,6 +886,7 @@ fn calibration_drift(conn: &rusqlite::Connection, source_id: &str)
             "image_id": image_id, "observation_utc": observation_utc,
             "width": width, "height": height, "found": found,
             "rms_offset_px": rms,
+            "sky_level": sky, "brightest_level": brightest,
         },
         "stars": stars,
         "refit_available": richer && found as usize >= lensfit::MIN_OBSERVATIONS,
@@ -1025,10 +1041,35 @@ async fn source_calibration_refit(
     )
     .map_err(internal)?;
 
+    // Where the refitted model puts each star, beside where it was actually
+    // found. Without this the panel can only show the residuals of the model
+    // being replaced, which says nothing about whether the replacement is any
+    // better -- and that judgement is the entire purpose of a refit.
+    let refitted: Vec<Value> = stars
+        .iter()
+        .zip(observations.iter())
+        .enumerate()
+        .map(|(n, (star, observation))| {
+            let (dx, dy, _) = residuals.get(n).copied().unwrap_or((0.0, 0.0, 0.0));
+            json!({
+                "star_key": star["star_key"],
+                "vt_mag": star["vt_mag"],
+                "centroid_x": observation.x,
+                "centroid_y": observation.y,
+                // The prediction is the measured position plus the residual,
+                // which is how `lensfit::residuals` defines it.
+                "predicted_x": observation.x + dx,
+                "predicted_y": observation.y + dy,
+                "offset_px": dx.hypot(dy),
+            })
+        })
+        .collect();
+
     Ok(Json(json!({
         "id": new_id,
         "source_id": id,
         "selected": false,
+        "stars": refitted,
         "note": "added to the list, not made live; selecting it is an administrator's decision",
         "star_count": observations.len(),
         "residual_px_before": before,

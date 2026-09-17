@@ -10,6 +10,8 @@ import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
 // `extent` is imported under another name: the panel already has a local one
 // for the scatter, and a shadowed import would silently call the wrong function.
 import {densityColour,extent as binExtent,histogram1d,histogram2d,tickLabel,ticks} from '../src/histogram';
+import {clampLevels,fractionToLevel,levelToFraction,suggest,transfer,FULL_RANGE,
+        type Levels} from '../src/levels';
 import {addWindow,edgeNear,fractionToTime,keogramImage,makeWindow,removeWindowAt,resizeWindow,
         scatterPoints,selectedSeconds,type KeogramPair,type Window} from '../src/keogram';
 
@@ -798,7 +800,7 @@ type DriftStar={star_key:string;vt_mag:number;azimuth_deg:number;elevation_deg:n
 type Drift={night:number;current_night?:boolean;calibration_id:string|null;calibration_star_count:number|null;
   calibration_residual_px:number|null;
   frame:{image_id:string;observation_utc:string;width:number|null;height:number|null;found:number;
-    rms_offset_px:number|null}|null;
+    rms_offset_px:number|null;sky_level?:number|null;brightest_level?:number|null}|null;
   stars?:DriftStar[];refit_available?:boolean;refit_reason?:string;note?:string};
 
 /// Where the sky says the stars are against where they were found.
@@ -817,7 +819,16 @@ function CalibrationDrift({camera}:{camera:Camera}){
   const [zoom,setZoom]=useState(1);
   const [centre,setCentre]=useState<[number,number]|null>(null);
   const pan=useRef<{x:number;y:number;cx:number;cy:number}|null>(null);
-  useEffect(()=>{setZoom(1);setCentre(null)},[camera.id]);
+  // Display levels. A star frame is mostly dark, so the default stretch hides
+  // the very stars the operator is here to check.
+  const [levels,setLevels]=useState<Levels>(FULL_RANGE);
+  const [touchedLevels,setTouchedLevels]=useState(false);
+  const grabLevel=useRef<'min'|'max'|null>(null);
+  // The residuals of the refit, once there is one: judging a new fit against
+  // the old model's residuals would say nothing about the new one.
+  const [refitted,setRefitted]=useState<{stars:DriftStar[];rms:number}|null>(null);
+  useEffect(()=>{setZoom(1);setCentre(null);setRefitted(null);
+    setLevels(FULL_RANGE);setTouchedLevels(false)},[camera.id]);
   const load=async()=>{
     setBusy(true);
     try{
@@ -831,8 +842,10 @@ function CalibrationDrift({camera}:{camera:Camera}){
     setRefitting(true);setOutcome('');
     try{
       const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/refit`,{method:'POST'});
-      const body=await r.json().catch(()=>null) as {residual_px_before?:number;residual_px_after?:number;star_count?:number}|null;
+      const body=await r.json().catch(()=>null) as {residual_px_before?:number;residual_px_after?:number;
+        star_count?:number;stars?:DriftStar[]}|null;
       if(!r.ok)throw new Error((body as unknown as {error?:string})?.error||await r.text()||'The refit was refused.');
+      if(body?.stars?.length)setRefitted({stars:body.stars,rms:body.residual_px_after??0});
       setOutcome(`Added a new calibration from ${body?.star_count} stars: `
         +`${body?.residual_px_before?.toFixed(3)} px \u2192 ${body?.residual_px_after?.toFixed(3)} px RMS. `
         +`It is not live \u2014 select it above when you want it used.`);
@@ -863,7 +876,13 @@ function CalibrationDrift({camera}:{camera:Camera}){
         const ring=Math.max(2,spanX/110),dot=Math.max(1,spanX/300);
         const residual=(st:DriftStar)=>st.centroid_x==null||st.centroid_y==null?null
           :[st.centroid_x-st.predicted_x,st.centroid_y-st.predicted_y] as [number,number];
-        const pairs=stars.map(residual).filter((v):v is [number,number]=>v!=null);
+        // After a refit the scatter has to be against the *new* parameters:
+        // the old model's residuals say nothing about whether the new fit is
+        // any better, and that judgement is the whole point of refitting.
+        const shown=refitted?refitted.stars:stars;
+        const pairs=shown.map(residual).filter((v):v is [number,number]=>v!=null);
+        const {slope,intercept}=transfer(levels);
+        const filterId=`drift-levels-${camera.id.replace(/[^a-z0-9]/gi,'')}`;
         // One span for both residual axes, so a systematic shift in x cannot be
         // mistaken for one in y by a difference of scale.
         const reach=Math.max(0.5,...pairs.flatMap(([dx,dy])=>[Math.abs(dx),Math.abs(dy)]));
@@ -898,8 +917,18 @@ function CalibrationDrift({camera}:{camera:Camera}){
                 setCentre([p.cx-(event.clientX-p.x)/box.width*vbox[2],
                            p.cy-(event.clientY-p.y)/box.height*vbox[3]])}}
               onPointerUp={()=>{pan.current=null}}>
+              {/* Linear and clipping rather than a curve: the question asked of
+                  this image is geometric, and a curve that shifts apparent
+                  centroids would be answering a different one. */}
+              <defs><filter id={filterId} colorInterpolationFilters="sRGB">
+                <feComponentTransfer>
+                  <feFuncR type="linear" slope={slope} intercept={intercept}/>
+                  <feFuncG type="linear" slope={slope} intercept={intercept}/>
+                  <feFuncB type="linear" slope={slope} intercept={intercept}/>
+                </feComponentTransfer></filter></defs>
               <image href={`/gaia/api/images/${encodeURIComponent(frame.image_id)}/original`}
-                x={0} y={0} width={w} height={h} preserveAspectRatio="none"/>
+                x={0} y={0} width={w} height={h} preserveAspectRatio="none"
+                filter={levels.min===0&&levels.max===255?undefined:`url(#${filterId})`}/>
               {/* An open purple ring for where the sky says the star is, with the
                   amber centroid as a filled dot inside it. Concentric rather than
                   side by side, so both are legible at once and the offset reads as
@@ -914,8 +943,57 @@ function CalibrationDrift({camera}:{camera:Camera}){
                   r={dot} className="drift-fitted"/>)}
             </svg>
           </div>
+          <div className="drift-levels">
+            <span className="eyebrow">LEVELS</span>
+            {/* White at the top, black at the bottom, the way a colour bar is
+                read. Dragging either handle re-stretches the frame beside it. */}
+            <div className="drift-bar"
+              onPointerDown={event=>{
+                event.currentTarget.setPointerCapture(event.pointerId);
+                const box=event.currentTarget.getBoundingClientRect();
+                const at=fractionToLevel((event.clientY-box.top)/Math.max(1,box.height));
+                grabLevel.current=Math.abs(at-levels.max)<Math.abs(at-levels.min)?'max':'min';
+                setTouchedLevels(true);
+                setLevels(prev=>clampLevels({...prev,[grabLevel.current as 'min'|'max']:at}));}}
+              onPointerMove={event=>{
+                if(!grabLevel.current)return;
+                const box=event.currentTarget.getBoundingClientRect();
+                const at=fractionToLevel((event.clientY-box.top)/Math.max(1,box.height));
+                setLevels(prev=>clampLevels({...prev,[grabLevel.current as 'min'|'max']:at}));}}
+              onPointerUp={()=>{grabLevel.current=null}}>
+              <div className="drift-bar-ramp"/>
+              {/* The window itself, so what is kept is visible rather than inferred. */}
+              <span className="drift-bar-window" style={{
+                top:`${levelToFraction(levels.max)*100}%`,
+                height:`${Math.max(1,(levelToFraction(levels.min)-levelToFraction(levels.max))*100)}%`}}/>
+              <span className="drift-bar-handle" style={{top:`${levelToFraction(levels.max)*100}%`}}
+                role="slider" aria-label="White point" aria-valuemin={0} aria-valuemax={255}
+                aria-valuenow={levels.max} tabIndex={0}
+                onKeyDown={event=>{const d=event.key==='ArrowUp'?4:event.key==='ArrowDown'?-4:0;
+                  if(d){event.preventDefault();setTouchedLevels(true);
+                    setLevels(prev=>clampLevels({...prev,max:prev.max+d}))}}}/>
+              <span className="drift-bar-handle" style={{top:`${levelToFraction(levels.min)*100}%`}}
+                role="slider" aria-label="Black point" aria-valuemin={0} aria-valuemax={255}
+                aria-valuenow={levels.min} tabIndex={0}
+                onKeyDown={event=>{const d=event.key==='ArrowUp'?4:event.key==='ArrowDown'?-4:0;
+                  if(d){event.preventDefault();setTouchedLevels(true);
+                    setLevels(prev=>clampLevels({...prev,min:prev.min+d}))}}}/>
+            </div>
+            <div className="drift-levels-key">
+              <span>white <strong>{levels.max}</strong></span>
+              <span>black <strong>{levels.min}</strong></span>
+            </div>
+            <button type="button" onClick={()=>{setLevels(FULL_RANGE);setTouchedLevels(false)}}
+              disabled={!touchedLevels}>Full range</button>
+            {/* From this frame's own sky and brightest star, so the faintest
+                measured star still shows rather than a guessed window. */}
+            <button type="button" onClick={()=>{
+              setLevels(suggest(frame.sky_level??null,frame.brightest_level??null));
+              setTouchedLevels(true);}}>Stretch</button>
+          </div>
           <div className="drift-residuals">
-            <div className="star-plot-head"><strong>Residuals</strong>
+            <div className="star-plot-head">
+              <strong>Residuals{refitted?' (refitted)':''}</strong>
               <small>{pairs.length} stars &middot; &plusmn;{reach.toFixed(1)} px</small></div>
             {/* Fitted minus projected, in image pixels. The shape is the
                 diagnosis: a cloud centred on the origin is noise, a cloud
@@ -940,7 +1018,9 @@ function CalibrationDrift({camera}:{camera:Camera}){
               <span>mean <strong>{mean[0].toFixed(2)}, {mean[1].toFixed(2)}</strong></span>
             </div>
             <small>Dashed ring is the RMS; the larger open dot is the mean offset.
-              A cloud sitting off the origin is a pointing error rather than noise.</small>
+              A cloud sitting off the origin is a pointing error rather than noise.
+              {refitted?' Against the newly fitted parameters, so this is the quality of the new fit.'
+                       :' Against the calibration in force.'}</small>
           </div>
         </div>;})()}
       <div className="drift-legend">

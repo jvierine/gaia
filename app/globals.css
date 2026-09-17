@@ -86,7 +86,7 @@
 }
 
 /* Lens-calibration history and picker. */
-.calibration-picker{position:relative;width:min(760px,96vw);max-height:92vh;overflow:auto;padding:28px;border:1px solid #29404d;background:#071521}
+.calibration-picker{position:relative;width:min(920px,97vw);max-height:92vh;overflow:auto;padding:28px;border:1px solid #29404d;background:#071521}
 .calibration-picker .close{position:absolute;right:14px;top:14px;border:0;background:none;cursor:pointer}
 .calibration-picker h2{margin:8px 0}
 .calibration-picker>p{color:var(--muted);line-height:1.55}
@@ -288,3 +288,24 @@
   color:inherit;border-radius:3px;padding:.15rem .45rem;font:inherit;font-size:.8rem;cursor:pointer}
 .keogram-windows button:hover{background:rgba(80,220,160,.26)}
 .keogram-windows small{color:var(--muted,#8fa0ae)}
+
+/* Display levels beside the drift frame: white at the top, black at the bottom,
+   the way a colour bar is read. */
+.drift-levels{flex:0 0 5.2rem;min-width:4.6rem;display:flex;flex-direction:column;gap:.35rem}
+.drift-bar{position:relative;flex:1 1 auto;min-height:220px;width:2.2rem;margin:0 auto;
+  border:1px solid var(--line,#2a3540);border-radius:3px;touch-action:none;cursor:ns-resize}
+.drift-bar-ramp{position:absolute;inset:0;border-radius:2px;
+  background:linear-gradient(to bottom,#fff,#000)}
+/* The kept window, so what survives the clip is visible rather than inferred. */
+.drift-bar-window{position:absolute;left:-2px;right:-2px;border:1px solid var(--aqua,#7fd6c2);
+  border-radius:2px;pointer-events:none;box-shadow:0 0 0 1px #05080b inset}
+.drift-bar-handle{position:absolute;left:-6px;right:-6px;height:0;margin-top:-1px;
+  border-top:2px solid var(--aqua,#7fd6c2);cursor:ns-resize}
+.drift-bar-handle:focus-visible{outline:2px solid var(--aqua,#7fd6c2);outline-offset:3px}
+.drift-levels-key{display:flex;flex-direction:column;gap:.1rem;font-size:.78rem;
+  color:var(--muted,#8fa0ae);text-align:center}
+.drift-levels button{background:var(--panel,#10161d);color:inherit;
+  border:1px solid var(--line,#2a3540);border-radius:3px;padding:.15rem .3rem;
+  font:inherit;font-size:.78rem;cursor:pointer}
+.drift-levels button:disabled{opacity:.45;cursor:default}
+.drift-levels button:not(:disabled):hover{border-color:var(--aqua,#7fd6c2)}

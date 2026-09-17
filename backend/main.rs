@@ -1807,6 +1807,9 @@ struct StarSensitivityQuery {
     /// Include the individual pairs, not just the summary. Off by default,
     /// because a long window pairs tens of thousands of measurements.
     detail: Option<bool>,
+    /// How far apart two measurements may be. See starpair for why this is
+    /// far looser than the keogram's, and what it costs.
+    max_skew_seconds: Option<f64>,
 }
 
 /// Relative sensitivity of two cameras from stars they both measured.
@@ -1829,9 +1832,17 @@ async fn source_star_sensitivity(
         let conn = db::open(&s.db_path)?;
         let a = keogram::station(&conn, &id)?;
         let b = keogram::station(&conn, &query.partner)?;
+        let skew_limit = query
+            .max_skew_seconds
+            .unwrap_or(starpair::DEFAULT_MAX_SKEW_SECONDS)
+            .clamp(1.0, 3600.0);
         let pairs = starpair::pairs(
             &conn, &a.id, &b.id, a.longitude_deg, b.longitude_deg, &channel, &from, &to,
+            skew_limit,
         )?;
+        let mut skews: Vec<f64> = pairs.iter().map(|p| p.skew_seconds).collect();
+        skews.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        let median_skew = skews.get(skews.len() / 2).copied();
         let estimate = starpair::estimate(&pairs);
         let stars: std::collections::BTreeSet<&str> =
             pairs.iter().map(|p| p.star_key.as_str()).collect();
@@ -1842,9 +1853,10 @@ async fn source_star_sensitivity(
             "separation_km": keogram::separation_km(&a, &b),
             "pairs": pairs.len(),
             "stars": stars.len(),
+            "median_skew_seconds": median_skew,
             "estimate": estimate.as_ref().map(|e| e.to_json()),
             "gates": {
-                "max_skew_seconds": starpair::MAX_SKEW_SECONDS,
+                "max_skew_seconds": skew_limit,
                 "min_flux_snr": starpair::MIN_FLUX_SNR,
                 "min_elevation_deg": starpair::MIN_ELEVATION_DEG,
                 "clear_frame_fading": starpair::CLEAR_FRAME_FADING,
@@ -1862,6 +1874,7 @@ frames are gated on the rest of their stars and the estimator is a median.",
                     "elevation_a": p.elevation_a, "elevation_b": p.elevation_b,
                     "airmass_a": p.airmass_a, "airmass_b": p.airmass_b,
                     "ln_ratio": p.ln_ratio, "corrected_ln_ratio": p.corrected,
+                    "skew_seconds": p.skew_seconds,
                 })).collect::<Vec<_>>())
             } else { Value::Null },
         }))

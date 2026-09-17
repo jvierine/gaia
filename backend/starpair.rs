@@ -41,10 +41,27 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-/// How far apart two measurements may be and still be the same instant. The
-/// sky rotates a quarter of an arcminute a second, far below a pixel, so this
-/// is set by how steady the atmosphere is rather than by geometry.
-pub const MAX_SKEW_SECONDS: f64 = 30.0;
+/// How far apart two measurements may be and still be compared.
+///
+/// Not the 30 s the paired keograms use. There the limit is real: auroral
+/// structures move at about a kilometre a second, so 30 s is 30 km of smear and
+/// the two views stop describing the same sky. A star does not move, is
+/// constant, and carries its own elevation into the air-mass correction, so
+/// none of that applies. Over five minutes a star at 30 degrees rises about a
+/// degree, which changes its air mass by under a twentieth -- and that change is
+/// corrected, not tolerated.
+///
+/// What a longer skew does risk is cloud drifting between the two measurements,
+/// which is why the frame-clearness gate and the median estimator matter more
+/// here than the clock does.
+///
+/// The value is set by what the archive actually holds. The photometry pass
+/// thins each camera's frames to a cadence independently, so two cameras are
+/// rarely measured at the same instant: on a well-observed night at Skibotn,
+/// 30 s paired 1 of 32 instants and 300 s paired 21. The real fix is to align
+/// the pass across cameras; until then this is the difference between a
+/// measurement and an empty result.
+pub const DEFAULT_MAX_SKEW_SECONDS: f64 = 300.0;
 
 /// Both measurements must clear this in flux signal-to-noise. A ratio of two
 /// noisy fluxes is a noisy ratio, and the logarithm makes the low side worse.
@@ -83,6 +100,9 @@ pub struct Pair {
     /// The same, with each camera's own extinction removed. `None` where either
     /// night was never fitted, so the correction would be invented.
     pub corrected: Option<f64>,
+    /// Seconds between the two measurements. Reported so a reader can see how
+    /// simultaneous the comparison actually was rather than assuming the limit.
+    pub skew_seconds: f64,
 }
 
 /// What a set of pairs says about the two cameras' relative sensitivity.
@@ -223,6 +243,7 @@ pub fn pairs(
     channel: &str,
     from_utc: &str,
     to_utc: &str,
+    max_skew_seconds: f64,
 ) -> Result<Vec<Pair>> {
     let clear_a = frame_clearness(conn, a_id, channel, from_utc, to_utc)?;
     let clear_b = frame_clearness(conn, b_id, channel, from_utc, to_utc)?;
@@ -271,7 +292,7 @@ pub fn pairs(
             continue;
         };
         let skew = (ta - tb).num_milliseconds().abs() as f64 / 1000.0;
-        if skew > MAX_SKEW_SECONDS {
+        if skew > max_skew_seconds {
             continue;
         }
         // Both frames have to look clear, judged by the rest of their stars.
@@ -298,6 +319,7 @@ pub fn pairs(
             star_key: key.clone(), at: at_a.clone(),
             flux_a, flux_b, elevation_a: el_a, elevation_b: el_b,
             airmass_a: x_a, airmass_b: x_b, ln_ratio, corrected,
+            skew_seconds: skew,
         };
         let slot = best.entry((key, at_a)).or_insert((skew, pair.clone()));
         if skew < slot.0 {
@@ -317,7 +339,7 @@ mod tests {
         Pair {
             star_key: "s".into(), at: "2026-09-12T20:00:00+00:00".into(),
             flux_a: 1.0, flux_b: 1.0, elevation_a: 60.0, elevation_b: 60.0,
-            airmass_a: 1.15, airmass_b: 1.15, ln_ratio, corrected,
+            airmass_a: 1.15, airmass_b: 1.15, ln_ratio, corrected, skew_seconds: 0.0,
         }
     }
 

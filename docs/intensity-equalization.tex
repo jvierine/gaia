@@ -44,7 +44,10 @@ half of the problem, and argues that it should be the primary one: an
 elevation and azimuth across many nights, with intercalibration taken as the
 ratio of two such surfaces rather than from simultaneous pairs. The change is
 forced by the climate the network actually sits in
-(Sec.~\ref{sec:assimilated}).
+(Sec.~\ref{sec:assimilated}). Sec.~\ref{sec:prepared} records what that
+collection now gathers --- three measures of each star, two of them newly
+independent of one another --- and sets out four ways to recover the one thing
+the surfaces cannot supply on their own, the constant between two cameras.
 \end{abstract}
 
 \section{The measurement model}
@@ -636,6 +639,128 @@ built from three nights and one built from thirty must be distinguishable at a
 glance, and the composite must be able to decline to use the former. A
 correction factor quoted without its coverage is the same error as an optical
 depth quoted without saying which stars were saturated.
+
+\section{What is prepared, and how to get a sensitivity from it}
+\label{sec:prepared}
+
+The measurement side of Sec.~\ref{sec:assimilated} is now built
+(\texttt{backend/response.rs}, \texttt{backend/starphot.rs}). This section
+records what it collects, and sets out the options for turning it into relative
+camera sensitivities, with a recommendation.
+
+\subsection{What is collected}
+
+Three measures of the same photons, per star, per frame, per colour channel:
+
+\begin{itemize}
+  \item \textbf{Total intensity} $2\pi A\sigma_x\sigma_y$ from the
+    two-dimensional Gaussian fit. The best statistic: it integrates the whole
+    profile, so it is insensitive to where the star falls between pixel centres
+    and it averages the noise down over the profile's area.
+  \item \textbf{Peak of that fit}, $A$. The same fit's amplitude, and so
+    available exactly when the total is.
+  \item \textbf{Peak above background, measured without fitting anything}:
+    the brightest pixel in the search patch over the median of the patch
+    border. Noisier, and it depends on sub-pixel placement --- but it exists
+    whenever the star does.
+\end{itemize}
+
+The third was added because the premise for having two measures did not hold.
+The expectation was that a peak would survive in cases where the Gaussian fit
+had not converged; in the archive as it stood it never did, because the peak
+\emph{was} a fitted parameter. Across three cameras and \num{540} rows there
+were \num{479} carrying both quantities and not one carrying a peak without a
+total. The independent peak is measured before anything is fitted, so from now
+on there is a real second opinion rather than a restatement of the first. Note
+that this only helps frames recorded from here on: the distinction could not be
+reconstructed retrospectively, which is why it was worth doing before the
+collection period rather than after it.
+
+Two gates admit a measurement. \emph{Saturation} is judged on the sky plus the
+star's peak, whichever quantity is being read off, because a star on a full
+detector is not a measurement of anything. \emph{Cloud} is judged per frame, by
+the median brightness of that frame's stars against their own archive best ---
+the frame rather than the star, so that the gate cannot select the measurements
+which suit the answer.
+
+What survives is corrected to the top of the atmosphere by its own night's
+extinction coefficient where one was fitted, binned into $24\times 9$ cells of
+azimuth and elevation, and decomposed as
+\begin{equation}
+  \ln I_{\text{corr}}(s,\mathbf{d}) = \ln Z_s + \ln R(\mathbf{d}),
+  \label{eq:decomp}
+\end{equation}
+a level per star and a response per direction, separated by alternating robust
+centres. Bins with fewer than eight samples from fewer than two nights are
+withheld rather than published thin.
+
+\subsection{The gauge problem}
+
+Equation~\eqref{eq:decomp} is invariant under $\ln Z_s \to \ln Z_s + c$,
+$\ln R \to \ln R - c$. Each surface is therefore pinned to its own median cell,
+and a comparison of two surfaces gives the difference in their \emph{shape} ---
+vignetting, dome losses, a dirty quadrant --- with any constant sensitivity
+ratio cancelled by the pinning. Recovering that constant is the whole remaining
+problem, and there are four ways to do it.
+
+\paragraph{Option A: shared stars, no simultaneity required (recommended).}
+The star levels $Z_s$ are already computed, and a star's intrinsic brightness is
+the same for everyone. For any star $s$ that both cameras have measured enough
+times,
+\[
+  \ln Z_s^{(A)} - \ln Z_s^{(B)} = \ln(\gain_A/\gain_B) + \text{const},
+\]
+the constant being the difference of the two pinnings, which is common to every
+shared star and so cancels in the spread. A robust centre over the shared stars
+gives the ratio. \emph{This needs no coincidence whatever} --- only that both
+cameras have accumulated clear measurements of overlapping sets of stars, which
+at these latitudes is enormously more likely than their observing the same star
+at the same moment. It reuses quantities the solve already produces, and the
+scatter across shared stars is an error bar that costs nothing extra.
+
+\paragraph{Option B: simultaneous star pairs.} The direct measurement already
+built (\texttt{backend/starpair.rs}): the same star in both cameras at the same
+instant, where the star's flux cancels exactly. It is the cleanest single
+comparison available and it needs no accumulation at all --- but it is scarce.
+On a well-observed night with two \emph{co-located} cameras both measured, the
+median gap to the nearest partner measurement was \SI{240}{\second}, and a
+\SI{30}{\second} tolerance paired one instant in thirty-two. Its value is as an
+independent check on Option~A rather than as the primary route.
+
+\paragraph{Option C: catalogue magnitudes.} The WISCAT1 magnitudes give
+$\ln Z_s + 0.4\ln 10\,V_s$, which should be one number per camera: an
+instrumental photometric zero point, tying every camera to a common scale
+without any shared star at all. That is the only option that reaches a camera
+sharing no stars with the network. Against it: the cameras differ widely in
+passband, several are unfiltered and several are colour, so a $V$ magnitude
+predicts their response only loosely and a colour term would be needed before
+the residual scatter meant anything. Best treated as a fallback and as a
+consistency check on A, not as the primary tie.
+
+\paragraph{Option D: network solve.} Whatever supplies the pairwise ratios,
+they will not be mutually consistent, and the least-squares solve over each
+connected group of Sec.~\ref{sec:network} is what turns them into per-camera
+constants with an explicit gauge. This is not an alternative to A--C but the
+stage that consumes them.
+
+\subsection{Two things that will bite}
+
+\paragraph{The cameras are not photometers.} Most sources arrive as
+eight-bit images of unknown transfer function, and some providers apply
+automatic gain. A ratio measured this way conflates optical sensitivity with
+whatever encoding produced the file. This is testable rather than merely
+worrying: if the response were linear, the ratio between two cameras would not
+depend on how bright the star is. Regressing $\ln(I_A/I_B)$ on $\ln I_B$ over
+the shared stars gives a slope that is zero for a linear pair and not otherwise,
+and the slope is itself the correction. That check should be run before any
+sensitivity number is published, and its result recorded beside the number.
+
+\paragraph{Sensitivity is per band.} A single scalar per camera is a fiction
+across different passbands; the ratios are meaningful within a channel and
+between cameras of similar response, and the colour channels are stored
+separately precisely so this can be examined rather than assumed. Where the
+three measures --- total, fitted peak, independent peak --- disagree beyond their
+scatter, the cause is more likely to be one of these two than the estimator.
 
 \section{Staged plan}
 

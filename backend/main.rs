@@ -205,12 +205,38 @@ async fn source_frames(
     Path(id): Path<String>, State(s): State<AppState>, Query(request): Query<FrameHistoryRequest>,
 ) -> ApiResult<Json<Vec<Value>>> {
     let (start,end)=frame_history_bounds(request.date.as_deref()).map_err(|e|(StatusCode::BAD_REQUEST,e))?;
-    let conn=db::open(&s.db_path).map_err(internal)?;
+    tokio::task::spawn_blocking(move || {
+    let conn=db::open_readonly(&s.db_path).map_err(internal)?;
     let mut query=conn.prepare("SELECT id,observation_utc,width,height FROM images WHERE source_id=?1 AND julianday(observation_utc)>=julianday(?2) AND julianday(observation_utc)<julianday(?3) ORDER BY julianday(observation_utc),id").map_err(internal)?;
     let rows=query.query_map(rusqlite::params![id,start,end],|row|Ok(json!({"id":row.get::<_,String>(0)?,"observation_utc":row.get::<_,String>(1)?,"width":row.get::<_,Option<i64>>(2)?,"height":row.get::<_,Option<i64>>(3)?}))).map_err(internal)?;
     Ok(Json(rows.collect::<Result<Vec<_>,_>>().map_err(internal)?))
+    }).await.map_err(internal)?
 }
 #[cfg(test)] mod frame_history_tests {
+    #[test] fn history_uses_covering_index_and_utc_order() {
+        let conn=rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        conn.pragma_update(None,"foreign_keys","OFF").unwrap();
+        conn.execute_batch("INSERT INTO images(id,source_id,observation_utc,downloaded_utc,timestamp_basis,archive_path,sha256,media_type) VALUES ('a','camera','2026-09-09T23:00:00Z','','','a','a','image/jpeg'), ('b','camera','2026-09-09T01:00:00+00:00','','','b','b','image/jpeg'), ('c','camera','2026-09-10T00:00:00Z','','','c','c','image/jpeg'), ('d','other','2026-09-09T12:00:00Z','','','d','d','image/jpeg');").unwrap();
+        let sql="SELECT id,observation_utc,width,height FROM images WHERE source_id=?1 AND julianday(observation_utc)>=julianday(?2) AND julianday(observation_utc)<julianday(?3) ORDER BY julianday(observation_utc),id";
+        let params=["camera","2026-09-09","2026-09-10"];
+        let plan=conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap().query_map(params,|r|r.get::<_,String>(3)).unwrap().collect::<Result<Vec<_>,_>>().unwrap().join(" ");
+        assert!(plan.contains("COVERING INDEX idx_images_source_history"),"{plan}");
+        assert!(!plan.contains("TEMP B-TREE"),"{plan}");
+        let ids=conn.prepare(sql).unwrap().query_map(params,|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        assert_eq!(ids,vec!["b","a"]);
+    }
+    #[test] fn history_read_does_not_wait_for_writer() {
+        let path=std::env::temp_dir().join(format!("gaia-read-{}.sqlite3",uuid::Uuid::new_v4()));
+        let writer=super::db::open(&path).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let reader=super::db::open_readonly(&path).unwrap();
+        let _:i64=reader.query_row("SELECT count(*) FROM images",[],|r|r.get(0)).unwrap();
+        assert!(reader.execute("DELETE FROM images",[]).is_err());
+        drop(reader);writer.execute_batch("ROLLBACK").unwrap();drop(writer);
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test] fn utc_day_bounds_and_invalid_dates(){
         let (start,end)=super::frame_history_bounds(Some("2026-09-09")).unwrap();
         assert_eq!(start,"2026-09-09T00:00:00+00:00");assert_eq!(end,"2026-09-10T00:00:00+00:00");
@@ -337,7 +363,7 @@ async fn get_camera_settings(
     Path(id): Path<String>,
     State(s): State<AppState>,
 ) -> ApiResult<Json<Value>> {
-    let conn = db::open(&s.db_path).map_err(internal)?;
+    let conn = db::open_readonly(&s.db_path).map_err(internal)?;
     let row = conn.query_row(
         "SELECT c.crop_json,c.mask_json,COALESCE(c.mask_enabled,1),COALESCE(c.quality_exponent,0) FROM sources s LEFT JOIN camera_settings c ON c.source_id=s.id WHERE s.id=?1",
         [&id],
@@ -545,7 +571,7 @@ async fn image_texture(
 #[derive(Deserialize,Default)]
 struct ImageRequest { #[serde(default)] calibration: bool }
 async fn calibration_copy(s:&AppState,id:&str,bytes:Vec<u8>)->ApiResult<Vec<u8>>{
- let settings={let conn=db::open(&s.db_path).map_err(internal)?;
+ let settings={let conn=db::open_readonly(&s.db_path).map_err(internal)?;
  conn.query_row("SELECT cs.crop_json,cs.mask_json,COALESCE(cs.mask_enabled,1) FROM sources s LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE s.id=?1",[id],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,bool>(2)?))).map_err(internal)?};
  tokio::task::spawn_blocking(move||calibration_image::render(&bytes,settings.0.as_deref(),settings.1.as_deref(),settings.2)).await.map_err(internal)?.map_err(internal)
 }
@@ -556,7 +582,7 @@ async fn latest_image(
     Query(request): Query<ImageRequest>,
 ) -> ApiResult<Response<Body>> {
     let row = {
-        let conn = db::open(&s.db_path).map_err(internal)?;
+        let conn = db::open_readonly(&s.db_path).map_err(internal)?;
         conn.query_row("SELECT i.archive_path,i.media_type,p.name,p.copyright,i.observation_utc,s.latitude_deg,s.longitude_deg,s.altitude_m,s.name FROM images i JOIN sources s ON s.id=i.source_id JOIN producers p ON p.id=s.producer_id WHERE i.source_id=?1 ORDER BY i.observation_utc DESC LIMIT 1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<f64>>(5)?,r.get::<_,Option<f64>>(6)?,r.get::<_,Option<f64>>(7)?,r.get::<_,String>(8)?))).map_err(|e|if matches!(e,rusqlite::Error::QueryReturnedNoRows){(StatusCode::NOT_FOUND,"no image has been acquired for this camera yet".into())}else{internal(e)})?
     };
     let bytes = tokio::fs::read(&row.0).await.map_err(internal)?;
@@ -590,7 +616,7 @@ async fn original_image(
     Query(request): Query<ImageRequest>,
 ) -> ApiResult<Response<Body>> {
     let row = {
-        let conn = db::open(&s.db_path).map_err(internal)?;
+        let conn = db::open_readonly(&s.db_path).map_err(internal)?;
         conn.query_row("SELECT i.archive_path,i.media_type,p.name,p.copyright,i.observation_utc,s.latitude_deg,s.longitude_deg,s.altitude_m,s.name,s.id FROM images i JOIN sources s ON s.id=i.source_id JOIN producers p ON p.id=s.producer_id WHERE i.id=?1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<f64>>(5)?,r.get::<_,Option<f64>>(6)?,r.get::<_,Option<f64>>(7)?,r.get::<_,String>(8)?,r.get::<_,String>(9)?))).map_err(|e|if matches!(e,rusqlite::Error::QueryReturnedNoRows){(StatusCode::NOT_FOUND,"image not found".into())}else{internal(e)})?
     };
     let bytes = tokio::fs::read(&row.0).await.map_err(internal)?;

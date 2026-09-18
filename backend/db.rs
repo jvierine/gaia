@@ -2,6 +2,13 @@ use anyhow::Result;
 use rusqlite::{Connection, params};
 use std::path::Path;
 
+/// Read endpoints must not run migrations or contend for the writer lock.
+pub fn open_readonly(path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(conn)
+}
+
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

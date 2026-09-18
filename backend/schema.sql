@@ -140,3 +140,6 @@ CREATE TABLE IF NOT EXISTS extinction_attempts(
   PRIMARY KEY(source_id,night,channel)
 );
 CREATE INDEX IF NOT EXISTS extinction_attempts_recent ON extinction_attempts(source_id,attempted_utc);
+
+-- Chronological day lookup, including mixed RFC3339 UTC spellings.
+CREATE INDEX IF NOT EXISTS idx_images_source_history ON images(source_id, julianday(observation_utc), id, observation_utc, width, height);

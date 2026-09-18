@@ -68,7 +68,8 @@ async fn igrf_maglat(State(s): State<AppState>) -> Response<Body> {
         .unwrap()
 }
 async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
-    let conn = db::open(&s.db_path).map_err(internal)?;
+    tokio::task::spawn_blocking(move || {
+    let conn = db::open_readonly(&s.db_path).map_err(internal)?;
     let active: i64 = conn
         .query_row("SELECT count(*) FROM sources WHERE enabled=1 AND NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=sources.id)", [], |r| {
             r.get(0)
@@ -132,19 +133,23 @@ async fn status(State(s): State<AppState>) -> ApiResult<Json<SystemStatus>> {
             },
         ],
     }))
+    }).await.map_err(internal)?
 }
 
 async fn credits(State(s): State<AppState>) -> ApiResult<Json<Vec<Value>>> {
-    let conn = db::open(&s.db_path).map_err(internal)?;
+    tokio::task::spawn_blocking(move || {
+    let conn = db::open_readonly(&s.db_path).map_err(internal)?;
     let mut query = conn
         .prepare("SELECT name,website,acknowledgement,copyright FROM producers ORDER BY name")
         .map_err(internal)?;
     let rows=query.query_map([],|r|Ok(json!({"name":r.get::<_,String>(0)?,"website":r.get::<_,Option<String>>(1)?,"acknowledgement":r.get::<_,String>(2)?,"copyright":r.get::<_,String>(3)?}))).map_err(internal)?;
     Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
+    }).await.map_err(internal)?
 }
 
 async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>> {
-    let conn = db::open(&s.db_path).map_err(internal)?;
+    tokio::task::spawn_blocking(move || {
+    let conn = db::open_readonly(&s.db_path).map_err(internal)?;
     let mut q=conn.prepare("SELECT s.id,s.name,p.name,s.timestamp_mode,s.last_success_utc,s.last_error,(SELECT max(observation_utc) FROM images i WHERE i.source_id=s.id),(SELECT max(downloaded_utc) FROM images i WHERE i.source_id=s.id),(SELECT count(*) FROM images i WHERE i.source_id=s.id AND i.downloaded_utc >= datetime('now','-1 day')),s.latitude_deg,s.longitude_deg,EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id),s.enabled,COALESCE(cs.quality_exponent,0),MAX(COALESCE(cs.updated_utc,''),COALESCE((SELECT MAX(created_utc) FROM calibrations c WHERE c.source_id=s.id),'')) FROM sources s JOIN producers p ON p.id=s.producer_id LEFT JOIN camera_settings cs ON cs.source_id=s.id WHERE NOT EXISTS(SELECT 1 FROM removed_sources r WHERE r.source_id=s.id) ORDER BY s.name").map_err(internal)?;
     let rows = q
         .query_map([], |r| {
@@ -180,15 +185,18 @@ async fn sources(State(s): State<AppState>) -> ApiResult<Json<Vec<SourceStatus>>
     // Propagated, not skipped: a row that fails to map is a bug in this query,
     // and silently dropping it presents an empty camera registry as success.
     Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
+    }).await.map_err(internal)?
 }
 
 async fn history(State(s): State<AppState>) -> ApiResult<Json<Vec<String>>> {
-    let conn = db::open(&s.db_path).map_err(internal)?;
+    tokio::task::spawn_blocking(move || {
+    let conn = db::open_readonly(&s.db_path).map_err(internal)?;
     let mut q=conn.prepare("SELECT DISTINCT strftime('%Y-%m-%dT%H:%M:00Z',i.observation_utc) AS minute FROM images i JOIN sources s ON s.id=i.source_id WHERE s.enabled=1 AND EXISTS(SELECT 1 FROM calibrations c WHERE c.source_id=s.id) AND julianday(i.observation_utc)>=julianday('now','-1 day') ORDER BY minute").map_err(internal)?;
     let rows = q
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(internal)?;
     Ok(Json(rows.collect::<Result<Vec<_>, _>>().map_err(internal)?))
+    }).await.map_err(internal)?
 }
 
 #[derive(Deserialize, Default)]
@@ -213,6 +221,22 @@ async fn source_frames(
     }).await.map_err(internal)?
 }
 #[cfg(test)] mod frame_history_tests {
+    #[tokio::test(flavor="multi_thread",worker_threads=2)]
+    async fn startup_reads_complete_while_writer_is_active() {
+        let root=std::env::temp_dir().join(format!("gaia-catalogue-{}",uuid::Uuid::new_v4()));
+        let state=super::AppState{db_path:root.join("test.sqlite3"),archive_root:root.clone(),sources:std::sync::Arc::new(vec![]),igrf:std::sync::Arc::new(vec![]),igrf_year:2026};
+        let writer=super::db::open(&state.db_path).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2),async {
+            super::sources(axum::extract::State(state.clone())).await.unwrap();
+            super::history(axum::extract::State(state.clone())).await.unwrap();
+            super::credits(axum::extract::State(state.clone())).await.unwrap();
+            super::status(axum::extract::State(state.clone())).await.unwrap();
+        }).await.expect("startup reads must not wait for writer locks");
+        writer.execute_batch("ROLLBACK").unwrap();drop(writer);
+        std::fs::remove_file(&state.db_path).unwrap();std::fs::remove_dir(root).unwrap();
+    }
+
     #[test] fn history_uses_covering_index_and_utc_order() {
         let conn=rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("schema.sql")).unwrap();

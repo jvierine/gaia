@@ -1,5 +1,5 @@
 import PlaybackToolbar from './PlaybackToolbar';
-import {ServiceDescription,ProviderContacts} from './ProviderContacts';
+import {ServiceDescription,AuthorAffiliations,ProviderContacts} from './ProviderContacts';
 import GoogleAccess,{AccountInfo,SignInButton} from './GoogleAccess';
 import {liveCutoff,readyFrames,LIVE_DELAY_MINUTES} from './live-time';
 import React,{useEffect,useRef,useState} from 'react';
@@ -38,7 +38,8 @@ function PublicContent(){
       <p>Drag to rotate the globe. Scroll or pinch to zoom. Press Play to explore recent auroral activity, or Latest to see the newest ready images. Live viewing uses a {LIVE_DELAY_MINUTES}-minute delay to allow cameras to arrive and processing to finish. Tick <strong>Sun up</strong> to hold the sun upwards while Earth rotates. Drag vertically to adjust the viewing tilt.</p>
       <AccountInfo/>
       <h2>GAIA aggregation and projection service</h2>
-      <p>GAIA is an independent image aggregation and geographic projection service developed by Juha Vierinen and Björn Gustavsson. Contributing camera networks remain independently operated, and their images remain the copyright of their respective producers.</p>
+<AuthorAffiliations/>
+      <p>GAIA is an independent image aggregation and geographic projection service. Contributing camera networks remain independently operated, and their images remain the copyright of their respective producers.</p>
       <ProviderContacts/>
       <h2>Camera providers &amp; credits</h2>
       <p>Every listed camera links to its originating provider. All images remain the copyright of their respective producers.</p>

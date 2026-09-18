@@ -832,6 +832,12 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
   // The residuals of the refit, once there is one: judging a new fit against
   // the old model's residuals would say nothing about the new one.
   const [refitted,setRefitted]=useState<{stars:DriftStar[];rms:number}|null>(null);
+  // The proposed fit, computed but not stored. Some automatic identifications
+  // are dubious -- a hot pixel, a satellite, a star pulled onto its neighbour --
+  // so a model fitted through them is shown here and inspected in WISC/AIDA
+  // rather than being written into the calibration list unseen.
+  const [proposal,setProposal]=useState<{stars:number;before:number;after:number;
+    image_id:string}|null>(null);
   useEffect(()=>{setZoom(1);setCentre(null);setRefitted(null);
     setLevels(FULL_RANGE);setTouchedLevels(false)},[camera.id]);
   const load=async()=>{
@@ -850,18 +856,25 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
   const refit=async()=>{
     setRefitting(true);setOutcome('');
     try{
-      const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/refit`,{method:'POST'});
-      const body=await r.json().catch(()=>null) as {id?:string;residual_px_before?:number;
-        residual_px_after?:number;star_count?:number;stars?:DriftStar[]}|null;
-      if(!r.ok)throw new Error((body as unknown as {error?:string})?.error||await r.text()||'The refit was refused.');
-      if(body?.stars?.length)setRefitted({stars:body.stars,rms:body.residual_px_after??0});
-      // The new model belongs in the list straight away, and becomes the one
-      // the panel is judging, so its residuals can be compared with the old.
-      onRefit();
-      if(body?.id)setJudging(body.id);
-      setOutcome(`Added a new calibration from ${body?.star_count} stars: `
-        +`${body?.residual_px_before?.toFixed(3)} px \u2192 ${body?.residual_px_after?.toFixed(3)} px RMS. `
-        +`It is not live \u2014 select it above when you want it used.`);
+      // A proposal only: this computes the fit and writes nothing.
+      const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/refit-proposal`,{cache:'no-store'});
+      const body=await r.json().catch(()=>null) as {image_id?:string;stars?:number;
+        residual_px_before?:number;residual_px_after?:number;matches?:DriftStar[]}|null;
+      if(!r.ok)throw new Error(await r.text()||'The fit was refused.');
+      const before=body?.residual_px_before??0,after=body?.residual_px_after??0;
+      setProposal({stars:body?.stars??0,before,after,image_id:body?.image_id??''});
+      // Show the proposed model's own residuals straight away, so the fit can
+      // be judged here before anyone opens AIDA.
+      if(body?.matches?.length)setRefitted({stars:(body.matches as unknown as DriftStar[]).map(m=>({
+        ...(m as unknown as DriftStar),
+        centroid_x:(m as unknown as {image_x:number}).image_x,
+        centroid_y:(m as unknown as {image_y:number}).image_y,
+        predicted_x:(m as unknown as {image_x:number}).image_x-(m as unknown as {residual_dx:number}).residual_dx,
+        predicted_y:(m as unknown as {image_y:number}).image_y-(m as unknown as {residual_dy:number}).residual_dy,
+      })),rms:after});
+      setOutcome(`Fitted ${body?.stars} stars: ${before.toFixed(3)} px \u2192 ${after.toFixed(3)} px RMS. `
+        +`Nothing has been written \u2014 open it in WISC/AIDA to check the identifications, `
+        +`then send the calibration back from there.`);
     }catch(e){setError(String((e as Error).message||e))}finally{setRefitting(false)}
   };
   const frame=drift?.frame;
@@ -1055,6 +1068,11 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
       <div className="drift-actions">
         <button type="button" disabled={!drift?.refit_available||refitting} onClick={()=>void refit()}>
           {refitting?'Fitting\u2026':'Refit lens parameters (WISC/AIDA)'}</button>
+        {proposal&&frame&&<a className="send-button"
+          href={`/aida/?gaia=1&source_id=${encodeURIComponent(camera.id)}`
+            +`&image_id=${encodeURIComponent(proposal.image_id||frame.image_id)}&proposal=1`}
+          target="_blank" rel="noopener noreferrer">
+          Inspect the {proposal.stars} identifications in WISC/AIDA \u2197</a>}
         <small>{drift?.refit_reason}</small>
       </div>
       {outcome&&<p className="drift-outcome" role="status">{outcome}</p>}

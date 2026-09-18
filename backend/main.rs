@@ -1043,6 +1043,121 @@ with h5py.File(spec["path"], "w") as f:
     Ok(())
 }
 
+/// Everything WISC/AIDA needs to show a proposed refit for inspection: which
+/// frame, which stars were identified in it, and the lens model that best
+/// places them.
+///
+/// Computed and returned; **nothing is written**. Some automatically fitted
+/// stars are dubious -- a hot pixel, a satellite, a star pulled onto a
+/// neighbour -- and a model fitted through them should be looked at by a person
+/// before it becomes a calibration. So this produces a proposal and AIDA is
+/// where it is accepted or rejected.
+fn refit_proposal(
+    conn: &rusqlite::Connection,
+    source_id: &str,
+) -> anyhow::Result<Value> {
+    let drift = calibration_drift(conn, source_id, None)?;
+    let frame = &drift["frame"];
+    if frame.is_null() {
+        anyhow::bail!("no measured frame to fit");
+    }
+    let hdf5 = drift["hdf5_path"].as_str().unwrap_or_default();
+    let seed = projection::optical_parameters(hdf5)?;
+    let (width, height) = (
+        frame["width"].as_f64().unwrap_or(0.0),
+        frame["height"].as_f64().unwrap_or(0.0),
+    );
+    if !(width > 0.0 && height > 0.0) {
+        anyhow::bail!("frame has no recorded dimensions");
+    }
+    let empty = Vec::new();
+    let stars = drift["stars"].as_array().unwrap_or(&empty);
+    let observations: Vec<lensfit::Observation> = stars
+        .iter()
+        .filter_map(|v| {
+            Some(lensfit::Observation {
+                azimuth_deg: v["azimuth_deg"].as_f64()?,
+                elevation_deg: v["elevation_deg"].as_f64()?,
+                x: v["centroid_x"].as_f64()?,
+                y: v["centroid_y"].as_f64()?,
+            })
+        })
+        .collect();
+    let before = lensfit::rms(&seed, &observations, width, height);
+    let (fitted, after) = lensfit::fit(&seed, &observations, width, height)
+        .ok_or_else(|| anyhow::anyhow!("the fit did not converge"))?;
+    let residuals = lensfit::residuals(&fitted, &observations, width, height);
+
+    // AIDA's own match record: a picked image point paired with a catalogue
+    // star. Zenith angle rather than elevation, which is what it stores.
+    let matches: Vec<Value> = stars
+        .iter()
+        .zip(observations.iter())
+        .enumerate()
+        .map(|(n, (star, observation))| {
+            let key = star["star_key"].as_str().unwrap_or_default();
+            let (dx, dy, dr) = residuals.get(n).copied().unwrap_or((0.0, 0.0, 0.0));
+            let (ra, dec) = key
+                .split_once(|c| c == '+' || c == '-')
+                .map(|(a, b)| {
+                    let sign = if key.contains('-') { -1.0 } else { 1.0 };
+                    (a.parse::<f64>().unwrap_or(0.0), sign * b.parse::<f64>().unwrap_or(0.0))
+                })
+                .unwrap_or((0.0, 0.0));
+            json!({
+                "id": n + 1,
+                "star_key": key,
+                "image_x": observation.x,
+                "image_y": observation.y,
+                "ra_hours": ra,
+                "dec_deg": dec,
+                "mag": star["vt_mag"].as_f64().unwrap_or(0.0),
+                "azimuth_deg": observation.azimuth_deg,
+                "zenith_deg": 90.0 - observation.elevation_deg,
+                "elevation_deg": observation.elevation_deg,
+                // Under the proposed model, so a star placed badly by it is
+                // visible before anyone accepts it.
+                "residual_px": dr,
+                "residual_dx": dx,
+                "residual_dy": dy,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "source_id": source_id,
+        "image_id": frame["image_id"],
+        "observation_utc": frame["observation_utc"],
+        "width": width, "height": height,
+        "from_calibration_id": drift["calibration_id"],
+        "optmod": seed.first().copied().unwrap_or(2.0) as i64,
+        "optpar_with_optmod": fitted,
+        // The eight free parameters, the order AIDA's own controls take.
+        "optpar": fitted.get(1..).map(|v| v.to_vec()).unwrap_or_default(),
+        "seed_optpar_with_optmod": seed,
+        "stars": matches.len(),
+        "residual_px_before": before,
+        "residual_px_after": after,
+        "matches": matches,
+        "note": "A proposal only. Nothing has been written; inspect the identifications in \
+WISC/AIDA and send the calibration back from there if they are sound.",
+    }))
+}
+
+async fn source_refit_proposal(
+    Path(id): Path<String>,
+    State(s): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let built = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        let conn = db::open(&s.db_path)?;
+        refit_proposal(&conn, &id)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok(Json(built))
+}
+
 /// Refit the lens from tonight's richest frame and keep the result.
 ///
 /// The new model is added to the list and deliberately **not** selected.
@@ -2531,6 +2646,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sources/{id}/stars/series", get(source_star_series))
         .route("/api/sources/{id}/calibration/drift", get(source_calibration_drift))
         .route("/api/sources/{id}/calibration/refit", post(source_calibration_refit))
+        .route("/api/sources/{id}/calibration/refit-proposal", get(source_refit_proposal))
         .route("/api/sources/{id}/keogram-pairs", get(source_keogram_pairs))
         .route("/api/sources/{id}/keogram", get(source_keogram))
         .route("/api/sources/{id}/star-sensitivity", get(source_star_sensitivity))

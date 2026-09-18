@@ -1087,3 +1087,6 @@ Validation on the 571734-image database: pre-fix Sep 9 Kiruna listing took 12.73
 
 ## 2026-09-18 Brekke location clarification
 Juha identifies swl-yr-brekke as located in Ortneset village, Vestland, Norway. Registry and importer label updated to Ortneset (Brekke), Vestland, Norway. Exact camera coordinates remain null rather than substituting a village centroid; operator identification and calibration remain pending. Existing disabled state is unchanged. Live database name/config metadata updated without restarting acquisition.
+
+## 2026-09-18 Catalogue startup contention follow-up
+Deployed aa2b8a7: sources, history, status and credits GET handlers use read-only SQLite connections and spawn_blocking for synchronous database/filesystem work. Previous history fix missed these startup routes, allowing schema writes to stall catalogue loading. New regression holds BEGIN IMMEDIATE while all four startup handlers complete within two seconds. Full suite 133 passed, 3 ignored. Live browser catalogue resolved and Cameras showed 196 sources, with no captured page errors. Fifteen concurrent mixed startup requests all returned HTTP 200: sources 103-285 ms, history 270-333 ms, status 233-311 ms, credits 29-43 ms, health 24-27 ms. No frontend or public-viewer code changed; juha.no remains a static-file viewer without forwarding to this API.

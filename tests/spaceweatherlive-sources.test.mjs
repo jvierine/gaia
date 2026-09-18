@@ -1,0 +1,12 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const sources=fs.readdirSync('sources').filter(f=>f.endsWith('.json')).flatMap(f=>JSON.parse(fs.readFileSync('sources/'+f)));
+const added=JSON.parse(fs.readFileSync('sources/spaceweatherlive.json'));
+const audit=JSON.parse(fs.readFileSync('docs/spaceweatherlive-audit.json'));
+test('source IDs are globally unique',()=>assert.equal(new Set(sources.map(s=>s.id)).size,sources.length));
+test('directory audit contains cameras, not forum links',()=>{assert.equal(audit.entries.length,54);assert.ok(audit.entries.every(e=>!e.url.includes('community.spaceweatherlive.com')))});
+test('new feeds use attributed provider images, no video thumbnails or duplicate endpoints',()=>{assert.equal(new Set(added.map(s=>s.url)).size,added.length);for(const s of added){assert.ok(s.producer.website&&s.producer.copyright&&s.producer.name);assert.equal(s.timestamp_mode,'download_time');assert.equal(s.interval_seconds,60);assert.ok(!/youtube|ytimg|starvisor/.test(s.url));assert.equal(s.calibration_id,undefined)}});
+test('unavailable, stale or unidentified sources remain disabled',()=>{for(const p of audit.probes){const s=added.find(s=>s.id===p.source_id);if(s&&p.status!=='enabled_uncalibrated')assert.equal(s.enabled,false,p.source_id)}});
+test('original restricted cameras remain mapped, not duplicated',()=>{const a=audit.entries.filter(e=>e.url.includes('starvisor'));assert.equal(a.length,3);assert.ok(a.every(e=>e.source_id.startsWith('starvisor-')&&e.status==='already_present_restricted'))});
+test('Davis discovery regex excludes unrelated website images',()=>{const s=added.find(s=>s.id==='swl-davis');assert.equal(s.kind,'html_index');const r=new RegExp(s.image_link_regex);assert.ok(r.test('https://images.antarctica.gov.au/webcams/davis/2026/09/18/D2609181120s.jpg'));assert.ok(!r.test('https://www.antarctica.gov.au/site/assets/logo.jpg'))});

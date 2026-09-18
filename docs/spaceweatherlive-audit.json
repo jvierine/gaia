@@ -1,0 +1,681 @@
+{
+  "directory": "https://www.spaceweatherlive.com/en/auroral-activity/webcams.html",
+  "checked_at": "2026-09-18T11:49:50.263Z",
+  "entries": [
+    {
+      "name": "Kjell Henriksen Observatory, Svalbard",
+      "url": "https://kho.unis.no/Quicklooks/kho_sony.jpg",
+      "source_id": "swl-kho-sony",
+      "status": "unreachable",
+      "error": "TypeError: fetch failed"
+    },
+    {
+      "name": "Nordkapp, Finnmark",
+      "url": "https://live-image.panomax.com/cams/5067/recent_reduced.jpg",
+      "source_id": "swl-panomax-nordkapp",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:44:22 GMT",
+      "width": 2149,
+      "height": 450,
+      "bytes": 56762,
+      "note": "Panoramic camera: operator and projection model need verification"
+    },
+    {
+      "name": "Skibotn, Troms",
+      "url": "https://fox.phys.uit.no/ASC/Latest_ASC01.png",
+      "source_id": "swl-uit-asc01",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:13 GMT",
+      "width": 703,
+      "height": 705,
+      "bytes": 27785,
+      "note": null
+    },
+    {
+      "name": "Setermoen, Troms (North-east camera)",
+      "url": "https://www.yr.no/webcams/1/2000/setermoen/3.jpg",
+      "source_id": "swl-yr-setermoen",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:46:26 GMT",
+      "width": 2000,
+      "height": 1333,
+      "bytes": 193743,
+      "note": "Operator identity and exact camera coordinates need verification"
+    },
+    {
+      "name": "Loen, Vestland",
+      "url": "https://live-image.panomax.com/cams/1941/recent_reduced.jpg",
+      "source_id": "swl-panomax-loen",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:44:01 GMT",
+      "width": 2486,
+      "height": 450,
+      "bytes": 112789,
+      "note": "Panoramic camera: operator and projection model need verification"
+    },
+    {
+      "name": "Brekke, Vestland (West camera)",
+      "url": "https://www.yr.no/webcams/1/2000/ortneset/1.jpg",
+      "source_id": "swl-yr-brekke",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:45:47 GMT",
+      "width": 2000,
+      "height": 1333,
+      "bytes": 57595,
+      "note": "SWL lists the identical URL twice with conflicting directions; operator and location need verification"
+    },
+    {
+      "name": "Brekke, Vestland (North-east camera)",
+      "url": "https://www.yr.no/webcams/1/2000/ortneset/1.jpg",
+      "source_id": "swl-yr-brekke",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:45:47 GMT",
+      "width": 2000,
+      "height": 1333,
+      "bytes": 57595,
+      "note": "SWL lists the identical URL twice with conflicting directions; operator and location need verification"
+    },
+    {
+      "name": "Abisko, Norrbotten by LightsOverLapland",
+      "url": "https://lightsoverlapland.com/aurora-webcam/",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Abisko, Norrbotten by Fabian Wimmer",
+      "url": "https://media.fabianwimmer.com/image.jpg",
+      "source_id": "swl-fabian-abisko",
+      "status": "enabled_uncalibrated",
+      "modified": null,
+      "width": 2028,
+      "height": 1520,
+      "bytes": 238220,
+      "note": null
+    },
+    {
+      "name": "Kiruna, Norrbotten",
+      "url": "https://www.irf.se/alis/allsky/krn/latest_medium.jpeg",
+      "status": "already_present",
+      "source_id": "irf-kiruna-alis"
+    },
+    {
+      "name": "Porjus, Norrbotten (North camera)",
+      "url": "https://uk.jokkmokk.jp/photo/nr4/latest.jpg",
+      "source_id": "swl-porjus-north",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:40 GMT",
+      "width": 720,
+      "height": 480,
+      "bytes": 71088,
+      "note": null
+    },
+    {
+      "name": "Porjus, Norrbotten (West camera)",
+      "url": "https://uk.jokkmokk.jp/photo/nr3/latest.jpg",
+      "source_id": "swl-porjus-west",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:01 GMT",
+      "width": 720,
+      "height": 480,
+      "bytes": 102389,
+      "note": null
+    },
+    {
+      "name": "Kilpisjärvi, Lappland (North camera)",
+      "url": "https://www.youtube.com/watch?v=ccTVAhJU5lg",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Levi, Lappland",
+      "url": "https://www.youtube.com/watch?v=rKfecmmzzw0",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Sodankylä, Lappland",
+      "url": "https://www.sgo.fi/Data/RealTime/Kuvat/UCL.jpg",
+      "source_id": "swl-sgo-ucl",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 02:58:33 GMT",
+      "width": 588,
+      "height": 600,
+      "bytes": 33058,
+      "note": null
+    },
+    {
+      "name": "Posio, Lappland",
+      "url": "https://www.youtube.com/watch?v=iOmco6eIa-0",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Hankasalmi, Central Finland",
+      "url": "https://aurorasnow.fmi.fi/public_service/images/latest_SIR_AllSky.jpg",
+      "source_id": "swl-sirius-hankasalmi",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:33 GMT",
+      "width": 1280,
+      "height": 960,
+      "bytes": 220269,
+      "note": null
+    },
+    {
+      "name": "Nyrölä, Central Finland",
+      "url": "https://aurorasnow.fmi.fi/public_service/images/latest_SIR.jpg",
+      "source_id": "swl-sirius-nyrola",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:33 GMT",
+      "width": 1278,
+      "height": 860,
+      "bytes": 129711,
+      "note": null
+    },
+    {
+      "name": "Kirkkonummi, Uusimaa",
+      "url": "https://aurorasnow.fmi.fi/public_service/images/latest_HOV.jpg",
+      "source_id": "swl-aalto-metsahovi",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:33 GMT",
+      "width": 1220,
+      "height": 916,
+      "bytes": 201757,
+      "note": null
+    },
+    {
+      "name": "Helsinki, Uusimaa",
+      "url": "https://space.fmi.fi/MIRACLE/RWC/latest_HEL.jpg",
+      "source_id": "swl-fmi-helsinki",
+      "status": "stale_upstream",
+      "modified": "Fri, 29 May 2026 13:25:32 GMT",
+      "width": 1040,
+      "height": 1040,
+      "bytes": 64532,
+      "note": null
+    },
+    {
+      "name": "Syrjävaara Dark Sky Park, Kaavi",
+      "url": "https://www.syrjavaara.fi/img/syrjavaara_latest_img.jpg",
+      "source_id": "swl-syrjavaara",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 03:06:33 GMT",
+      "width": 1392,
+      "height": 1064,
+      "bytes": 48895,
+      "note": null
+    },
+    {
+      "name": "Highland Center Hrauneyjar",
+      "url": "https://www.thehighlandcenter.is/northern-lights/webcam",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Hella Landhotel",
+      "url": "https://landhotel.is/index.php/northernlights-live",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Aðaldalshraun",
+      "url": "https://www.netnurds.com/",
+      "source_id": "netnurds-adaldalshraun-allsky",
+      "status": "already_present"
+    },
+    {
+      "name": "Sorø",
+      "url": "https://archive.allsky.tv/AMS89/LATEST/010893.jpg",
+      "source_id": "swl-allsky-soro",
+      "status": "stale_upstream",
+      "modified": "Wed, 14 Jan 2026 09:00:40 GMT",
+      "width": 440,
+      "height": 360,
+      "bytes": 20861,
+      "note": null
+    },
+    {
+      "name": "Ilulissat Airport",
+      "url": "https://www.youtube.com/watch?v=nT9QtAbaLg4",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Tasiilaq Heliport",
+      "url": "https://www.youtube.com/watch?v=hfF9bhaBuvw",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Teriberka, Murmansk Oblast",
+      "url": "https://video.auroracam.ru/page/mmeWvVgS",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Strezhevoy, Tomsk Oblastt",
+      "url": "https://starvisor.ru/wp-content/uploads/webcam/capture_str.jpg",
+      "status": "already_present_restricted",
+      "source_id": "starvisor-strezhevoy"
+    },
+    {
+      "name": "St. Petersburg, Leningrad Oblast",
+      "url": "https://starvisor.ru/wp-content/uploads/webcam/cap_spbd.jpg",
+      "status": "already_present_restricted",
+      "source_id": "starvisor-st-petersburg"
+    },
+    {
+      "name": "Kalingrad, Kaliningrad Oblast",
+      "url": "https://starvisor.ru/wp-content/uploads/webcam/cap_klnsky.jpg",
+      "status": "already_present_restricted",
+      "source_id": "starvisor-kaliningrad"
+    },
+    {
+      "name": "Shetland Islands, Scotland",
+      "url": "https://www.shetlandwebcams.com/cliff-cam-3/",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Cape Arkona, Rügen (Fischerdorf Vitt)",
+      "url": "https://kap-arkona.panomax.com/vitt",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Cape Arkona, Rügen (Peilturm)",
+      "url": "https://kap-arkona.panomax.com/peilturm",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Ettelsberg",
+      "url": "https://www.foto-webcam.eu/webcam/ettelsberg/current/1920.jpg",
+      "source_id": "swl-ettelsberg",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:40:12 GMT",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 389853,
+      "note": null
+    },
+    {
+      "name": "Brno 1",
+      "url": "https://www.youtube.com/watch?v=atakzXwhXVM",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Brno 2",
+      "url": "https://www.youtube.com/watch?v=ryq2f01FWUg",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Brno 3",
+      "url": "https://www.youtube.com/watch?v=XEKZCn4gCIU",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Brno 4",
+      "url": "https://www.youtube.com/watch?v=KAvqFpBQJI4",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Pizzo Matro, Ticino",
+      "url": "https://pizzomatro.roundshot.com",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Yellowknife, Northwest Territories",
+      "url": "https://auroramax.phys.ucalgary.ca/recent/recent_480p.jpg",
+      "source_id": "swl-auroramax-yellowknife",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:43 GMT",
+      "width": 853,
+      "height": 480,
+      "bytes": 85579,
+      "note": null
+    },
+    {
+      "name": "Churchill, Manitoba",
+      "url": "https://www.youtube.com/watch?v=a0i1Kg6fROg",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Banff, Alberta",
+      "url": "https://www.youtube.com/watch?v=_YomWp1APOk",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Chatanika, Alaska",
+      "url": "https://allsky.gi.alaska.edu/",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Fairbanks, Alaska",
+      "url": "https://www.theaurorachasers.com/aurorawebcam",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Fairbanks, Alaska",
+      "url": "https://www.youtube.com/watch?v=k7S5IkS_FTA",
+      "status": "video_stream_adapter_needed"
+    },
+    {
+      "name": "Isle Royale National Park, Michigan",
+      "url": "https://www.nps.gov/webcams-isro/northshore.jpg",
+      "source_id": "swl-nps-isle-royale",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:46:44 GMT",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 1794141,
+      "note": null
+    },
+    {
+      "name": "Sebec Lake, Maine",
+      "url": "https://www.neoc.com/webcam3/",
+      "status": "provider_endpoint_research_needed"
+    },
+    {
+      "name": "Hope, New Jersey",
+      "url": "https://www.allskycam.com/u/627/latest_full.jpg",
+      "source_id": "swl-uacnj-hope",
+      "status": "stale_upstream",
+      "modified": "Sat, 12 Sep 2026 22:33:39 GMT",
+      "width": 640,
+      "height": 480,
+      "bytes": 9342,
+      "note": null
+    },
+    {
+      "name": "Mayhill, Nex Mexico",
+      "url": "https://allsky.linuxkidd.com/image-fullsize.jpg",
+      "source_id": "swl-linuxkidd-animas",
+      "status": "enabled_uncalibrated",
+      "modified": "Thu, 17 Sep 2026 15:32:55 GMT",
+      "width": 3096,
+      "height": 2080,
+      "bytes": 907313,
+      "note": null
+    },
+    {
+      "name": "Kingston, Tasmania",
+      "url": "https://www.allskycam.com/u/539/latest_full.jpg",
+      "source_id": "swl-cades-kingston",
+      "status": "stale_upstream",
+      "modified": "Wed, 26 Nov 2025 06:32:59 GMT",
+      "width": 768,
+      "height": 576,
+      "bytes": 139914,
+      "note": null
+    },
+    {
+      "name": "Craigie, Western Australia",
+      "url": "https://www.allskycam.com/u/606/latest_full.jpg",
+      "source_id": "swl-allsky-craigie",
+      "status": "unreachable",
+      "error": "Error: Input Buffer is empty"
+    },
+    {
+      "name": "Sydney, New South Wales",
+      "url": "https://admin.meteobridge.com/cam/9c25cda08544cf0db24b350b27d1e5f5/camplus.jpg",
+      "source_id": "swl-meteobridge-sydney",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:45:21 GMT",
+      "width": 2688,
+      "height": 1520,
+      "bytes": 441034,
+      "note": "Operator identity, provider website and exact location need verification"
+    },
+    {
+      "name": "Davis Station",
+      "url": "https://www.antarctica.gov.au/antarctic-operations/webcams/davis/",
+      "source_id": "swl-davis",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:47:02 GMT",
+      "width": 704,
+      "height": 564,
+      "bytes": 77123,
+      "note": null
+    }
+  ],
+  "probes": [
+    {
+      "url": "https://fox.phys.uit.no/ASC/Latest_ASC01.png",
+      "source_id": "swl-uit-asc01",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:13 GMT",
+      "width": 703,
+      "height": 705,
+      "bytes": 27785,
+      "note": null
+    },
+    {
+      "url": "https://kho.unis.no/Quicklooks/kho_sony.jpg",
+      "source_id": "swl-kho-sony",
+      "status": "unreachable",
+      "error": "TypeError: fetch failed"
+    },
+    {
+      "url": "https://live-image.panomax.com/cams/5067/recent_reduced.jpg",
+      "source_id": "swl-panomax-nordkapp",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:44:22 GMT",
+      "width": 2149,
+      "height": 450,
+      "bytes": 56762,
+      "note": "Panoramic camera: operator and projection model need verification"
+    },
+    {
+      "url": "https://www.yr.no/webcams/1/2000/setermoen/3.jpg",
+      "source_id": "swl-yr-setermoen",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:46:26 GMT",
+      "width": 2000,
+      "height": 1333,
+      "bytes": 193743,
+      "note": "Operator identity and exact camera coordinates need verification"
+    },
+    {
+      "url": "https://www.yr.no/webcams/1/2000/ortneset/1.jpg",
+      "source_id": "swl-yr-brekke",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:45:47 GMT",
+      "width": 2000,
+      "height": 1333,
+      "bytes": 57595,
+      "note": "SWL lists the identical URL twice with conflicting directions; operator and location need verification"
+    },
+    {
+      "url": "https://live-image.panomax.com/cams/1941/recent_reduced.jpg",
+      "source_id": "swl-panomax-loen",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:44:01 GMT",
+      "width": 2486,
+      "height": 450,
+      "bytes": 112789,
+      "note": "Panoramic camera: operator and projection model need verification"
+    },
+    {
+      "url": "https://media.fabianwimmer.com/image.jpg",
+      "source_id": "swl-fabian-abisko",
+      "status": "enabled_uncalibrated",
+      "modified": null,
+      "width": 2028,
+      "height": 1520,
+      "bytes": 238220,
+      "note": null
+    },
+    {
+      "url": "https://www.sgo.fi/Data/RealTime/Kuvat/UCL.jpg",
+      "source_id": "swl-sgo-ucl",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 02:58:33 GMT",
+      "width": 588,
+      "height": 600,
+      "bytes": 33058,
+      "note": null
+    },
+    {
+      "url": "https://aurorasnow.fmi.fi/public_service/images/latest_SIR_AllSky.jpg",
+      "source_id": "swl-sirius-hankasalmi",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:33 GMT",
+      "width": 1280,
+      "height": 960,
+      "bytes": 220269,
+      "note": null
+    },
+    {
+      "url": "https://aurorasnow.fmi.fi/public_service/images/latest_SIR.jpg",
+      "source_id": "swl-sirius-nyrola",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:33 GMT",
+      "width": 1278,
+      "height": 860,
+      "bytes": 129711,
+      "note": null
+    },
+    {
+      "url": "https://aurorasnow.fmi.fi/public_service/images/latest_HOV.jpg",
+      "source_id": "swl-aalto-metsahovi",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:33 GMT",
+      "width": 1220,
+      "height": 916,
+      "bytes": 201757,
+      "note": null
+    },
+    {
+      "url": "https://space.fmi.fi/MIRACLE/RWC/latest_HEL.jpg",
+      "source_id": "swl-fmi-helsinki",
+      "status": "stale_upstream",
+      "modified": "Fri, 29 May 2026 13:25:32 GMT",
+      "width": 1040,
+      "height": 1040,
+      "bytes": 64532,
+      "note": null
+    },
+    {
+      "url": "https://www.syrjavaara.fi/img/syrjavaara_latest_img.jpg",
+      "source_id": "swl-syrjavaara",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 03:06:33 GMT",
+      "width": 1392,
+      "height": 1064,
+      "bytes": 48895,
+      "note": null
+    },
+    {
+      "url": "https://archive.allsky.tv/AMS89/LATEST/010893.jpg",
+      "source_id": "swl-allsky-soro",
+      "status": "stale_upstream",
+      "modified": "Wed, 14 Jan 2026 09:00:40 GMT",
+      "width": 440,
+      "height": 360,
+      "bytes": 20861,
+      "note": null
+    },
+    {
+      "url": "https://uk.jokkmokk.jp/photo/nr4/latest.jpg",
+      "source_id": "swl-porjus-north",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:40 GMT",
+      "width": 720,
+      "height": 480,
+      "bytes": 71088,
+      "note": null
+    },
+    {
+      "url": "https://www.foto-webcam.eu/webcam/ettelsberg/current/1920.jpg",
+      "source_id": "swl-ettelsberg",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:40:12 GMT",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 389853,
+      "note": null
+    },
+    {
+      "url": "https://uk.jokkmokk.jp/photo/nr3/latest.jpg",
+      "source_id": "swl-porjus-west",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:01 GMT",
+      "width": 720,
+      "height": 480,
+      "bytes": 102389,
+      "note": null
+    },
+    {
+      "url": "https://www.allskycam.com/u/627/latest_full.jpg",
+      "source_id": "swl-uacnj-hope",
+      "status": "stale_upstream",
+      "modified": "Sat, 12 Sep 2026 22:33:39 GMT",
+      "width": 640,
+      "height": 480,
+      "bytes": 9342,
+      "note": null
+    },
+    {
+      "url": "https://auroramax.phys.ucalgary.ca/recent/recent_480p.jpg",
+      "source_id": "swl-auroramax-yellowknife",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:49:43 GMT",
+      "width": 853,
+      "height": 480,
+      "bytes": 85579,
+      "note": null
+    },
+    {
+      "url": "https://www.nps.gov/webcams-isro/northshore.jpg",
+      "source_id": "swl-nps-isle-royale",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:46:44 GMT",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 1794141,
+      "note": null
+    },
+    {
+      "url": "https://www.allskycam.com/u/539/latest_full.jpg",
+      "source_id": "swl-cades-kingston",
+      "status": "stale_upstream",
+      "modified": "Wed, 26 Nov 2025 06:32:59 GMT",
+      "width": 768,
+      "height": 576,
+      "bytes": 139914,
+      "note": null
+    },
+    {
+      "url": "https://www.antarctica.gov.au/antarctic-operations/webcams/davis/",
+      "source_id": "swl-davis",
+      "status": "enabled_uncalibrated",
+      "modified": "Fri, 18 Sep 2026 11:47:02 GMT",
+      "width": 704,
+      "height": 564,
+      "bytes": 77123,
+      "note": null
+    },
+    {
+      "url": "https://allsky.linuxkidd.com/image-fullsize.jpg",
+      "source_id": "swl-linuxkidd-animas",
+      "status": "enabled_uncalibrated",
+      "modified": "Thu, 17 Sep 2026 15:32:55 GMT",
+      "width": 3096,
+      "height": 2080,
+      "bytes": 907313,
+      "note": null
+    },
+    {
+      "url": "https://admin.meteobridge.com/cam/9c25cda08544cf0db24b350b27d1e5f5/camplus.jpg",
+      "source_id": "swl-meteobridge-sydney",
+      "status": "needs_review",
+      "modified": "Fri, 18 Sep 2026 11:45:21 GMT",
+      "width": 2688,
+      "height": 1520,
+      "bytes": 441034,
+      "note": "Operator identity, provider website and exact location need verification"
+    },
+    {
+      "url": "https://www.allskycam.com/u/606/latest_full.jpg",
+      "source_id": "swl-allsky-craigie",
+      "status": "unreachable",
+      "error": "Error: Input Buffer is empty"
+    }
+  ],
+  "notes": [
+    "No YouTube thumbnail substitutes for observations. Video streams need a bounded adapter.",
+    "Coordinates left null when exact station location is not verified; set before AIDA calibration.",
+    "Panoramas and unidentified operators are held for review. Stale upstream files are not enabled as realtime cameras.",
+    "No calibrations copied between instruments at the same site. Starvisor authorization unchanged.",
+    "Linuxkidd provider config.js says Animas, not the obsolete Mayhill label in the directory.",
+    "Brekke is listed twice with the same URL; only one crawler is configured."
+  ]
+}

@@ -10,6 +10,8 @@ import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
 // `extent` is imported under another name: the panel already has a local one
 // for the scatter, and a shadowed import would silently call the wrong function.
 import {densityColour,extent as binExtent,histogram1d,histogram2d,tickLabel,ticks} from '../src/histogram';
+import {clampView,countryPaths,formatLatitude,formatLongitude,graticuleStep,gridLines,zoomAt,
+        WHOLE_WORLD,type View} from '../src/mapgrid';
 import {clampLevels,fractionToLevel,levelToFraction,suggest,transfer,FULL_RANGE,
         type Levels} from '../src/levels';
 import {addWindow,edgeNear,fractionToTime,keogramImage,makeWindow,removeWindowAt,resizeWindow,
@@ -54,10 +56,116 @@ const sortOptions:[SortKey,string][] = [['name','Name'],['latitude_deg','Latitud
 
 
 function LocationEditor({camera,onClose,onSaved}:{camera:Camera,onClose:()=>void,onSaved:(camera:Camera)=>void}){
-  const [lat,setLat]=useState(camera.latitude_deg??0);const[lon,setLon]=useState(camera.longitude_deg??0);const[saving,setSaving]=useState(false);
-  const point=(event:React.PointerEvent<HTMLDivElement>)=>{const r=event.currentTarget.getBoundingClientRect();setLon(Math.max(-180,Math.min(180,(event.clientX-r.left)/r.width*360-180)));setLat(Math.max(-90,Math.min(90,90-(event.clientY-r.top)/r.height*180)))};
-  async function save(){setSaving(true);try{const response=await fetch(`/gaia/api/sources/${camera.id}/location`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({latitude_deg:lat,longitude_deg:lon})});if(!response.ok)throw new Error();onSaved({...camera,latitude_deg:lat,longitude_deg:lon});onClose()}catch{alert('The camera service is not available yet. Please try again shortly.')}finally{setSaving(false)}}
-  return <div className="modal-backdrop"><div className="location-editor"><button className="close" onClick={onClose} aria-label="Close"><X/></button><span className="eyebrow">CAMERA POSITION</span><h2>{camera.name}</h2><p>Drag the marker or enter exact WGS84 coordinates.</p><div className="location-map" onPointerDown={point} onPointerMove={e=>{if(e.buttons)point(e)}}><span className="map-equator"/><span className="map-meridian"/><i style={{left:`${(lon+180)/360*100}%`,top:`${(90-lat)/180*100}%`}}/></div><div className="form-row"><label>Latitude<input type="number" min="-90" max="90" step="0.0001" value={lat.toFixed(4)} onChange={e=>setLat(Number(e.target.value))}/></label><label>Longitude<input type="number" min="-180" max="180" step="0.0001" value={lon.toFixed(4)} onChange={e=>setLon(Number(e.target.value))}/></label></div><button className="send-button" onClick={save} disabled={saving}>{saving?'Saving…':'Save camera position'}</button></div></div>
+  const [lat,setLat]=useState(camera.latitude_deg??0),[lon,setLon]=useState(camera.longitude_deg??0);
+  // The boxes hold text, not numbers. A controlled numeric input reformatted on
+  // every keystroke cannot be typed into: "69.6" passes through "69." which
+  // parses to 69 and is rewritten as "69.0000" with the cursor thrown to the
+  // end. The text is authoritative while it is being edited and the number is
+  // updated whenever the text parses.
+  const [latText,setLatText]=useState((camera.latitude_deg??0).toFixed(4));
+  const [lonText,setLonText]=useState((camera.longitude_deg??0).toFixed(4));
+  const [saving,setSaving]=useState(false);
+  const [view,setView]=useState<View>(WHOLE_WORLD);
+  const [world,setWorld]=useState<string[]>([]);
+  const drag=useRef<{x:number;y:number;lon:number;lat:number}|null>(null);
+  // Country outlines, fetched once and shared with the globe's own copy.
+  useEffect(()=>{let live=true;
+    void fetch('/gaia/world.geojson',{cache:'force-cache'})
+      .then(r=>r.ok?r.json():null)
+      .then(data=>{if(live&&data)setWorld(countryPaths(data))})
+      .catch(()=>{});
+    return()=>{live=false}},[]);
+  const typedLat=(text:string)=>{setLatText(text);
+    const v=Number(text);if(text.trim()!==''&&Number.isFinite(v)&&v>=-90&&v<=90)setLat(v)};
+  const typedLon=(text:string)=>{setLonText(text);
+    const v=Number(text);if(text.trim()!==''&&Number.isFinite(v)&&v>=-180&&v<=180)setLon(v)};
+  // Committing on blur is what lets a half-typed value exist meanwhile.
+  const settle=()=>{setLatText(lat.toFixed(4));setLonText(lon.toFixed(4))};
+  const place=(la:number,lo:number)=>{
+    const clampedLat=Math.max(-90,Math.min(90,la)),clampedLon=Math.max(-180,Math.min(180,lo));
+    setLat(clampedLat);setLon(clampedLon);
+    setLatText(clampedLat.toFixed(4));setLonText(clampedLon.toFixed(4));};
+  const atEvent=(event:React.PointerEvent<SVGSVGElement>|React.WheelEvent<SVGSVGElement>)=>{
+    const box=(event.currentTarget as SVGSVGElement).getBoundingClientRect();
+    return [view.lon+(event.clientX-box.left)/Math.max(1,box.width)*view.lonSpan,
+            view.lat+view.latSpan-(event.clientY-box.top)/Math.max(1,box.height)*view.latSpan] as const;};
+  async function save(){setSaving(true);
+    try{const response=await fetch(`/gaia/api/sources/${camera.id}/location`,{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({latitude_deg:lat,longitude_deg:lon})});
+      if(!response.ok)throw new Error();
+      onSaved({...camera,latitude_deg:lat,longitude_deg:lon});onClose()}
+    catch{alert('The camera service is not available yet. Please try again shortly.')}
+    finally{setSaving(false)}}
+  const lonStep=graticuleStep(view.lonSpan),latStep=graticuleStep(view.latSpan);
+  const box=[view.lon,-(view.lat+view.latSpan),view.lonSpan,view.latSpan];
+  // Marks and text are sized from the view so they stay the same on screen at
+  // every zoom instead of swelling with it.
+  const unit=view.lonSpan/100;
+  return <div className="modal-backdrop"><div className="location-editor">
+    <button className="close" onClick={onClose} aria-label="Close"><X/></button>
+    <span className="eyebrow">CAMERA POSITION</span><h2>{camera.name}</h2>
+    <p>Click the map to place the camera, or type exact WGS84 coordinates.
+      Scroll to zoom; drag with shift to pan.</p>
+    <div className="location-zoom">
+      <button type="button" aria-label="Zoom in"
+        onClick={()=>setView(v=>zoomAt(v,1.8,v.lon+v.lonSpan/2,v.lat+v.latSpan/2))}>+</button>
+      <button type="button" aria-label="Zoom out"
+        onClick={()=>setView(v=>zoomAt(v,1/1.8,v.lon+v.lonSpan/2,v.lat+v.latSpan/2))}>&minus;</button>
+      <button type="button" onClick={()=>setView(WHOLE_WORLD)}>Whole world</button>
+      <button type="button" onClick={()=>setView(clampView({lon:lon-5,lat:lat-2.5,lonSpan:10,latSpan:5}))}>
+        Centre on camera</button>
+      <small>{view.lonSpan>=359?'whole world':`${view.lonSpan.toFixed(view.lonSpan<2?2:0)}\u00b0 across`}</small>
+    </div>
+    <svg className="location-map" viewBox={box.join(' ')} preserveAspectRatio="none"
+      role="img" aria-label="Map for choosing the camera position"
+      onWheel={event=>{event.preventDefault();const [l,a]=atEvent(event);
+        setView(v=>zoomAt(v,event.deltaY<0?1.25:1/1.25,l,a))}}
+      onPointerDown={event=>{event.currentTarget.setPointerCapture(event.pointerId);
+        const [l,a]=atEvent(event);
+        if(event.shiftKey)drag.current={x:event.clientX,y:event.clientY,lon:view.lon,lat:view.lat};
+        else place(a,l)}}
+      onPointerMove={event=>{
+        const held=drag.current;
+        if(held){const rect=event.currentTarget.getBoundingClientRect();
+          setView(v=>clampView({...v,
+            lon:held.lon-(event.clientX-held.x)/Math.max(1,rect.width)*v.lonSpan,
+            lat:held.lat+(event.clientY-held.y)/Math.max(1,rect.height)*v.latSpan}));
+          return}
+        if(event.buttons){const [l,a]=atEvent(event);place(a,l)}}}
+      onPointerUp={()=>{drag.current=null}}>
+      <rect x={box[0]} y={box[1]} width={box[2]} height={box[3]} className="map-sea"/>
+      {world.map((d,n)=><path key={n} d={d} className="map-land"/>)}
+      {gridLines(view.lon,view.lonSpan,lonStep).map(v=>
+        <line key={`x${v}`} x1={v} x2={v} y1={box[1]} y2={box[1]+box[3]}
+          className={Math.abs(v)<1e-9?'map-axis':'map-grid'}/>)}
+      {gridLines(view.lat,view.latSpan,latStep).map(v=>
+        <line key={`y${v}`} y1={-v} y2={-v} x1={box[0]} x2={box[0]+box[2]}
+          className={Math.abs(v)<1e-9?'map-axis':'map-grid'}/>)}
+      {/* Labels ride the edges of the view so they stay on screen at any zoom. */}
+      {gridLines(view.lon,view.lonSpan,lonStep).map(v=>
+        <text key={`xl${v}`} x={v+unit*0.6} y={box[1]+box[3]-unit*0.6}
+          className="map-tick" style={{fontSize:`${unit*2.6}px`}}>{formatLongitude(v,lonStep)}</text>)}
+      {gridLines(view.lat,view.latSpan,latStep).map(v=>
+        <text key={`yl${v}`} x={box[0]+unit*0.6} y={-v-unit*0.6}
+          className="map-tick" style={{fontSize:`${unit*2.6}px`}}>{formatLatitude(v,latStep)}</text>)}
+      <g className="map-marker" style={{transform:`translate(${lon}px,${-lat}px)`}}>
+        <circle r={unit*1.6}/>
+        <line x1={-unit*3} x2={unit*3} y1={0} y2={0}/>
+        <line y1={-unit*3} y2={unit*3} x1={0} x2={0}/>
+      </g>
+    </svg>
+    <div className="form-row">
+      <label>Latitude<input type="text" inputMode="decimal" value={latText}
+        aria-label="Latitude in degrees"
+        onChange={e=>typedLat(e.target.value)} onBlur={settle}/></label>
+      <label>Longitude<input type="text" inputMode="decimal" value={lonText}
+        aria-label="Longitude in degrees"
+        onChange={e=>typedLon(e.target.value)} onBlur={settle}/></label>
+    </div>
+    <button className="send-button" onClick={save} disabled={saving}>
+      {saving?'Saving\u2026':'Save camera position'}</button>
+  </div></div>;
 }
 
 function MaskEditor({camera,onClose}:{camera:Camera,onClose:()=>void}){

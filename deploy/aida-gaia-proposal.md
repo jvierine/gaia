@@ -7,7 +7,23 @@ inspect the identifications first. Some automatic fits are dubious (a hot pixel,
 a satellite, a star pulled onto its neighbour), and a model fitted through them
 should not become a calibration unseen.
 
-**This patch has to be applied by `j`.** AIDA lives in
+## Applying it
+
+A verified patch and an installer now sit beside this file:
+`deploy/aida-proposal.patch` and `deploy/apply-aida-proposal.sh` (also staged
+at `/mnt/data/juha/gaia/staging/`). The patch was generated against the served
+`app.js` as of 2026-09-22 11:30, is purely additive (58 lines added, none
+removed), and both the original and the patched file parse under `node --check`.
+`patch --dry-run` applies cleanly.
+
+    sudo sh /mnt/data/juha/gaia/staging/apply-aida-proposal.sh
+
+The script refuses to do anything twice, backs the file up first, and restores
+the backup if the patched file does not parse -- a syntax error in `app.js`
+takes the whole calibrator down and would otherwise only show in a browser
+console.
+
+**It has to be applied by `j` or root.** AIDA lives in
 `/home/j/src/widefield-star-calibrator` (served at `/aida/`, with an identical
 copy at `/mnt/data/juha/gaia/aida-code`), which `bgu001` cannot write. It is
 also a separate repository from `jvierine/gaia`, so it does not arrive with a

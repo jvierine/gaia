@@ -1,0 +1,50 @@
+--- /tmp/claude-1014/-home-bgu001/dca2c110-b99e-4e17-8791-2c428e4f6347/scratchpad/app2.orig.js	2026-09-22 15:16:15.827328501 +0000
++++ /tmp/claude-1014/-home-bgu001/dca2c110-b99e-4e17-8791-2c428e4f6347/scratchpad/app2.patched.js	2026-09-22 15:16:15.850074012 +0000
+@@ -4660,6 +4660,34 @@
+     // has been written on the GAIA side -- some automatic identifications are
+     // dubious, and the point of the handoff is that a person culls them here
+     // and sends back a calibration only if the fit is sound.
++    // GAIA identifies stars by position -- its catalogue is Tycho-2, which
++    // carries no names at all -- so the name has to come from the bright-star
++    // list already loaded here. Nearest neighbour within an arcminute: the two
++    // catalogues agree to well inside that, and beyond it a match would be a
++    // different star rather than the same one measured differently.
++    function gaiaStarName(raHours, decDeg) {
++        const catalog = window.AIDA_STAR_CATALOG || [];
++        const cosDec = Math.cos(decDeg * Math.PI / 180);
++        const limit = 1 / 60;
++        let best = null;
++        let bestSeparation = Infinity;
++        for (const entry of catalog) {
++            if (!entry || entry.length < 4 || !entry[3]) continue;
++            const dDec = Number(entry[1]) - decDeg;
++            if (Math.abs(dDec) > limit) continue;
++            // Right ascension is in hours; fifteen degrees to the hour, and the
++            // sky narrows towards the pole.
++            const dRa = (Number(entry[0]) - raHours) * 15 * cosDec;
++            if (Math.abs(dRa) > limit) continue;
++            const separation = Math.hypot(dRa, dDec);
++            if (separation < bestSeparation) {
++                bestSeparation = separation;
++                best = String(entry[3]);
++            }
++        }
++        return bestSeparation <= limit ? best : null;
++    }
++
+     async function applyGaiaProposal(sourceId) {
+         try {
+             const response = await fetch(
+@@ -4688,7 +4716,11 @@
+                     },
+                     catalog: {
+                         key: String(match.star_key || `gaia-${index}`),
+-                        name: String(match.star_key || ""),
++                        // A name where the bright-star list knows one, and the
++                        // position otherwise -- an unnamed star is still a
++                        // perfectly good identification.
++                        name: gaiaStarName(Number(match.ra_hours), Number(match.dec_deg))
++                            || String(match.star_key || ""),
+                         raHours: Number(match.ra_hours) || 0,
+                         decDeg: Number(match.dec_deg) || 0,
+                         mag: Number(match.mag) || 0,

@@ -343,3 +343,4 @@
 .drift-pick select{background:var(--panel,#10161d);color:inherit;border:1px solid var(--line,#2a3540);
   border-radius:4px;padding:.2rem .35rem;font:inherit;max-width:26rem}
 .drift-pick small{color:var(--muted,#8fa0ae)}
+.send-button.disabled{opacity:.45;cursor:default;pointer-events:none}

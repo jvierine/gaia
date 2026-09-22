@@ -958,6 +958,15 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
     }catch(e){setError(String((e as Error).message||e))}finally{setBusy(false)}
   };
   useEffect(()=>{void load()},[camera.id,judging]);
+  // Fetch the proposal as soon as one is on offer. It writes nothing, and
+  // having it in hand means the panel can show the proposed fit's own
+  // residuals without anyone pressing anything first.
+  useEffect(()=>{
+    if(!drift?.refit_available){setProposal(null);return}
+    let live=true;void refit().finally(()=>{if(!live)return});
+    return()=>{live=false};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[drift?.refit_available,drift?.frame?.image_id,judging]);
   // Following the live selection means the scatter reacts when a different
   // calibration is made current, which is what it failed to do before.
   useEffect(()=>{setJudging(selected)},[selected,camera.id]);
@@ -1174,14 +1183,21 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
         <span><i className="swatch-fitted"/>fitted Gaussian centroid</span>
       </div>
       <div className="drift-actions">
-        <button type="button" disabled={!drift?.refit_available||refitting} onClick={()=>void refit()}>
-          {refitting?'Fitting\u2026':'Refit lens parameters (WISC/AIDA)'}</button>
-        {proposal&&frame&&<a className="send-button"
-          href={`/aida/?gaia=1&source_id=${encodeURIComponent(camera.id)}`
-            +`&image_id=${encodeURIComponent(proposal.image_id||frame.image_id)}&proposal=1`}
-          target="_blank" rel="noopener noreferrer">
-          Inspect the {proposal.stars} identifications in WISC/AIDA \u2197</a>}
-        <small>{drift?.refit_reason}</small>
+        {/* A link, not a button: the fit itself belongs in WISC/AIDA, where the
+            identifications can be looked at and culled before any of it becomes
+            a calibration. GAIA computes the proposal; AIDA fetches it. */}
+        <a className={`send-button${drift?.refit_available?'':' disabled'}`}
+          aria-disabled={!drift?.refit_available}
+          href={drift?.refit_available&&frame
+            ?`/aida/?gaia=1&source_id=${encodeURIComponent(camera.id)}`
+              +`&image_id=${encodeURIComponent(frame.image_id)}&proposal=1`
+            :undefined}
+          target="_blank" rel="noopener noreferrer"
+          onClick={event=>{if(!drift?.refit_available)event.preventDefault()}}>
+          Refit lens parameters (WISC/AIDA) \u2197</a>
+        <small>{refitting?'fitting\u2026'
+          :proposal?`${proposal.stars} stars, ${proposal.before.toFixed(2)} \u2192 ${proposal.after.toFixed(2)} px RMS proposed; nothing written`
+          :drift?.refit_reason}</small>
       </div>
       {outcome&&<p className="drift-outcome" role="status">{outcome}</p>}
       <small className="drift-note">A refit is added to the list above and left unselected.

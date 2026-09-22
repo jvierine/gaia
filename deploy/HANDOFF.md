@@ -29,6 +29,11 @@ both GAIA static entry points built. Live HTTP checks returned 200 for the
 normal viewer, source API, event route, 1.46 MB event manifest, representative
 thumbnail/preview, and AIDA. The deployed admin bundle is
 `main-DunTn8Zr.js`; the normal manifest/API services were not restarted.
+The required matching public build was delivered through release branch
+`codex/public-viewer` at `0a8c063` and installed on juha.no with bundle
+`main-DvOJ5O5E.js`; the previous index is retained as
+`legacy/index-before-0a8c063.html`. Live HTTPS checks returned 200 for the
+public index, JS, CSS and 6.87 MB open manifest. Event data remain Revontuli-only.
 
 ## For j: two ownership settings on web-dist (2026-09-16)
 

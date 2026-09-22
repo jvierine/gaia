@@ -644,7 +644,7 @@ function StarPhotometry({camera,onClose}:{camera:Camera;onClose:()=>void}){
             <span><i style={{background:'rgb(90,150,255)'}}/>blue</span>
             <small>Horizontal: {keogram.a.name}. Vertical: {keogram.b.name}. The faint
               diagonal is equal response. A straight line through a channel is the
-              pair\u2019s gain ratio; its slope is what the equalization solve wants,
+              pair’s gain ratio; its slope is what the equalization solve wants,
               and it can only be read from windows with real structure in them.
               Windows keep the frames they were made from, so several nights can be
               selected and fitted together. Intensities come from {keogram.pixel_source}.</small>
@@ -963,11 +963,11 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
   // having it in hand means the panel can show the proposed fit's own
   // residuals without anyone pressing anything first.
   useEffect(()=>{
-    if(!drift?.refit_available){setProposal(null);return}
+    if(!drift?.frame){setProposal(null);return}
     let live=true;void refit().finally(()=>{if(!live)return});
     return()=>{live=false};
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[drift?.refit_available,drift?.frame?.image_id,judging]);
+  },[drift?.frame?.image_id,judging]);
   // Following the live selection means the scatter reacts when a different
   // calibration is made current, which is what it failed to do before.
   useEffect(()=>{setJudging(selected)},[selected,camera.id]);
@@ -978,7 +978,10 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
       const r=await fetch(`/gaia/api/sources/${encodeURIComponent(camera.id)}/calibration/refit-proposal`,{cache:'no-store'});
       const body=await r.json().catch(()=>null) as {image_id?:string;stars?:number;
         residual_px_before?:number;residual_px_after?:number;matches?:DriftStar[]}|null;
-      if(!r.ok)throw new Error(await r.text()||'The fit was refused.');
+      if(!r.ok){
+        // 409 means the frame cannot support a fit -- too few stars, usually.
+        // That is ordinary, and must not stop the frame opening in AIDA.
+        setProposal(null);setOutcome('');return}
       const before=body?.residual_px_before??0,after=body?.residual_px_after??0;
       setProposal({stars:body?.stars??0,before,after,image_id:body?.image_id??''});
       // Show the proposed model's own residuals straight away, so the fit can
@@ -1187,17 +1190,22 @@ function CalibrationDrift({camera,calibrations,selected,onRefit}:
         {/* A link, not a button: the fit itself belongs in WISC/AIDA, where the
             identifications can be looked at and culled before any of it becomes
             a calibration. GAIA computes the proposal; AIDA fetches it. */}
-        <a className={`send-button${drift?.refit_available?'':' disabled'}`}
-          aria-disabled={!drift?.refit_available}
-          href={drift?.refit_available&&frame
+        <a className={`send-button${frame?'':' disabled'}`}
+          aria-disabled={!frame}
+          href={frame
             ?`/aida/?gaia=1&source_id=${encodeURIComponent(camera.id)}`
-              +`&image_id=${encodeURIComponent(frame.image_id)}&proposal=1`
+              +`&image_id=${encodeURIComponent(frame.image_id)}`
+              // Only where a fit actually converged: with no proposal to fetch,
+              // asking for one would greet the operator with an error instead
+              // of the frame they wanted.
+              +(proposal?'&proposal=1':'')
             :undefined}
           target="_blank" rel="noopener noreferrer"
-          onClick={event=>{if(!drift?.refit_available)event.preventDefault()}}>
-          Refit lens parameters (WISC/AIDA) \u2197</a>
+          onClick={event=>{if(!frame)event.preventDefault()}}>
+          {proposal?'Refit lens parameters (WISC/AIDA)':'Open this frame in WISC/AIDA'}{' \u2197'}</a>
         <small>{refitting?'fitting\u2026'
           :proposal?`${proposal.stars} stars, ${proposal.before.toFixed(2)} \u2192 ${proposal.after.toFixed(2)} px RMS proposed; nothing written`
+          :frame?`${frame.found} stars is too few to fit eight parameters; the frame still opens`
           :drift?.refit_reason}</small>
       </div>
       {outcome&&<p className="drift-outcome" role="status">{outcome}</p>}

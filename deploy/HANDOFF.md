@@ -1,5 +1,24 @@
 # GAIA handoff for j and bgu001
 
+## Event catalogue navigation (2026-09-22)
+
+Deployed source `7aca336` on Revontuli. The normal `/gaia/` header now has an
+Events tab immediately after Contribute. It opens an extensible event catalogue;
+the first entry links to the isolated November 2025 G4 study at
+`/gaia/events/20251111/`. This is a shell-only navigation change: the catalogue
+does not query or modify the realtime database, crawler, projection or
+publication paths. All 73 frontend tests passed and the static build completed.
+The live admin bundle is `main-DHhhQJe9.js` with stylesheet
+`main-fIHicVJd.css`; browser verification showed the Events tab, the G4 card and
+its canonical link with no console errors.
+
+The ordinary `npm run build:static` initially stopped because the retained
+`web-dist/assets-before-recovery` directory is owned by `bgu001` with an ACL
+mask that denies `j` write access. It was left untouched. The same checked-out
+commit was built into ignored `work/events-build`, then its hashed assets were
+installed locally on Revontuli with `index.html` replaced last. The unrelated
+modified Apache files and backup files in the shared checkout were preserved.
+
 ## Isolated November 2025 event study (2026-09-22)
 
 Deployed GAIA source `77e3867` at `/gaia/events/20251111/`. This is a separate

@@ -2,17 +2,22 @@
 
 ## The rule
 
-**AIDA's source is not kept here and is not patched from here.** It lives in
-`/home/j/src/widefield-star-calibrator` (served at `/aida/`, and standalone at
-juha.no/aida), with a copy at `/mnt/data/juha/gaia/aida-code`. It has to keep
-working as a standalone calibrator *and* as GAIA's calibrator for the realtime
-and event viewers, and it is edited in its own tree.
+**AIDA's source is not kept here and is not patched from here.** It is its own
+project under its own version control:
 
-This repository briefly carried patches against `app.js` and scripts to apply
-them. That was a second source of truth for one file, which is the fastest way
-to a fork nobody can maintain. They are gone; the content is still in git
-history (`ab3235e`, `a6a2b3e`) if anyone wants it, and the episode below says
-why it should be re-derived rather than replayed.
+    git@github.com:jvierine/widefield-star-calibrator.git   (branch main)
+
+checked out at `/mnt/data/juha/gaia/aida-code` and deployed to
+`/home/j/src/widefield-star-calibrator`, which is what `/aida/` serves here and
+what juha.no/aida serves standalone. The deployment has no `.git` of its own,
+which is as it should be: it is a deploy target, not a second checkout.
+
+Changes to AIDA therefore belong as commits on that repository, reviewed there.
+This repository briefly carried patches against its `app.js` and scripts to
+apply them, which made a second source of truth for one file -- the fastest way
+to a fork nobody can maintain. They are gone; the content is still in this
+repository's history (`ab3235e`, `a6a2b3e`) if anyone wants to re-derive it
+against the current file.
 
 What GAIA owns is the **contract**: an endpoint, and what it serves. What AIDA
 does with it is AIDA's.
@@ -53,16 +58,19 @@ belongs there, matching on position.
 
 ## What happened on 2026-09-22, and the lesson
 
-A patch adding `proposal=1` support was applied to `app.js` at 15:07 and was
-gone by 15:23 -- the file was edited again in its own tree and the change did
-not survive. Nothing broke: AIDA parsed, served, and `loadGaiaSourceImage`,
-`loadGaiaEventImage` and `sendGaiaCalibration` were all intact throughout.
+A patch adding `proposal=1` support was applied directly to the *deployed*
+`app.js` at 15:07 and was gone by 15:23, replaced when Juha's own work landed --
+commit `53c9453`, "Couple AIDA to GAIA event calibrations". Nothing broke at any
+point: AIDA parsed, served, and `loadGaiaSourceImage`, `loadGaiaEventImage` and
+`sendGaiaCalibration` were intact throughout.
 
-But it could have. Two parties editing one unversioned file, one of them through
-patches kept in a different repository, is how a calibrator serving two products
-stops being maintainable.
+The change vanished because it was made to a deployed checkout rather than
+committed to the repository. That is the mechanism working, not failing: an
+untracked edit to a deploy target is supposed to be discarded by the next
+deploy. The lesson is simply that AIDA changes go through
+`jvierine/widefield-star-calibrator` like any other change to it, as a commit
+and a review, and never as a patch applied from a neighbouring project.
 
-**AIDA is under no version control at all** -- neither copy is a git repository.
-That is the deeper problem, and it is worth fixing before anything else: with a
-repository, a change like this is a branch and a review, the two copies cannot
-silently diverge, and a lost edit is recoverable instead of merely gone.
+The `proposal=1` support is therefore still unbuilt on AIDA's side, and GAIA
+does not need it to be. If it is wanted, it should be raised as a pull request
+on that repository by someone with an identity there.

@@ -36,6 +36,19 @@ Validation before deployment: 73/73 GAIA frontend tests, 111/111 AIDA tests
 `git diff --check` passed. Repository-wide oxlint remains red on its existing
 unrelated backlog; the production build/type transform is clean.
 
+Deployment verified live. Revontuli runs GAIA `cd2467d` (implementation
+`8fc4c2e`) with admin bundle `main-NH24wFrZ.js` and stylesheet
+`main-vbRKhveQ.css`; AIDA runs `53c9453` with cache key
+`20260922-gaia-event-saveback`. Public release `da3a8de` was pulled through Git
+on juha.no and serves matching shared-globe bundle `main-BURAodrC.js` and the
+same stylesheet. Live checks returned 196 normal realtime sources, an empty
+event projection catalogue before any real event calibration, the selected
+event JPEG with authoritative UTC/lat/lon headers, and default event settings.
+Browser verification showed the normal realtime globe, event details, reused
+crop/mask editor, AIDA-loaded event image with its Save lens model to GAIA
+button, and the juha.no globe after its publication loaded. No page/WebGL
+errors were captured. No production calibration was fabricated for testing.
+
 ## Event catalogue navigation (2026-09-22)
 
 Deployed source `7aca336` on Revontuli. The normal `/gaia/` header now has an

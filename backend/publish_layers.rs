@@ -30,7 +30,7 @@ fn copy(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 #[derive(Clone, serde::Serialize)]
-struct Rules {
+pub(crate) struct Rules {
     falloff_deg: f64,
     taper_start_deg: f64,
     taper_width_deg: f64,
@@ -40,7 +40,7 @@ struct Rules {
     sun_floor: f64,
 }
 impl Rules {
-    fn load() -> Result<Self> {
+    pub(crate) fn load() -> Result<Self> {
         let env = |name: &str, default: f64| {
             std::env::var(name)
                 .ok()
@@ -75,6 +75,35 @@ impl Rules {
         );
         Ok(r)
     }
+}
+
+/// Add the IGRF, horizon and mask-boundary weight to a compact 20-byte
+/// projection mesh. Realtime publication and isolated event studies use this
+/// same compositor input.
+pub(crate) fn weight_mesh_bytes(
+    s:&AppState,geo:&[u8],lat:f64,lon:f64,alt:f64,crop:[f64;4],
+    polygons:&[Vec<[f64;2]>],raw_size:[f64;2],rules:&Rules,
+)->Result<Vec<u8>>{
+    let fit=(256./raw_size[0]).min(256./raw_size[1]).min(1.);
+    let size=[raw_size[0]*fit,raw_size[1]*fit];
+    let origin=geometry::observer_ecef(lat,lon,alt/1000.);
+    let igrf=ferromagnetic::igrf::IGRF::default();
+    let mut bytes=Vec::with_capacity(geo.len()/20*24);
+    for vertex in geo.chunks_exact(20){
+        let v:Vec<f32>=vertex.chunks_exact(4).map(|b|f32::from_le_bytes(b.try_into().unwrap())).collect();
+        let hit=[v[2] as f64*6371.,v[0] as f64*6371.,v[1] as f64*6371.];
+        let(la,lo)=geometry::ecef_to_lat_lon(hit);
+        let f=igrf.calc(la,lo,100.,s.igrf_year as f64).result;
+        let field=geometry::az_el_direction(la,lo,f.declination,-f.inclination);
+        let look=[hit[0]-origin[0],hit[1]-origin[1],hit[2]-origin[2]];
+        let fade=if rules.mask_fade_px>0.{
+            geometry::smooth_step(crate::pixel_mask::boundary_distance_px([v[3] as f64,v[4] as f64],crop,polygons,size)/rules.mask_fade_px).max(1e-6)
+        }else{1.};
+        let weight=(geometry::magnetic_axis_weight(look,field,rules.falloff_deg.to_radians())
+            *geometry::zenith_taper(geometry::zenith_angle(origin,look),rules.taper_start_deg.to_radians(),rules.taper_width_deg.to_radians())*fade)as f32;
+        bytes.extend_from_slice(vertex);bytes.extend_from_slice(&weight.to_le_bytes());
+    }
+    Ok(bytes)
 }
 /// The cloud weight field for one frame, written as a small greyscale PNG in
 /// the camera's own texture coordinates so the browser can sample it beside the
@@ -189,62 +218,20 @@ fn weighted_mesh(
             vec![]
         };
         let (raw_w,raw_h):(f64,f64)=conn.query_row("SELECT width,height FROM images WHERE source_id=?1 AND width IS NOT NULL AND height IS NOT NULL ORDER BY observation_utc DESC LIMIT 1",[source],|r|Ok((r.get::<_,i64>(0)? as f64,r.get::<_,i64>(1)? as f64))).unwrap_or((256.,256.));
-        let fit = (256. / raw_w).min(256. / raw_h).min(1.);
-        let (w, h) = (raw_w * fit, raw_h * fit);
         let cached = std::fs::read(cache.join(format!("magnetic-{magnetic_key}.bin"))).ok();
         let geo = std::fs::read(cache.join(name))?;
-        let origin = geometry::observer_ecef(lat, lon, alt / 1000.);
-        let igrf = ferromagnetic::igrf::IGRF::default();
-        let mut bytes = Vec::with_capacity(geo.len() / 20 * 24);
-        if let Some(ref weights) = cached {
+        let bytes=if let Some(ref weights)=cached {
             anyhow::ensure!(
                 weights.len() == geo.len() / 5,
                 "Legacy weight cache length mismatch"
             );
-        }
-        for (index, vertex) in geo.chunks_exact(20).enumerate() {
-            if let Some(ref weights) = cached {
+            let mut bytes=Vec::with_capacity(geo.len()/20*24);
+            for (index,vertex) in geo.chunks_exact(20).enumerate(){
                 bytes.extend_from_slice(vertex);
                 bytes.extend_from_slice(&weights[index * 4..index * 4 + 4]);
-                continue;
             }
-            let v: Vec<f32> = vertex
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                .collect();
-            let hit = [
-                v[2] as f64 * 6371.,
-                v[0] as f64 * 6371.,
-                v[1] as f64 * 6371.,
-            ];
-            let (la, lo) = geometry::ecef_to_lat_lon(hit);
-            let f = igrf.calc(la, lo, 100., s.igrf_year as f64).result;
-            let field = geometry::az_el_direction(la, lo, f.declination, -f.inclination);
-            let look = [hit[0] - origin[0], hit[1] - origin[1], hit[2] - origin[2]];
-            let fade = if rules.mask_fade_px > 0. {
-                geometry::smooth_step(
-                    crate::pixel_mask::boundary_distance_px(
-                        [v[3] as f64, v[4] as f64],
-                        crop,
-                        &polygons,
-                        [w, h],
-                    ) / rules.mask_fade_px,
-                )
-                .max(1e-6)
-            } else {
-                1.
-            };
-            let weight =
-                (geometry::magnetic_axis_weight(look, field, rules.falloff_deg.to_radians())
-                    * geometry::zenith_taper(
-                        geometry::zenith_angle(origin, look),
-                        rules.taper_start_deg.to_radians(),
-                        rules.taper_width_deg.to_radians(),
-                    )
-                    * fade) as f32;
-            bytes.extend_from_slice(vertex);
-            bytes.extend_from_slice(&weight.to_le_bytes());
-        }
+            bytes
+        }else{weight_mesh_bytes(s,&geo,lat,lon,alt,crop,&polygons,[raw_w,raw_h],rules)?};
         atomic(&dest, &bytes)?;
     }
     Ok((output, std::fs::metadata(dest)?.len() / 24))

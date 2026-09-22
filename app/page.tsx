@@ -6,6 +6,7 @@ import {liveCutoff,LIVE_DELAY_MINUTES} from '../src/live-time';
 import { Activity, Aperture, CalendarDays, CircleHelp, Database, Lightbulb, Satellite, Send, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import GaiaGlobeView from '../src/GaiaGlobeView';
+import SharedMaskEditor from '../src/MaskEditor';
 import {clipToFrame,frameBoundary,voronoiEdges} from '../src/voronoi';
 // `extent` is imported under another name: the panel already has a local one
 // for the scatter, and a shadowed import would silently call the wrong function.
@@ -1343,7 +1344,7 @@ export default function Home() {
     {photometryCamera&&<StarPhotometry camera={photometryCamera} onClose={()=>setPhotometryCamera(null)}/>}
     {calibratingCamera&&<CalibrationPicker camera={calibratingCamera} onClose={()=>setCalibratingCamera(null)}/>}
     {editingCamera&&<LocationEditor camera={editingCamera} onClose={()=>setEditingCamera(null)} onSaved={saved=>setCameras(rows=>rows.map(row=>row.id===saved.id?saved:row))}/>} 
-    {maskingCamera&&<MaskEditor camera={maskingCamera} onClose={()=>setMaskingCamera(null)}/>} 
+    {maskingCamera&&<SharedMaskEditor title={maskingCamera.name} imageUrl={`/gaia/api/sources/${encodeURIComponent(maskingCamera.id)}/latest`} settingsUrl={`/gaia/api/sources/${encodeURIComponent(maskingCamera.id)}/settings`} onClose={()=>setMaskingCamera(null)}/>}
     {browsingCamera&&<FrameBrowser camera={browsingCamera} onClose={()=>setBrowsingCamera(null)}/>}
   </main>;
 }

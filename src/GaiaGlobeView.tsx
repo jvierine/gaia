@@ -14,13 +14,15 @@ type Props={
   showTools?:boolean;
   /** Filled with the zoom action so a parent can drive it from its own controls. */
   zoomRef?:{current:((action:'in'|'out'|'reset')=>void)|null};
-  mode?:'realtime'|'base';
+  mode?:'realtime'|'base'|'event';
+  /** A browser-layer manifest owned by an isolated event study. */
+  manifestUrl?:string;
   onViewState?:(view:GlobeViewState)=>void;
   children?:ReactNode;
 };
 
 /** The single 3D stitched-atlas view used by both the public and admin shells. */
-export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},sunLock=false,showTools=true,zoomRef,mode='realtime',onViewState,children}:Props){
+export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},sunLock=false,showTools=true,zoomRef,mode='realtime',manifestUrl,onViewState,children}:Props){
   const [normalize,setNormalize]=useState(readNormalizationPreference);
   const [buffer,setBuffer]=useState({active:false,done:0,total:0,failed:0,message:'',unit:'cameras checked'});
   const canvas=useRef<HTMLCanvasElement>(null),epoch=useRef(getEpochMillis),loading=useRef(onLoading);
@@ -37,12 +39,12 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
       // Both shells deliberately use the published magnetic-weighted composite.
       // Keeping this fixed prevents the admin view from drifting to a different
       // per-camera alpha-overlay implementation.
-      stop=startGaiaGlobe(canvas.current,()=>epoch.current(),value=>loading.current(value),mode==='realtime',{baseOnly:mode==='base'});
+      stop=startGaiaGlobe(canvas.current,()=>epoch.current(),value=>loading.current(value),mode==='realtime',{baseOnly:mode==='base',manifestUrl:mode==='event'?manifestUrl:undefined});
     }catch(error){
       loading.current(false);console.error('GAIA WebGL failed',error);canvas.current?.classList.add('webgl-failed');
     }
     return()=>{element.removeEventListener('gaia-buffer-progress',progress);element.removeEventListener('gaia-view-state',view);stop?.()};
-  },[]);
+  },[mode,manifestUrl]);
   useEffect(()=>{canvas.current?.dispatchEvent(new CustomEvent('gaia-sunlock',{detail:sunLock}))},[sunLock]);
   useEffect(()=>{try{localStorage.setItem('gaia-normalize-images',String(normalize))}catch{}canvas.current?.dispatchEvent(new CustomEvent('gaia-normalize',{detail:normalize}))},[normalize]);
   const zoom=(detail:'in'|'out'|'reset')=>canvas.current?.dispatchEvent(new CustomEvent('gaia-zoom',{detail}));

@@ -4,6 +4,7 @@ mod cloudweight;
 mod crawler;
 mod db;
 mod equalize;
+mod event_study;
 mod extinction;
 mod geometry;
 mod igrf_grid;
@@ -2642,6 +2643,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/images/{id}/texture", get(image_texture))
         .route("/api/images/{id}/original", get(original_image))
         .route("/api/calibrations", post(calibration))
+        .route("/api/events/{event}/projection-manifest", get(event_study::projection_manifest))
+        .route("/api/events/{event}/assets/{name}", get(event_study::projection_asset))
+        .route("/api/events/{event}/calibrations", post(event_study::calibration))
+        .route("/api/events/{event}/records/{record}/image", get(event_study::record_image))
+        .route("/api/events/{event}/records/{record}/settings", get(event_study::settings).post(event_study::save_settings))
         .route("/api/sources/{id}/stars", get(source_stars))
         .route("/api/sources/{id}/stars/series", get(source_star_series))
         .route("/api/sources/{id}/calibration/drift", get(source_calibration_drift))

@@ -28,6 +28,23 @@ CREATE TABLE IF NOT EXISTS camera_settings(
   -- Manual quality weight as a power of two: 0 is full weight, -8 is 1/256.
   quality_exponent INTEGER NOT NULL DEFAULT 0
 );
+
+-- Event-study calibrations are deliberately isolated from fixed realtime
+-- cameras. A social-media observation is one image at one place and time, not
+-- a reusable source whose model should affect crawler or publisher state.
+CREATE TABLE IF NOT EXISTS event_calibrations(
+  id TEXT PRIMARY KEY, event_id TEXT NOT NULL, record_id TEXT NOT NULL,
+  created_utc TEXT NOT NULL, hdf5_path TEXT NOT NULL, residual_px REAL,
+  submitted_by TEXT, star_count INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_event_calibrations_record
+  ON event_calibrations(event_id,record_id,created_utc DESC);
+CREATE TABLE IF NOT EXISTS event_media_settings(
+  event_id TEXT NOT NULL, record_id TEXT NOT NULL, updated_utc TEXT NOT NULL,
+  crop_json TEXT, mask_json TEXT, mask_enabled INTEGER NOT NULL DEFAULT 1,
+  selected_calibration_id TEXT,
+  PRIMARY KEY(event_id,record_id)
+);
 CREATE TABLE IF NOT EXISTS removed_sources(
   source_id TEXT PRIMARY KEY REFERENCES sources(id), removed_utc TEXT NOT NULL
 );

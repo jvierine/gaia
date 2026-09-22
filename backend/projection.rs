@@ -17,7 +17,7 @@ pub fn optical_parameters(hdf5_path:&str)->Result<Vec<f64>> {
     Ok(p)
 }
 
-fn numeric(path:&str, name:&str, attr:bool)->Result<Vec<f64>> {
+pub(crate) fn numeric(path:&str, name:&str, attr:bool)->Result<Vec<f64>> {
     let out=std::process::Command::new("h5dump").args(["-y","-w","0","-m","%0.17g",if attr{"-a"}else{"-d"},name,path]).output()?;
     if !out.status.success(){bail!("cannot read calibration {name}")}
     let text=String::from_utf8(out.stdout)?;
@@ -69,15 +69,22 @@ pub fn build(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Resu
     }else{vec![]};
     let at=at.map(|t|t.to_rfc3339());
     let (path,cal,lat,lon,alt,utc):(String,String,f64,f64,f64,String)=conn.query_row("SELECT i.archive_path,c.hdf5_path,s.latitude_deg,s.longitude_deg,COALESCE(s.altitude_m,0),i.observation_utc FROM sources s JOIN images i ON i.source_id=s.id JOIN calibrations c ON c.id=COALESCE((SELECT cs2.selected_calibration_id FROM camera_settings cs2 WHERE cs2.source_id=s.id AND EXISTS(SELECT 1 FROM calibrations csel WHERE csel.id=cs2.selected_calibration_id AND csel.source_id=s.id)),(SELECT cc.id FROM calibrations cc WHERE cc.source_id=s.id AND (cc.valid_from_utc IS NULL OR julianday(cc.valid_from_utc)<=julianday(i.observation_utc)) AND (cc.valid_to_utc IS NULL OR julianday(cc.valid_to_utc)>julianday(i.observation_utc)) ORDER BY julianday(cc.valid_from_utc) DESC,cc.created_utc DESC LIMIT 1)) WHERE s.id=?1 AND s.enabled=1 AND (?2 IS NULL OR (julianday(i.observation_utc)<=julianday(?2) AND julianday(i.observation_utc)>=julianday(?2)-10.0/1440.0)) ORDER BY i.observation_utc DESC LIMIT 1",rusqlite::params![id,at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
-    let p=numeric(&cal,"wisc_optpar_with_optmod",false)?;if p.len()<9{bail!("invalid lens parameters")}
-    let cw=numeric(&cal,"image_width",true)?[0];let ch=numeric(&cal,"image_height",true)?[0];
-    let image=image::open(&path)?.thumbnail(256,256).to_rgb8();let(w,h)=image.dimensions();
+    project_image(id,&utc,std::path::Path::new(&path),&cal,lat,lon,alt,crop,&polygons)
+}
+
+/// Project one explicitly identified image with one AIDA model. Event studies
+/// use this without inserting their one-off photographs into the realtime
+/// camera tables.
+pub(crate) fn project_image(id:&str,utc:&str,path:&std::path::Path,cal:&str,lat:f64,lon:f64,alt:f64,crop:[f64;4],polygons:&[Vec<[f64;2]>])->Result<Projection>{
+    let p=numeric(cal,"wisc_optpar_with_optmod",false)?;if p.len()<9{bail!("invalid lens parameters")}
+    let cw=numeric(cal,"image_width",true)?[0];let ch=numeric(cal,"image_height",true)?[0];
+    let image=image::open(path)?.thumbnail(256,256).to_rgb8();let(w,h)=image.dimensions();
     let origin=geometry::observer_ecef(lat,lon,alt/1000.);let mut vertices=Vec::<f32>::new();let mut uv=Vec::new();
     let mut excluded_pixels=0;
     for y in 0..h {for x in 0..w {
         // Apply settings in full-image coordinates, never rebase or crop the lens.
         let rect=[x as f64/w as f64,y as f64/h as f64,(x+1) as f64/w as f64,(y+1) as f64/h as f64];
-        if !crate::pixel_mask::allowed(rect,crop,&polygons){excluded_pixels+=1;continue}
+        if !crate::pixel_mask::allowed(rect,crop,polygons){excluded_pixels+=1;continue}
         // Reduced pixel corners map to original corners x*W/w - 0.5;
         // cameraModel uses normalized coordinate (raw_pixel + 1)/W.
         let mut corners=Vec::new();for (dx,dy) in [(0,0),(1,0),(1,1),(0,1)]{
@@ -90,7 +97,7 @@ pub fn build(s:&AppState,id:&str,at:Option<chrono::DateTime<chrono::Utc>>)->Resu
         if corners.len()!=4{continue}let c=image.get_pixel(x,y).0;
         for i in [0,1,2,0,2,3]{vertices.extend(corners[i].map(|v|v as f32));vertices.extend(c.map(|v|v as f32/255.));let(dx,dy)=[(0,0),(1,0),(1,1),(0,1)][i];uv.extend([(x+dx) as f32/w as f32,(y+dy) as f32/h as f32]);}
     }}
-    Ok(Projection{source_id:id.into(),observation_utc:utc,width:w,height:h,altitude_km:100,excluded_pixels,mask_polygon_count:polygons.len(),vertices,uv})
+    Ok(Projection{source_id:id.into(),observation_utc:utc.into(),width:w,height:h,altitude_km:100,excluded_pixels,mask_polygon_count:polygons.len(),vertices,uv})
 }
 
 /// Content-addressed, reusable server projection plus a small frame texture.
@@ -135,7 +142,7 @@ pub fn image_texture(s:&AppState,id:&str)->Result<Vec<u8>>{
 
 /// Merge only complete 4x4 blocks. Partial/masked blocks retain every original
 /// pixel triangle, so no masked pixels are restored or additional pixels cut.
-fn compact_geometry(p:&Projection)->Vec<u8>{
+pub(crate) fn compact_geometry(p:&Projection)->Vec<u8>{
     let(w,h)=(p.width as usize,p.height as usize);let mut cells=vec![None;w*h];
     for (i,uv) in p.uv.chunks_exact(12).enumerate(){let x=(uv[0]*w as f32).round() as usize;let y=(uv[1]*h as f32).round() as usize;cells[y*w+x]=Some(i)}
     let mut out=Vec::new();

@@ -2,6 +2,7 @@ import ViewerSettings from './ViewerSettings';
 import {readNormalizationPreference} from './image-normalization';
 import React,{type ReactNode,useEffect,useRef,useState} from 'react';
 import {startGaiaGlobe} from './globe';
+import type {GlobeViewState} from './event-study';
 
 type Props={
   className:string;
@@ -13,11 +14,13 @@ type Props={
   showTools?:boolean;
   /** Filled with the zoom action so a parent can drive it from its own controls. */
   zoomRef?:{current:((action:'in'|'out'|'reset')=>void)|null};
+  mode?:'realtime'|'base';
+  onViewState?:(view:GlobeViewState)=>void;
   children?:ReactNode;
 };
 
 /** The single 3D stitched-atlas view used by both the public and admin shells. */
-export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},sunLock=false,showTools=true,zoomRef,children}:Props){
+export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{},sunLock=false,showTools=true,zoomRef,mode='realtime',onViewState,children}:Props){
   const [normalize,setNormalize]=useState(readNormalizationPreference);
   const [buffer,setBuffer]=useState({active:false,done:0,total:0,failed:0,message:'',unit:'cameras checked'});
   const canvas=useRef<HTMLCanvasElement>(null),epoch=useRef(getEpochMillis),loading=useRef(onLoading);
@@ -26,17 +29,19 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
     if(!canvas.current)return;
     const element=canvas.current;
     const progress=(event:Event)=>setBuffer({...{message:'',unit:'cameras checked'},...(event as CustomEvent).detail});
+    const view=(event:Event)=>onViewState?.((event as CustomEvent<GlobeViewState>).detail);
     element.addEventListener('gaia-buffer-progress',progress);
+    element.addEventListener('gaia-view-state',view);
     let stop:(()=>void)|undefined;
     try{
       // Both shells deliberately use the published magnetic-weighted composite.
       // Keeping this fixed prevents the admin view from drifting to a different
       // per-camera alpha-overlay implementation.
-      stop=startGaiaGlobe(canvas.current,()=>epoch.current(),value=>loading.current(value),true);
+      stop=startGaiaGlobe(canvas.current,()=>epoch.current(),value=>loading.current(value),mode==='realtime',{baseOnly:mode==='base'});
     }catch(error){
       loading.current(false);console.error('GAIA WebGL failed',error);canvas.current?.classList.add('webgl-failed');
     }
-    return()=>{element.removeEventListener('gaia-buffer-progress',progress);stop?.()};
+    return()=>{element.removeEventListener('gaia-buffer-progress',progress);element.removeEventListener('gaia-view-state',view);stop?.()};
   },[]);
   useEffect(()=>{canvas.current?.dispatchEvent(new CustomEvent('gaia-sunlock',{detail:sunLock}))},[sunLock]);
   useEffect(()=>{try{localStorage.setItem('gaia-normalize-images',String(normalize))}catch{}canvas.current?.dispatchEvent(new CustomEvent('gaia-normalize',{detail:normalize}))},[normalize]);
@@ -49,7 +54,7 @@ export default function GaiaGlobeView({className,getEpochMillis,onLoading=()=>{}
       <div>{buffer.active?(buffer.message||'Buffering camera images…'):buffer.message||`${buffer.failed} camera images unavailable; omitted from this frame.`}</div>
       {buffer.active&&<><progress aria-label="Camera image buffering" max={buffer.total||1} value={buffer.total?buffer.done:undefined} style={{width:'100%',height:16,accentColor:'#70d9ac'}}/><div>{buffer.total?`${buffer.done} / ${buffer.total} ${buffer.unit} · ${Math.round(100*buffer.done/buffer.total)}%`:buffer.message||'Preparing camera images…'}</div><button type="button" onClick={()=>{window.dispatchEvent(new Event('gaia-pause-playback'));canvas.current?.dispatchEvent(new Event('gaia-cancel-buffer'))}} style={{marginTop:8}}>Cancel playback</button></>}
     </div>}
-    <ViewerSettings normalize={normalize} onNormalize={setNormalize}/>
+    {mode==='realtime'&&<ViewerSettings normalize={normalize} onNormalize={setNormalize}/>}
     {children}
   </div>;
 }

@@ -15,7 +15,7 @@ function MediaDetail({item,eventId,onClose}:{item:EventMedia;eventId:string;onCl
   for(const [key,value] of Object.entries({gaia_event:'1',event_id:eventId,record_id:item.id,image_url:item.previewUrl,latitude_deg:String(item.latitude),longitude_deg:String(item.longitude),observation_utc:item.capturedAt,return_url:returnUrl}))aida.searchParams.set(key,value);
   return <aside className="event-detail" aria-label="Selected event image">
     <button className="event-detail-close" onClick={onClose} aria-label="Close image details"><X size={18}/></button>
-    <div className="event-detail-image"><img src={item.previewUrl} alt={item.title||`Aurora by ${item.creator||'unknown photographer'}`}/>{item.kind==='timelapse'&&<span><Film size={14}/> timelapse</span>}</div>
+    <div className="event-detail-image">{item.mediaUrl?<video src={item.mediaUrl} poster={item.previewUrl} controls playsInline preload="metadata" aria-label={item.title||`Aurora timelapse by ${item.creator||'unknown photographer'}`}/>:<img src={item.previewUrl} alt={item.title||`Aurora by ${item.creator||'unknown photographer'}`}/>} {item.kind==='timelapse'&&<span><Film size={14}/> timelapse</span>}</div>
     <div className="event-detail-body">
       <span className="event-kicker">{item.source.replaceAll('-',' ')}</span>
       <h2>{item.title||item.creator||'Aurora observation'}</h2>

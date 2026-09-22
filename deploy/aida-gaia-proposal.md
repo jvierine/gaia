@@ -7,6 +7,30 @@ inspect the identifications first. Some automatic fits are dubious (a hot pixel,
 a satellite, a star pulled onto its neighbour), and a model fitted through them
 should not become a calibration unseen.
 
+## Status, 2026-09-22: not applied, and not to be applied by GAIA
+
+The proposal patch was applied at 15:07 and was **gone by 15:23** -- AIDA's
+`app.js` was edited again and the change did not survive. Nothing was broken by
+that: the file parses, `/aida/` serves, and `loadGaiaSourceImage`,
+`loadGaiaEventImage` and `sendGaiaCalibration` are all intact, so AIDA works
+standalone on juha.no/aida and as GAIA's calibrator exactly as before.
+
+It has not been re-applied, and should not be from the GAIA side. AIDA is
+Juha's, it is actively edited there, and two parties writing one file without
+coordinating is precisely how a calibrator that has to serve two products gets
+broken. The installers now **refuse** unless `app.js` is byte-for-byte the
+version the patch was verified against, so they cannot quietly re-inject into a
+file that has moved on.
+
+GAIA does not depend on the patch. The lens-drift panel links to
+`/aida/?gaia=1&source_id=...&image_id=...&proposal=1`; without the patch AIDA
+ignores `proposal=1` and loads the frame as it always has. The stars and the
+proposed model simply do not cross over.
+
+If the handoff is wanted, `deploy/aida-proposal.patch` and
+`deploy/aida-names.patch` are the changes, for Juha to review, regenerate
+against the current file and apply.
+
 ## Applying it
 
 A verified patch and an installer now sit beside this file:

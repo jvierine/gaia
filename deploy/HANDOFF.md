@@ -1,5 +1,41 @@
 # GAIA handoff for j and bgu001
 
+## Event calibration, masks and 100 km projection (2026-09-22)
+
+GAIA source `8fc4c2e` and AIDA source `53c9453` couple the isolated event
+viewer to the star calibrator. An event image is now loaded by stable
+event/record identity, with its authoritative UTC, coordinates, crop and mask.
+AIDA's existing save button posts the fitted HDF5 back to an event-only API;
+after validation GAIA prepares the same compact 100 km shell mesh and the same
+IGRF, zenith and mask-edge weights used by realtime browser composition. The
+event viewer refreshes immediately via same-origin `postMessage` (and polls as
+a fallback), leaves uncalibrated photographs as map pins, and renders calibrated
+ones on the shell. The shared mask editor now accepts either realtime-camera or
+event-record endpoints. Normal `sources`, `images`, `calibrations` and
+`camera_settings` records are never used for event media; the new data live in
+`event_calibrations` and `event_media_settings`.
+
+Bounded integration benchmark, run against a temporary SQLite/archive tree on
+Revontuli while the production acquisition service remained active, using one
+real 610x1024 event preview, a published AIDA HDF5 and the full 1,230-record
+manifest: cold calibration upload plus mesh/texture preparation took 1.72 s;
+the warm projection manifest took 0.08 s; the resulting 24-byte mesh was
+359,424 bytes / 14,976 vertices. The debug server's peak RSS was 33.5 MB.
+Reproduce by starting `gaia-server` with `GAIA_CRAWLER_ENABLED=0`, a temporary
+`GAIA_ARCHIVE_ROOT`/`GAIA_DB_PATH`, then multipart POSTing `record_id` and the
+HDF5 to `/api/events/20251111/calibrations` and timing the subsequent
+`projection-manifest` GET. This is one bounded, operator-triggered historical
+photo, not a realtime/background fleet stage: newest-frame, 24-hour rebuild,
+observation-cadence throughput and worker-concurrency gates are not applicable.
+There is no timer, queue, backfill or acquisition/publication dependency; warm
+assets are content-addressed and event reads use read-only database connections.
+
+Validation before deployment: 73/73 GAIA frontend tests, 111/111 AIDA tests
+(19 fixture-dependent skips), and all Rust suites passed: 3 overview, 6 auth,
+136 server tests with 3 opt-in benchmarks ignored. Static TypeScript build and
+`git diff --check` passed. Repository-wide oxlint remains red on its existing
+unrelated backlog; the production build/type transform is clean.
+
 ## Event catalogue navigation (2026-09-22)
 
 Deployed source `7aca336` on Revontuli. The normal `/gaia/` header now has an

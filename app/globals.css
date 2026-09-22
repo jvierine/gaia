@@ -84,6 +84,19 @@
 .route-panel .suggest-link{margin:4px 0 26px;padding:10px 16px;border:1px solid var(--line);border-radius:999px;background:#0b1c29;color:#c8d6dc}
 .route-panel .suggest-link:hover{border-color:var(--aqua);color:#eaf7f8}
 
+/* Event studies are intentionally separate from the realtime camera and
+   publication paths. This catalogue is their stable entry point. */
+.event-catalogue{display:grid;gap:14px;margin-top:30px}
+.event-catalogue article{display:grid;grid-template-columns:118px minmax(0,1fr);gap:24px;align-items:center;padding:24px;border:1px solid var(--line);background:linear-gradient(120deg,#091724,#07131d)}
+.event-catalogue-date{display:grid;place-content:center;min-height:112px;border:1px solid #31505f;background:#04101b;text-align:center}
+.event-catalogue-date strong{font-size:30px;font-weight:500;letter-spacing:-.04em}
+.event-catalogue-date span{margin-top:5px;color:var(--aqua);font:10px monospace;letter-spacing:.14em}
+.event-catalogue h3{margin:7px 0 8px;font-size:22px;font-weight:500}
+.event-catalogue p{max-width:680px;margin:0 0 17px;color:var(--muted);line-height:1.55}
+.event-catalogue a{display:inline-flex;align-items:center;gap:8px;color:var(--aqua);font-weight:700;text-decoration:none}
+.event-catalogue a:hover,.event-catalogue a:focus-visible{text-decoration:underline}
+@media(max-width:620px){.event-catalogue article{grid-template-columns:1fr}.event-catalogue-date{min-height:88px}}
+
 /* Data-source status and the clear/delayed/unavailable legend run down the right
    edge rather than across the bottom, so the viewer keeps its full height. */
 .source-strip>div svg{flex:none;margin-top:1px}

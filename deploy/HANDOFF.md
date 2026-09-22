@@ -9,10 +9,12 @@ mode. Base-only mode does not request `/gaia/api/sources`, camera projections,
 the realtime database, the crawler, or the publication pipeline. Normal
 `/gaia/` keeps the default realtime mode and its existing API/data paths.
 
-The event package under `/mnt/data/juha/gaia/public/events/20251111/` is 122 MB:
+The event package under `/mnt/data/juha/gaia/public/events/20251111/` is 185 MB:
 1,230 compact located/timed previews (1,206 still images and 24 timelapses), an
 attributed manifest, and five-minute adaptive playback bins. Exact per-record
 UTC, coordinates, provenance, precision and rights notes stay in the manifest.
+All 24 timelapses have bounded 720p H.264 research previews with HTTP range
+playback; their source links and rights notes remain visible beside the player.
 The 7.5 GB research originals were not published or modified. Six downloaded
 records without a recoverable time and 24 without numeric coordinates are
 reported as excluded rather than placed approximately. Preparation is an
@@ -30,9 +32,9 @@ normal viewer, source API, event route, 1.46 MB event manifest, representative
 thumbnail/preview, and AIDA. The deployed admin bundle is
 `main-DunTn8Zr.js`; the normal manifest/API services were not restarted.
 The required matching public build was delivered through release branch
-`codex/public-viewer` at `0a8c063` and installed on juha.no with bundle
-`main-DvOJ5O5E.js`; the previous index is retained as
-`legacy/index-before-0a8c063.html`. Live HTTPS checks returned 200 for the
+`codex/public-viewer` at `6140d6c` and installed on juha.no with bundle
+`main-DHBdHhys.js`; the previous index is retained as
+`legacy/index-before-6140d6c.html`. Live HTTPS checks returned 200 for the
 public index, JS, CSS and 6.87 MB open manifest. Event data remain Revontuli-only.
 
 ## For j: two ownership settings on web-dist (2026-09-16)

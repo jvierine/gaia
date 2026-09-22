@@ -1,5 +1,35 @@
 # GAIA handoff for j and bgu001
 
+## Isolated November 2025 event study (2026-09-22)
+
+Deployed GAIA source `77e3867` at `/gaia/events/20251111/`. This is a separate
+static event shell: it reuses the shared globe's Earth, boundaries, magnetic
+contours, solar illumination and navigation, but starts the globe in base-only
+mode. Base-only mode does not request `/gaia/api/sources`, camera projections,
+the realtime database, the crawler, or the publication pipeline. Normal
+`/gaia/` keeps the default realtime mode and its existing API/data paths.
+
+The event package under `/mnt/data/juha/gaia/public/events/20251111/` is 122 MB:
+1,230 compact located/timed previews (1,206 still images and 24 timelapses), an
+attributed manifest, and five-minute adaptive playback bins. Exact per-record
+UTC, coordinates, provenance, precision and rights notes stay in the manifest.
+The 7.5 GB research originals were not published or modified. Six downloaded
+records without a recoverable time and 24 without numeric coordinates are
+reported as excluded rather than placed approximately. Preparation is an
+explicit offline command (`tools/prepare-event-study.mjs`), not a service,
+timer or realtime image-processing stage.
+
+AIDA source `08db051` accepts the event viewer's same-origin, prefix-validated
+event-image handoff, loads its UTC/location fields, and leaves the ordinary
+GAIA source/image calibration upload path unchanged. Event fits are downloaded
+as HDF5; they are not inserted into the fixed-camera calibration table.
+
+Validation: all 73 GAIA frontend logic tests and all 111 AIDA tests passed;
+both GAIA static entry points built. Live HTTP checks returned 200 for the
+normal viewer, source API, event route, 1.46 MB event manifest, representative
+thumbnail/preview, and AIDA. The deployed admin bundle is
+`main-DunTn8Zr.js`; the normal manifest/API services were not restarted.
+
 ## For j: two ownership settings on web-dist (2026-09-16)
 
 Neither is urgent and nothing is broken -- the directory ACL grants j `rwx`,
